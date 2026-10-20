@@ -5,7 +5,7 @@
 
 import React, { useEffect, useRef } from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { isRecoverableChromeDesktopPauseReason } from '@copis/shared'
+import { retainsChromeDesktopAuthorization } from '@copis/shared'
 import {
   chromeDesktopMediaStreamAtom,
   chromeDesktopMediaStreamControlAtom,
@@ -80,10 +80,10 @@ export function ChromeDesktopCaptureHost(): React.ReactElement | null {
     const unsubscribe = window.electronAPI.chromeDesktop.onStateChanged((state) => {
       receivedBroadcast = true
       setSessionState(state)
-      // 终止/错误或不可恢复的 paused 才释放 MediaStream；焦点/几何暂停保留已授权流，等待自动恢复。
+      // 终止/错误或不保留授权的 paused 才释放 MediaStream；USER_PAUSED 保留资源但不自动恢复输入。
       const owner = latestControlRef.current
       const replaced = owner && (owner.sessionId !== state.sessionId || owner.controlId !== state.controlId)
-      const unrecoverablePause = state.state === 'paused' && !isRecoverableChromeDesktopPauseReason(state.pauseReason)
+      const unrecoverablePause = state.state === 'paused' && !retainsChromeDesktopAuthorization(state.pauseReason)
       if (state.state === 'stopped' || state.state === 'error' || unrecoverablePause || replaced) {
         const streamOwner = latestStreamControlIdRef.current
         if (streamOwner && (streamOwner === state.controlId || (replaced && streamOwner === owner?.controlId))) {

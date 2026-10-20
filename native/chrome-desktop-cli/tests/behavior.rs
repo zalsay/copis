@@ -25,6 +25,7 @@ impl Native for Desktop {
                 Err(Error::new("WINDOW_UNAVAILABLE", "目标窗口已关闭"))
             }
             "window" => Ok(json!({"window":window})),
+            "cancel" => Ok(json!({"cancelled":true})),
             "observe" => {
                 std::fs::write(
                     request["imagePath"].as_str().unwrap(),

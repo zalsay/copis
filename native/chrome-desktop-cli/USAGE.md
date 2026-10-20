@@ -13,7 +13,7 @@ cd native/chrome-desktop-cli
 ./build.sh
 ```
 
-`dist/copis-chrome-0.1.5-darwin-arm64/`（Intel 为 `x64`）包含两个可执行文件、协议版本元数据、本说明、AGPL-3.0-only 许可证及 `source/` 完整功能包源码；同目录生成 `.tar.gz` 和 SHA256。保持 `copis-chrome` 与 `copis-chrome-helper` 相邻，放到固定的安装目录，再把该目录加入 PATH。`./build.sh debug` 可生成开发版本；仅在本机原生构建，不跨平台混用产物。
+`dist/copis-chrome-0.1.6-darwin-arm64/`（Intel 为 `x64`）包含两个可执行文件、协议版本元数据、本说明、AGPL-3.0-only 许可证及 `source/` 完整功能包源码；同目录生成 `.tar.gz` 和 SHA256。保持 `copis-chrome` 与 `copis-chrome-helper` 相邻，放到固定的安装目录，再把该目录加入 PATH。`./build.sh debug` 可生成开发版本；仅在本机原生构建，不跨平台混用产物。
 
 默认本地 ad-hoc 签名不等于公证分发。公开分发时设置 `COPIS_CHROME_SIGN_IDENTITY` 使用 Developer ID 签名，并在发布流程完成公证。系统权限取决于 macOS 的代码身份和安装路径，移动或重新签名二进制后可能需要重新授予；构建脚本不承诺保留 TCC 授权。
 
@@ -107,6 +107,16 @@ daemon 使用 0600 Unix socket，不开放 TCP；同一 macOS 用户是信任边
 
 内部 socket 信封是 `{"protocolVersion":1,"request":{"action":"status"}}` 加换行；一般 Agent 直接调用 CLI 即可。该功能包已接入 Copis 功能模块下载/发布链，模块名为 `chrome-desktop-cli`。Electron 提供八个 ChromeDesktop 工具（包含原生文件选择工具 `ChromeDesktopSelectFile`），但原生截图和输入改为调用已激活的组件；视频流只用于可选预览。组件未安装时按需准备，也可以在设置的“关于/更新 → 本地能力 → Chrome 桌面自动化”中安装、检查更新和升级。Windows/Linux 不展示或安装本模块。
 
+## 执行与用户接管
+
+v0.1.6 将操作提示改为常驻的屏幕控制条，保留当前授权连接，显示“执行”和“暂停”两个按钮。原有自动开始流程保留；用户移动鼠标、拖动、滚动、点击其他窗口或切换应用时，原生输入会暂停，已按下的 helper 按键/鼠标会释放。“暂停”按钮也可手动接管；点击“执行”只允许后续新操作，暂停前已中断或排队的动作不会自动重放。
+
+暂停期间允许 Observe，Agent 无法通过重新 Start、重复输入或重新授权解除用户暂停。新主程序收到 `CHROME_USER_PAUSED` 后应停止自动重试，等待用户点击控制条中的“执行”及后续指令，再观察页面后继续。独立 CLI 的暂停响应为 `error.code: FOCUS_LOST`、`error.reason: USER_PAUSED`，保留 protocol 1 和旧客户端的可恢复失焦行为。此时连接、授权和截图帧仍然有效。
+
+控制条不抢键盘焦点；只监测鼠标类事件，不请求键盘 Input Monitoring 权限，也不保存操作内容。AI 自己投递的鼠标事件不会触发自动接管；输入坐标覆盖控制条时先避让控制条，再保留原有精确焦点与指针归属校验。显式 disconnect/daemon stop 结束本控制；Copis 集成中的原有紧急停止快捷键继续有效；独立 CLI 可用 `daemon stop` 结束控制。此功能不隔离桌面鼠标，用户在运行时接管会中断当前步骤，Agent 应先观察结果，避免重复点击或重复输入。
+
+行为与验证见 [执行控制说明](docs/EXECUTION-CONTROL.md)（分发包位于 `source/docs/`）。控制条按钮布局、真实鼠标接管体验由用户在实际应用中验收。
+
 ## 原生文件选择框
 
 v0.1.5 增加专用 `select-file` 命令。网页上传按钮唤出的 macOS“打开”窗口通常是 Chrome 附属的原生 sheet，不能用网页截图坐标及普通网页输入工具操作它。
@@ -127,7 +137,7 @@ cargo fmt --check
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
 ./build.sh
-bash tests/native-smoke.sh dist/copis-chrome-0.1.5-darwin-arm64/copis-chrome-helper
+bash tests/native-smoke.sh dist/copis-chrome-0.1.6-darwin-arm64/copis-chrome-helper
 
 # 真实焦点回归（已有系统权限）：显式指定 Chrome 窗口和另一应用 PID。
 # 只切换焦点，不截图、不发送鼠标键盘；不会被默认无副作用 smoke 自动执行。
@@ -140,7 +150,7 @@ bash tests/toast-smoke.sh
 bash tests/capture-background-smoke.sh <Chrome窗口ID>
 
 # 显式原生文件选择：独立 Chrome profile、本机测试页/文本文件，无上传、无截图分析。
-bash tests/file-dialog-smoke.sh "$(pwd)/dist/copis-chrome-0.1.5-darwin-arm64/copis-chrome"
+bash tests/file-dialog-smoke.sh "$(pwd)/dist/copis-chrome-0.1.6-darwin-arm64/copis-chrome"
 
 # 显式激活 Chrome 并展示受控浮层，验证鼠标可穿透/拦截差异，随后恢复前台；不点击或截图。
 bash tests/pointer-occlusion-smoke.sh <Chrome窗口ID>
@@ -173,7 +183,7 @@ bun run prepare:chrome-desktop-cli-module
 ./deploy.sh --chrome-cli --skip-publish
 
 # 显式提供已有归档时校验后发布；版本参数必须与统一版本锁一致
-./deploy.sh --chrome-cli --chrome-cli-archive /path/to/chrome.tar.gz --chrome-cli-version 0.1.5
+./deploy.sh --chrome-cli --chrome-cli-archive /path/to/chrome.tar.gz --chrome-cli-version 0.1.6
 ```
 
 `--chrome-desktop-cli` 及对应 archive/version 长参数继续兼容。同一次命令提供短、长参数时只能同值；不同值会在构建前拒绝，CLI显式值可以覆盖环境配置。单独部署Chrome默认跳过JS依赖安装，需要时用 `--install` 开启。未指定archive时始终从源码构建，不复用resources中可能过时的归档。

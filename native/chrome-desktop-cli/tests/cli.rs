@@ -144,6 +144,33 @@ fn given_bad_arguments_when_invoking_then_json_error_without_starting_daemon() {
     }
 }
 #[test]
+fn given_native_user_paused_when_input_called_then_public_process_maps_reason_and_keeps_connection()
+{
+    let env = Environment::new();
+    let id = env.connection();
+    let frame = env.frame(&id);
+    let paused = env.call(&[
+        "type",
+        "--connection",
+        &id,
+        "--frame",
+        &frame,
+        "--text",
+        "paused",
+    ]);
+
+    assert_eq!(paused["error"]["code"], "FOCUS_LOST");
+    assert_eq!(paused["error"]["reason"], "USER_PAUSED");
+    assert_eq!(
+        paused["error"]["message"],
+        "桌面输入已暂停，请点击屏幕上方控制条的执行按钮后再继续；不要自动重试输入"
+    );
+    assert!(!paused.to_string().contains("secret fixture detail"));
+    assert_eq!(env.call(&["status"])["connected"], true);
+    assert_eq!(env.call(&["disconnect", "--connection", &id])["ok"], true);
+}
+
+#[test]
 fn given_native_eof_when_input_called_then_error_is_visible_and_daemon_exits() {
     let env = Environment::new();
     let id = env.connection();

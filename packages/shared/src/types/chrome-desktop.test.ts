@@ -5,6 +5,7 @@ import {
   CHROME_DESKTOP_ENDPOINT,
   CHROME_DESKTOP_IPC_CHANNELS,
   isRecoverableChromeDesktopPauseReason,
+  retainsChromeDesktopAuthorization,
   type ChromeDesktopErrorCode,
   type ChromeDesktopState,
   type ChromeDesktopToolName,
@@ -52,5 +53,10 @@ describe('chrome-desktop shared types and constants', () => {
     expect(tool).toBe('ChromeDesktopSelectFile')
     for (const error of recoverableErrors) expect(isRecoverableChromeDesktopPauseReason(error)).toBe(true)
     expect(isRecoverableChromeDesktopPauseReason('CHROME_FILE_PATH_INVALID')).toBe(false)
+    expect(isRecoverableChromeDesktopPauseReason('CHROME_USER_PAUSED')).toBe(false)
+    expect(retainsChromeDesktopAuthorization('CHROME_USER_PAUSED')).toBe(true)
+    expect(retainsChromeDesktopAuthorization('CHROME_FOCUS_LOST')).toBe(true)
+    expect(retainsChromeDesktopAuthorization('CHROME_HELPER_FAILED')).toBe(false)
+    expect(isRecoverableChromeDesktopPauseReason('CHROME_USER_PAUSED')).toBe(false)
   })
 })

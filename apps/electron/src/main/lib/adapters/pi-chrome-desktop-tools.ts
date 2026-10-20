@@ -171,6 +171,12 @@ export class PiChromeDesktopToolBridge {
       const res = await this.callBridge('ChromeDesktopStart', toolCallId, toolInput, signal)
       const val = res.value ?? {}
 
+      if (val.error === 'CHROME_USER_PAUSED' && val.status === 'paused') {
+        return {
+          content: [{ type: 'text', text: `Chrome 控制仍由当前会话持有（CHROME_USER_PAUSED），但用户已暂停输入。${val.message ?? '请等待用户点击控制条“执行”；不要自动重试输入，也不要使用其他桌面输入方式绕过暂停。'}` }],
+          details: val,
+        }
+      }
       if (val.error) {
         throw new Error(`开始控制 Chrome 失败: ${val.message ?? val.error}`)
       }
@@ -211,8 +217,8 @@ const CHROME_DESKTOP_TOOL_DEFINITIONS: ChromeDesktopToolDefinition[] = [
     name: 'ChromeDesktopStart',
     label: '开始控制本机 Chrome',
     description:
-      '发起或复用本机已打开的 Google Chrome 窗口控制。首次调用会展示授权界面，由用户选择具体窗口并确认；同一会话已有控制权时直接复用，不要重复等待授权。Agent 无需也无法指定 PID 或窗口 ID。',
-    promptSnippet: 'ChromeDesktopStart: 首次任务调用并等待用户确认；已有有效 control 时直接复用，不要重复授权。',
+      '发起或复用本机已打开的 Google Chrome 窗口控制。首次调用会展示授权界面，由用户选择具体窗口并确认；同一会话已有控制权时直接复用，不要重复等待授权。Agent 无需也无法指定 PID 或窗口 ID。若状态为 CHROME_USER_PAUSED，停止自动重试输入，等待用户点击屏幕上方控制条“执行”；不得使用裸 CG、shell 或其他桌面输入绕过暂停。',
+    promptSnippet: 'ChromeDesktopStart: 首次任务调用并等待用户确认；已有有效 control 时直接复用，不要重复授权。遇到 CHROME_USER_PAUSED 时停止自动重试输入，等待用户点击控制条“执行”，不得使用裸 CG 或其他桌面输入绕过暂停。',
     parameters: Type.Object({}),
   },
   {

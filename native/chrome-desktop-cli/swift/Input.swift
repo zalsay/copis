@@ -11,11 +11,92 @@ let allowedKeys: [String: (CGKeyCode, CGEventFlags)] = [
     "Alt+ArrowLeft": (123, [.maskAlternate]), "Alt+ArrowRight": (124, [.maskAlternate]),
 ]
 
+// 每次原生输入独立签发；暂停后旧输入即使遇到“执行”也不能重新生效。
+struct ChromeInputPermit {
+    let generation: UInt64
+    let lease: UInt64
+    let epoch: UInt64
+}
+
 final class InputCancellation {
     private let lock = NSLock()
     private var generation: UInt64 = 0
     private var held: (id: UUID, release: CGEvent)?
     private var captureCleanup: (id: UUID, operation: () -> Void)?
+    private var leaseCounter: UInt64 = 0
+    private var executionLease: UInt64?
+    private var paused = false
+    private var inputEpoch: UInt64 = 0
+    private var executionEnd: (() -> Void)?
+
+    func beginExecution(generation expected: UInt64) throws -> UInt64 {
+        lock.lock(); defer { lock.unlock() }
+        guard generation == expected else { throw HelperFailure.cancelled }
+        if let lease = executionLease { return lease }
+        leaseCounter &+= 1
+        executionLease = leaseCounter
+        return leaseCounter
+    }
+
+    func executionPaused(lease: UInt64) -> Bool? {
+        lock.lock(); defer { lock.unlock() }
+        return executionLease == lease ? paused : nil
+    }
+
+    func onExecutionEnd(lease: UInt64, handler: @escaping () -> Void) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard executionLease == lease else { return false }
+        executionEnd = handler
+        return true
+    }
+
+    func pauseExecution(lease: UInt64) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard executionLease == lease, !paused else { return false }
+        paused = true
+        inputEpoch &+= 1
+        // 在暂停返回前释放本 helper 按住的键/鼠标；不影响读截图，也不释放用户自己的按键。
+        held?.release.post(tap: .cghidEventTap)
+        held = nil
+        return true
+    }
+
+    func resumeExecution(lease: UInt64) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard executionLease == lease else { return false }
+        // 暂停期间收到的请求也必须作废；重复点击执行不改变正在运行的代次。
+        if paused { inputEpoch &+= 1 }
+        paused = false
+        return true
+    }
+
+    func inputSnapshot() -> UInt64 {
+        lock.lock(); defer { lock.unlock() }
+        return inputEpoch
+    }
+
+    func beginInput(generation expected: UInt64, expectedEpoch: UInt64? = nil) throws -> ChromeInputPermit {
+        lock.lock(); defer { lock.unlock() }
+        guard generation == expected, let lease = executionLease else { throw HelperFailure.cancelled }
+        guard !paused, expectedEpoch == nil || expectedEpoch == inputEpoch else { throw HelperFailure.userPaused }
+        return ChromeInputPermit(generation: expected, lease: lease, epoch: inputEpoch)
+    }
+
+    private func validateInput(_ permit: ChromeInputPermit) throws {
+        guard generation == permit.generation, executionLease == permit.lease else { throw HelperFailure.cancelled }
+        guard !paused, inputEpoch == permit.epoch else { throw HelperFailure.userPaused }
+    }
+
+    func checkInput(_ permit: ChromeInputPermit) throws {
+        lock.lock(); defer { lock.unlock() }
+        try validateInput(permit)
+    }
+
+    func inputEffect<Value>(permit: ChromeInputPermit, _ operation: () throws -> Value) throws -> Value {
+        lock.lock(); defer { lock.unlock() }
+        try validateInput(permit)
+        return try operation()
+    }
 
     func snapshot() -> UInt64 {
         lock.lock(); defer { lock.unlock() }
@@ -53,24 +134,32 @@ final class InputCancellation {
     }
 
     func cancel() {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         generation &+= 1
+        executionLease = nil
+        paused = false
+        inputEpoch &+= 1
+        let onEnd = executionEnd
+        executionEnd = nil
         // 不发虚拟 modifier reset 或无主 mouse-up，绝不释放用户自己按住的键/鼠标。
         held?.release.post(tap: .cghidEventTap)
         held = nil
         captureCleanup?.operation()
         captureCleanup = nil
+        lock.unlock()
+        // UI 清理回调在锁外运行，不能与主线程布局互相等待。
+        onEnd?()
     }
 
-    func post(_ event: CGEvent, generation expected: UInt64) throws {
+    func post(_ event: CGEvent, permit: ChromeInputPermit) throws {
         lock.lock(); defer { lock.unlock() }
-        guard generation == expected else { throw HelperFailure.cancelled }
+        try validateInput(permit)
         event.post(tap: .cghidEventTap)
     }
 
-    func keyDown(_ down: CGEvent, release: CGEvent, generation expected: UInt64) throws -> UUID {
+    func keyDown(_ down: CGEvent, release: CGEvent, permit: ChromeInputPermit) throws -> UUID {
         lock.lock(); defer { lock.unlock() }
-        guard generation == expected else { throw HelperFailure.cancelled }
+        try validateInput(permit)
         let id = UUID()
         held = (id, release)
         down.post(tap: .cghidEventTap)
@@ -95,25 +184,26 @@ final class ChromeInput {
 
     func send(_ request: NativeRequest, generation: UInt64) throws -> [String: Any] {
         guard let target = request.target, let bounds = request.expectedBounds else { throw HelperFailure.invalidArgument }
-        try desktop.activate(target, expected: bounds, cancellation: cancellation, generation: generation)
+        let permit = try desktop.prepareInput(target, cancellation: cancellation, generation: generation, expectedEpoch: request.inputEpoch)
+        try desktop.activate(target, expected: bounds, cancellation: cancellation, generation: generation, permit: permit)
         guard let source = CGEventSource(stateID: .privateState) else { throw eventFailure() }
         func verify(pointer: CGPoint? = nil) throws {
-            try cancellation.check(generation)
+            try cancellation.checkInput(permit)
             if let point = pointer {
                 try desktop.verifyPointer(point, target: target, expected: bounds)
                 try desktop.verifyGeometry(target, expected: bounds)
             }
             // 可能耗时的遮挡/几何查询完成后，最后复核精确窗口焦点再提交输入。
             try desktop.verifyFocus(target, expected: bounds)
-            try cancellation.check(generation)
+            try cancellation.checkInput(permit)
         }
         func pair(_ down: CGEvent?, _ up: CGEvent?, pointer: CGPoint? = nil) throws {
             guard let down, let up else { throw eventFailure() }
             try verify(pointer: pointer)
-            let token = try cancellation.keyDown(down, release: up, generation: generation)
+            let token = try cancellation.keyDown(down, release: up, permit: permit)
             defer { cancellation.release(token) }
             Thread.sleep(forTimeInterval: 0.008)
-            try cancellation.check(generation)
+            try cancellation.checkInput(permit)
         }
         switch request.action {
         case "click", "scroll":
@@ -123,7 +213,7 @@ final class ChromeInput {
                 throw eventFailure()
             }
             move.flags = []
-            try cancellation.post(move, generation: generation)
+            try cancellation.post(move, permit: permit)
             Thread.sleep(forTimeInterval: 0.01)
             if request.action == "click" {
                 for index in 1...request.clickCount {
@@ -141,7 +231,7 @@ final class ChromeInput {
                                            wheel1: Int32(-request.deltaY), wheel2: 0, wheel3: 0) else { throw eventFailure() }
                 scroll.location = point
                 scroll.flags = []
-                try cancellation.post(scroll, generation: generation)
+                try cancellation.post(scroll, permit: permit)
             }
         case "type":
             // 每段最多 16 个 UTF-16 单元，不拆开代理对；每段重新确认焦点、几何、取消。

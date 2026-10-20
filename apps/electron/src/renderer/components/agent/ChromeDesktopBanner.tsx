@@ -48,7 +48,7 @@ import {
 import { openChromeDesktopPreviewTabAtom } from '@/atoms/chrome-desktop-preview-tabs'
 import { isChromeDesktopTab, tabsAtom } from '@/atoms/tab-atoms'
 import { workingSettingsOpenAtom, workingSettingsSectionAtom } from '@/atoms/working-atoms'
-import { isRecoverableChromeDesktopPauseReason, type ChromeDesktopErrorCode } from '@copis/shared'
+import { retainsChromeDesktopAuthorization, type ChromeDesktopErrorCode } from '@copis/shared'
 
 /** 预览尽力启动；原生 Observe 和输入不依赖此视频流。 */
 async function requestPreviewStream(): Promise<MediaStream | null> {
@@ -72,6 +72,8 @@ function formatPauseReason(reason?: ChromeDesktopErrorCode): string {
   switch (reason) {
     case 'CHROME_FOCUS_LOST':
       return '目标 Chrome 窗口已失去前台焦点，输入已暂停以避免误触'
+    case 'CHROME_USER_PAUSED':
+      return '用户已接管鼠标或点击暂停；请在屏幕控制条点击执行后继续，输入不会自动恢复'
     case 'CHROME_GEOMETRY_CHANGED':
       return '目标 Chrome 窗口位置或大小发生改变，旧画面坐标已失效'
     case 'CHROME_FRAME_STALE':
@@ -180,7 +182,7 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
       && current?.sessionId === sessionId
       && current.controlId === controlId
       && !['idle', 'stopping', 'stopped', 'error'].includes(current.state)
-      && (current.state !== 'paused' || isRecoverableChromeDesktopPauseReason(current.pauseReason))
+      && (current.state !== 'paused' || retainsChromeDesktopAuthorization(current.pauseReason))
   }
 
   /** 流可以晚于原生连接完成；停止或切换后的迟到流只释放自身。 */
@@ -508,7 +510,7 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
                 <AlertTriangle className="size-4 text-amber-500 shrink-0" />
                 <div>
                   <h4 className="text-xs font-semibold text-foreground">
-                    {isRecoverableChromeDesktopPauseReason(sessionState.pauseReason)
+                    {retainsChromeDesktopAuthorization(sessionState.pauseReason)
                       ? 'Chrome 桌面控制已暂停，授权仍保留'
                       : 'Chrome 桌面控制已暂停'}
                   </h4>
@@ -527,7 +529,9 @@ export function ChromeDesktopBanner({ sessionId }: ChromeDesktopBannerProps): Re
               </Button>
             </div>
             <p className="text-[11px] text-muted-foreground">
-              {isRecoverableChromeDesktopPauseReason(sessionState.pauseReason)
+              {sessionState.pauseReason === 'CHROME_USER_PAUSED'
+                ? '授权和预览仍保留，请在屏幕控制条点击执行后继续。'
+                : retainsChromeDesktopAuthorization(sessionState.pauseReason)
                 ? '目标窗口重新可用后，下一次观察或输入会自动恢复，无需再次授权。'
                 : '本次控制已安全暂停并释放输入与采集流。如需继续，请点击“结束控制”后重新授权启动。'}
             </p>

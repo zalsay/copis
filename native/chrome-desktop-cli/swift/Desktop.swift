@@ -207,35 +207,47 @@ final class ChromeDesktop {
         })
     }
 
-    func activate(_ target: TargetWindow, expected: WindowBounds, cancellation: InputCancellation, generation: UInt64) throws {
+    func prepareInput(_ target: TargetWindow, cancellation: InputCancellation, generation: UInt64,
+                      expectedEpoch: UInt64? = nil) throws -> ChromeInputPermit {
         try cancellation.check(generation)
+        try requireInputPermission()
+        let current = try window(target)
+        let lease = try cancellation.beginExecution(generation: generation)
+        if cancellation.executionPaused(lease: lease) == true {
+            // 用户尚未点击执行时只展示控制条，不激活 Chrome 或移动指针。
+            try showOperationToast(target, bounds: current.bounds, cancellation: cancellation, generation: generation)
+        }
+        return try cancellation.beginInput(generation: generation, expectedEpoch: expectedEpoch)
+    }
+
+    func activate(_ target: TargetWindow, expected: WindowBounds, cancellation: InputCancellation, generation: UInt64,
+                  permit supplied: ChromeInputPermit? = nil) throws {
+        let permit = try supplied ?? prepareInput(target, cancellation: cancellation, generation: generation)
+        try cancellation.checkInput(permit)
         try requireInputPermission()
         try verifyGeometry(target, expected: expected)
         let app = axApplication(target.pid)
         let window = try targetAXWindow(target, app: app)
-        let restoringFocus = (try? focusedWindow(target, app: app)) == nil
-        try cancellation.check(generation)
-        try activateApplication(target, cancellation: cancellation, generation: generation)
+        try cancellation.checkInput(permit)
+        try activateApplication(target, cancellation: cancellation, generation: generation, permit: permit)
         // 每个 AX 副作用独立提交，沿用每次 AX 调用 0.35 秒超时，不把整条链捆成一个临界区。
-        _ = try cancellation.effect(generation: generation) {
+        _ = try cancellation.inputEffect(permit: permit) {
             AXUIElementSetAttributeValue(app, kAXFocusedWindowAttribute as CFString, window)
         }
-        _ = try cancellation.effect(generation: generation) {
+        _ = try cancellation.inputEffect(permit: permit) {
             AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
         }
-        _ = try cancellation.effect(generation: generation) {
+        _ = try cancellation.inputEffect(permit: permit) {
             AXUIElementPerformAction(window, kAXRaiseAction as CFString)
         }
         // AX setter 成功不等于焦点已经切换；以真实焦点轮询结果为准，且等待有上限。
         let deadline = ProcessInfo.processInfo.systemUptime + 1.5
         var lastFailure: HelperFailure?
         repeat {
-            try cancellation.check(generation)
+            try cancellation.checkInput(permit)
             do {
                 try verifyFocus(target, expected: expected)
-                if restoringFocus {
-                    try showOperationToast(target, bounds: expected, cancellation: cancellation, generation: generation)
-                }
+                try showOperationToast(target, bounds: expected, cancellation: cancellation, generation: generation)
                 return
             }
             catch let failure as HelperFailure where failure.code == "FOCUS_LOST" || failure.code == "FOCUS_UNVERIFIED" {
@@ -246,11 +258,14 @@ final class ChromeDesktop {
         throw HelperFailure(code: "FOCUS_UNVERIFIED", message: "激活后仍无法确认目标窗口焦点：\(lastFailure?.message ?? "未取得焦点状态")")
     }
 
-    func activateApplication(_ target: TargetWindow, cancellation: InputCancellation, generation: UInt64) throws {
+    func activateApplication(_ target: TargetWindow, cancellation: InputCancellation, generation: UInt64,
+                             permit supplied: ChromeInputPermit? = nil) throws {
+        let permit = try supplied ?? prepareInput(target, cancellation: cancellation, generation: generation)
+        try cancellation.checkInput(permit)
         let activated = try onMain {
             let targetApplication = application(pid: target.pid)
             // 先进入主线程再取提交锁，不能持锁等待主线程。
-            return try cancellation.effect(generation: generation) {
+            return try cancellation.inputEffect(permit: permit) {
                 targetApplication?.activate(options: []) ?? false
             }
         }
@@ -263,7 +278,7 @@ final class ChromeDesktop {
 
     func verifyPointer(_ point: CGPoint, target: TargetWindow, expected: WindowBounds) throws {
         guard expected.contains(point) else { throw HelperFailure.invalidArgument }
-        onMain { operationToast.dismissIfCovering(point) }
+        onMain { operationToast.avoidPointer(point) }
         try verifyPointerOwnership(target: target, eventTarget: {
             if self.eventHitReader.isAvailable { return try self.eventHitReader.target(at: point) }
             // 较旧系统缺少只读命中 SPI 时仍使用原保守检查，不能忽略未知绘制窗口。

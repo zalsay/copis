@@ -41,7 +41,7 @@ const nativeErrors: Record<string, ChromeDesktopErrorCode> = {
   CONNECTION_BUSY: 'CHROME_BUSY', BUSY: 'CHROME_BUSY',
   CONNECTION_INVALID: 'CHROME_WINDOW_UNAVAILABLE', WINDOW_UNAVAILABLE: 'CHROME_WINDOW_UNAVAILABLE', CHROME_WINDOW_UNAVAILABLE: 'CHROME_WINDOW_UNAVAILABLE',
   FRAME_UNKNOWN: 'CHROME_FRAME_STALE', FRAME_GEOMETRY_CHANGED: 'CHROME_GEOMETRY_CHANGED', IMAGE_GEOMETRY_CHANGED: 'CHROME_GEOMETRY_CHANGED',
-  FOCUS_LOST: 'CHROME_FOCUS_LOST', FOCUS_UNVERIFIED: 'CHROME_FOCUS_LOST',
+  FOCUS_LOST: 'CHROME_FOCUS_LOST', FOCUS_UNVERIFIED: 'CHROME_FOCUS_LOST', USER_PAUSED: 'CHROME_USER_PAUSED',
   POINTER_OBSCURED: 'CHROME_FOCUS_LOST', POINTER_UNVERIFIED: 'CHROME_FOCUS_LOST',
   FILE_DIALOG_NOT_FOUND: 'CHROME_FILE_DIALOG_NOT_FOUND', FILE_DIALOG_UNSUPPORTED: 'CHROME_FILE_DIALOG_UNSUPPORTED',
   FILE_DIALOG_UNVERIFIED: 'CHROME_FILE_DIALOG_UNVERIFIED', FILE_DIALOG_TIMEOUT: 'CHROME_FILE_DIALOG_TIMEOUT',
@@ -63,6 +63,7 @@ const nativeFailureReasons: Record<string, string> = {
   CAPTURE_FALLBACK_FAILED: '系统抓图与单窗口截图回退均未成功，请检查系统截图服务',
   POINTER_OBSCURED: '鼠标目标点实际属于其他可接收输入的窗口，已阻止后续输入，请重新观察',
   POINTER_UNVERIFIED: '无法确认鼠标目标点的实际输入归属，已阻止后续输入，请重新观察',
+  USER_PAUSED: '用户已接管鼠标或点击暂停，请在屏幕上方控制条点击执行后再继续；不要自动重试输入',
   FILE_DIALOG_NOT_FOUND: '没有找到授权 Chrome 窗口的原生文件选择框',
   FILE_DIALOG_UNSUPPORTED: '该 Chrome 文件选择框类型不支持此操作',
   FILE_DIALOG_UNVERIFIED: '无法确认文件选择框属于已授权的 Chrome 窗口',
@@ -258,8 +259,10 @@ export class ChromeDesktopComponentClient implements ChromeDesktopBackend {
     if (result.ok === false) {
       const error = parseObject(result.error)
       const isLegacySelectFileCommand = args[0] === 'select-file' && error.code === 'INVALID_ARGUMENT'
+      const isUserPaused = error.code === 'FOCUS_LOST' && error.reason === 'USER_PAUSED'
       const nativeCode = isLegacySelectFileCommand
         ? 'INVALID_ARGUMENT'
+        : isUserPaused ? 'USER_PAUSED'
         : typeof error.code === 'string' && Object.hasOwn(nativeErrors, error.code) ? error.code : undefined
       if (!nativeCode) throw helperFailure()
       if (nativeCode === 'INVALID_ARGUMENT') {

@@ -7,6 +7,7 @@ struct HelperFailure: Error {
     let message: String
 
     static let invalidArgument = HelperFailure(code: "INVALID_ARGUMENT", message: "请求参数不符合原生动作契约")
+    static let userPaused = HelperFailure(code: "USER_PAUSED", message: "桌面输入已暂停，请点击屏幕上方控制条的执行按钮后再继续；不要自动重试输入")
     static let cancelled = HelperFailure(code: "CANCELLED", message: "操作已取消，请重新提交")
 }
 
@@ -61,6 +62,8 @@ struct NativeRequest {
     var imagePath = ""
     var filePath = ""
     var requestPermissions = false
+    // 仅由 stdin 接收线程签发，协议请求不能自行指定或绕过暂停前的排队代次。
+    var inputEpoch: UInt64?
 
     static func decode(_ json: [String: Any]) throws -> NativeRequest {
         guard let id = json["id"] as? String, validRequestID(id),

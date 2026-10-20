@@ -118,6 +118,16 @@ describe('ChromeDesktopCaptureHost 只维护预览与原生状态', () => {
     expect(preview.stop).toHaveBeenCalledTimes(1)
   })
 
+  test('Given USER_PAUSED暂停 When 全局宿主收到状态 Then 保留授权预览流且不停止control', async () => {
+    const preview = installPreview()
+    await renderHost()
+    await act(async () => { stateChanged({ ...initialState, state: 'paused', pauseReason: 'CHROME_USER_PAUSED' }) })
+    expect(store.get(chromeDesktopSessionStateAtom)).toMatchObject({ state: 'paused', pauseReason: 'CHROME_USER_PAUSED' })
+    expect(store.get(chromeDesktopMediaStreamAtom)).toBe(preview.stream)
+    expect(preview.stop).not.toHaveBeenCalled()
+    expect(api.stopControl).not.toHaveBeenCalled()
+  })
+
   test('Given 正在使用预览 When 原生停止或切换 control Then 释放原来的流', async () => {
     const preview = installPreview()
     await renderHost()

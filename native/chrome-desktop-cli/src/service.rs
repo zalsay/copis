@@ -51,6 +51,7 @@ struct Connection {
     id: String,
     window: Window,
     frames: VecDeque<Frame>,
+    release_pending: bool,
 }
 pub struct Service<N: Native> {
     native: N,
@@ -93,12 +94,16 @@ impl<N: Native> Service<N> {
             }
             "connect" => self.connect(&request),
             _ => {
-                self.require_connection(string(&request, "connectionId")?)?;
+                let connection_id = string(&request, "connectionId")?;
+                let connection = self.require_connection(connection_id)?;
+                if connection.release_pending && !matches!(action, "disconnect" | "observe") {
+                    return Err(Error::new(
+                        "CANCEL_UNCONFIRMED",
+                        "原生 helper 未确认停止；连接仍保留，请勿继续输入",
+                    ));
+                }
                 match action {
-                    "disconnect" => {
-                        self.clear();
-                        Ok(json!({"connected":false}))
-                    }
+                    "disconnect" => self.disconnect(),
                     "observe" => self.observe(),
                     "select-file" => self.select_file(&request),
                     _ => self.input(&request),
@@ -111,20 +116,43 @@ impl<N: Native> Service<N> {
             }
             error
         });
-        if result.as_ref().err().is_some_and(|e| {
-            matches!(
-                e.code.as_str(),
-                "WINDOW_UNAVAILABLE"
-                    | "CHROME_WINDOW_UNAVAILABLE"
-                    | "HELPER_EOF"
-                    | "HELPER_TIMEOUT"
-                    | "HELPER_PROTOCOL"
-            )
-        }) {
-            self.clear();
+        if let Err(error) = &result {
+            match error.code.as_str() {
+                "WINDOW_UNAVAILABLE" | "CHROME_WINDOW_UNAVAILABLE" => {
+                    // 窗口失效时 helper 通常仍存活；尽力撤销 toast/执行门禁，
+                    // 但保留最初窗口错误作为公开结果。
+                    if action != "disconnect" {
+                        let _ = self.cancel_native();
+                    }
+                    self.clear();
+                }
+                "HELPER_EOF" | "HELPER_TIMEOUT" | "HELPER_PROTOCOL" => self.clear(),
+                _ => {}
+            }
         }
         result
     }
+    fn cancel_native(&mut self) -> Result<()> {
+        let receipt = self.native.request(json!({"action":"cancel"}))?;
+        if receipt["cancelled"] != true {
+            return Err(Error::new(
+                "CANCEL_UNCONFIRMED",
+                "原生 helper 未确认停止；连接仍保留，请勿继续输入",
+            ));
+        }
+        Ok(())
+    }
+
+    fn disconnect(&mut self) -> Result<Value> {
+        self.connection
+            .as_mut()
+            .expect("已校验连接")
+            .release_pending = true;
+        self.cancel_native()?;
+        self.clear();
+        Ok(json!({"connected":false}))
+    }
+
     fn require_connection(&self, id: &str) -> Result<&Connection> {
         self.connection
             .as_ref()
@@ -178,6 +206,7 @@ impl<N: Native> Service<N> {
             id,
             window,
             frames: VecDeque::new(),
+            release_pending: false,
         });
         Ok(result)
     }
@@ -425,6 +454,10 @@ fn sanitize_file_selection_error(error: Error) -> Error {
         "INPUT_FAILED" | "FILE_SELECTION_FAILED" => {
             ("FILE_SELECTION_FAILED", "Chrome 文件选择失败")
         }
+        "USER_PAUSED" => (
+            "USER_PAUSED",
+            "桌面输入已暂停，请点击屏幕上方控制条的执行按钮后再继续；不要自动重试输入",
+        ),
         "ACCESSIBILITY_PERMISSION_REQUIRED" => (
             "ACCESSIBILITY_PERMISSION_REQUIRED",
             "需要授予 Chrome 桌面自动化辅助功能权限",
@@ -506,8 +539,20 @@ mod tests {
 
     impl Native for FakeNative {
         fn request(&mut self, request: Value) -> Result<Value> {
-            self.requests.push(request);
-            self.replies.pop_front().expect("测试应预置原生响应")
+            self.requests.push(request.clone());
+            let response = self.replies.pop_front().expect("测试应预置原生响应")?;
+            if request["action"] == "observe" && response == json!({"fixtureCapture":true}) {
+                let image_path = request["imagePath"].as_str().expect("截图路径");
+                fs::write(image_path, [0xff, 0xd8, 0xff, 0xd9]).unwrap();
+                return Ok(json!({
+                    "imagePath":image_path,
+                    "width":100,
+                    "height":100,
+                    "bounds":window()["bounds"],
+                    "capturedAtMs":1
+                }));
+            }
+            Ok(response)
         }
     }
 
@@ -538,6 +583,13 @@ mod tests {
     }
 
     fn connected_service(selection_reply: Result<Value>) -> (Service<FakeNative>, String) {
+        connected_service_with_cancel_reply(selection_reply, Ok(json!({"cancelled":true})))
+    }
+
+    fn connected_service_with_cancel_reply(
+        selection_reply: Result<Value>,
+        cancel_reply: Result<Value>,
+    ) -> (Service<FakeNative>, String) {
         let native = FakeNative {
             requests: Vec::new(),
             replies: VecDeque::from([
@@ -552,6 +604,7 @@ mod tests {
                     }
                 })),
                 selection_reply,
+                cancel_reply,
             ]),
         };
         let mut service = Service::new(native, std::env::temp_dir());
@@ -566,6 +619,370 @@ mod tests {
 
     fn select_request(connection_id: &str, path: &str) -> Value {
         json!({"action":"select-file","connectionId":connection_id,"path":path})
+    }
+
+    fn service_with_connection(
+        replies: impl IntoIterator<Item = Result<Value>>,
+    ) -> (Service<FakeNative>, String) {
+        let connection_id = "authorized-connection".to_owned();
+        let mut service = Service::new(
+            FakeNative {
+                requests: Vec::new(),
+                replies: replies.into_iter().collect(),
+            },
+            std::env::temp_dir(),
+        );
+        service.connection = Some(Connection {
+            id: connection_id.clone(),
+            window: serde_json::from_value(window()).unwrap(),
+            frames: VecDeque::new(),
+            release_pending: false,
+        });
+        (service, connection_id)
+    }
+
+    fn current_window_reply() -> Value {
+        json!({"window":window()})
+    }
+
+    #[test]
+    fn given_native_user_paused_when_selecting_file_then_preserve_guidance_and_connection_without_raw_message(
+    ) {
+        let dir = TestDir::new();
+        let path = dir.0.join("private file.txt");
+        fs::write(&path, "content").unwrap();
+        let path = path.to_str().unwrap().to_owned();
+        let (mut service, connection_id) = service_with_connection([
+            Ok(current_window_reply()),
+            Err(Error::new(
+                "USER_PAUSED",
+                &format!("sensitive detail: {path}"),
+            )),
+        ]);
+
+        let error = service
+            .execute(select_request(&connection_id, &path))
+            .unwrap_err();
+
+        assert_eq!(error.code, "USER_PAUSED");
+        assert_eq!(
+            error.message,
+            "桌面输入已暂停，请点击屏幕上方控制条的执行按钮后再继续；不要自动重试输入"
+        );
+        assert!(!error.message.contains(&path));
+        assert_eq!(
+            service.execute(json!({"action":"status"})).unwrap()["connected"],
+            true
+        );
+    }
+
+    #[test]
+    fn given_native_user_paused_when_regular_input_then_propagate_code_and_keep_connection() {
+        let dir = TestDir::new();
+        let frame_path = dir.0.join("frame.jpg");
+        fs::write(&frame_path, b"frame").unwrap();
+        let (mut service, connection_id) = service_with_connection([
+            Ok(current_window_reply()),
+            Err(Error::new("USER_PAUSED", "Native says USER_PAUSED")),
+        ]);
+        let bounds = service.connection.as_ref().unwrap().window.bounds;
+        service
+            .connection
+            .as_mut()
+            .unwrap()
+            .frames
+            .push_back(Frame {
+                id: "frame-1".into(),
+                path: frame_path,
+                width: 100,
+                height: 100,
+                bounds,
+            });
+
+        let error = service
+            .execute(json!({
+                "action":"press",
+                "connectionId":connection_id,
+                "frameId":"frame-1",
+                "key":"Enter"
+            }))
+            .unwrap_err();
+
+        assert_eq!(error.code, "USER_PAUSED");
+        assert_eq!(error.message, "Native says USER_PAUSED");
+        assert_eq!(
+            service.execute(json!({"action":"status"})).unwrap()["connected"],
+            true
+        );
+    }
+
+    #[test]
+    fn given_existing_fatal_native_errors_when_clearing_then_do_not_send_another_cancel() {
+        for code in ["HELPER_TIMEOUT", "HELPER_EOF", "HELPER_PROTOCOL"] {
+            let (mut service, connection_id) =
+                service_with_connection([Err(Error::new(code, "native failure"))]);
+
+            let error = service
+                .execute(json!({"action":"observe","connectionId":connection_id}))
+                .unwrap_err();
+
+            assert_eq!(error.code, code);
+            assert_eq!(
+                service.native.requests,
+                vec![json!({"action":"window","windowId":7,"pid":42})]
+            );
+            assert_eq!(
+                service.execute(json!({"action":"status"})).unwrap()["connected"],
+                false
+            );
+        }
+    }
+
+    #[test]
+    fn given_window_unavailable_when_cleanup_cancel_fails_then_preserve_original_error_and_clear() {
+        let (mut service, connection_id) = service_with_connection([
+            Err(Error::new("WINDOW_UNAVAILABLE", "window vanished")),
+            Ok(json!({"cancelled":false})),
+        ]);
+
+        let error = service
+            .execute(json!({"action":"observe","connectionId":connection_id}))
+            .unwrap_err();
+
+        assert_eq!(error.code, "WINDOW_UNAVAILABLE");
+        assert_eq!(error.message, "window vanished");
+        assert_eq!(
+            service.native.requests,
+            vec![
+                json!({"action":"window","windowId":7,"pid":42}),
+                json!({"action":"cancel"}),
+            ]
+        );
+        assert_eq!(
+            service.execute(json!({"action":"status"})).unwrap()["connected"],
+            false
+        );
+    }
+
+    #[test]
+    fn given_disconnect_when_native_cancel_acknowledges_then_clear_connection_and_frames() {
+        let dir = TestDir::new();
+        let frame_path = dir.0.join("frame.jpg");
+        fs::write(&frame_path, b"frame").unwrap();
+        let (mut service, connection_id) = service_with_connection([Ok(json!({"cancelled":true}))]);
+        let bounds = service.connection.as_ref().unwrap().window.bounds;
+        service
+            .connection
+            .as_mut()
+            .unwrap()
+            .frames
+            .push_back(Frame {
+                id: "frame-1".into(),
+                path: frame_path.clone(),
+                width: 100,
+                height: 100,
+                bounds,
+            });
+
+        let result = service
+            .execute(json!({"action":"disconnect","connectionId":connection_id}))
+            .unwrap();
+
+        assert_eq!(result, json!({"connected":false}));
+        assert_eq!(service.native.requests, vec![json!({"action":"cancel"})]);
+        assert_eq!(
+            service.execute(json!({"action":"status"})).unwrap()["connected"],
+            false
+        );
+        assert!(!frame_path.exists());
+    }
+
+    #[test]
+    fn given_disconnect_when_native_cancel_is_not_acknowledged_then_keep_connection_and_frames() {
+        let dir = TestDir::new();
+        let frame_path = dir.0.join("frame.jpg");
+        fs::write(&frame_path, b"frame").unwrap();
+        let (mut service, connection_id) =
+            service_with_connection([Ok(json!({"cancelled":false}))]);
+        let bounds = service.connection.as_ref().unwrap().window.bounds;
+        service
+            .connection
+            .as_mut()
+            .unwrap()
+            .frames
+            .push_back(Frame {
+                id: "frame-1".into(),
+                path: frame_path.clone(),
+                width: 100,
+                height: 100,
+                bounds,
+            });
+
+        let error = service
+            .execute(json!({"action":"disconnect","connectionId":connection_id}))
+            .unwrap_err();
+
+        assert_eq!(error.code, "CANCEL_UNCONFIRMED");
+        assert_eq!(service.native.requests, vec![json!({"action":"cancel"})]);
+        assert_eq!(
+            service.execute(json!({"action":"status"})).unwrap()["connected"],
+            true
+        );
+        assert!(frame_path.exists());
+    }
+
+    #[test]
+    fn given_cancel_unconfirmed_then_block_input_allow_retry_and_revoke_old_credential() {
+        let dir = TestDir::new();
+        let frame_path = dir.0.join("frame.jpg");
+        fs::write(&frame_path, b"frame").unwrap();
+        let (mut service, connection_id) = service_with_connection([
+            Ok(json!({"cancelled":false})),
+            Ok(json!({"cancelled":true})),
+        ]);
+        let bounds = service.connection.as_ref().unwrap().window.bounds;
+        service
+            .connection
+            .as_mut()
+            .unwrap()
+            .frames
+            .push_back(Frame {
+                id: "frame-1".into(),
+                path: frame_path,
+                width: 100,
+                height: 100,
+                bounds,
+            });
+
+        let first_disconnect = service
+            .execute(json!({"action":"disconnect","connectionId":connection_id}))
+            .unwrap_err();
+        assert_eq!(first_disconnect.code, "CANCEL_UNCONFIRMED");
+        assert_eq!(
+            service.execute(json!({"action":"status"})).unwrap()["connected"],
+            true
+        );
+
+        let blocked = service
+            .execute(json!({
+                "action":"press",
+                "connectionId":connection_id,
+                "frameId":"frame-1",
+                "key":"Enter"
+            }))
+            .unwrap_err();
+        assert_eq!(blocked.code, "CANCEL_UNCONFIRMED");
+        assert_eq!(service.native.requests, vec![json!({"action":"cancel"})]);
+
+        assert_eq!(
+            service
+                .execute(json!({"action":"disconnect","connectionId":connection_id}))
+                .unwrap(),
+            json!({"connected":false})
+        );
+        assert_eq!(service.native.requests.len(), 2);
+        assert_eq!(
+            service
+                .execute(json!({"action":"observe","connectionId":connection_id}))
+                .unwrap_err()
+                .code,
+            "CONNECTION_INVALID"
+        );
+    }
+
+    #[test]
+    fn given_cancel_unconfirmed_then_block_all_inputs_allow_observe_and_retry_disconnect() {
+        let dir = TestDir::new();
+        let frame_path = dir.0.join("frame.jpg");
+        fs::write(&frame_path, b"frame").unwrap();
+        let (mut service, connection_id) = service_with_connection([
+            Ok(json!({"cancelled":false})),
+            Ok(current_window_reply()),
+            Ok(json!({"fixtureCapture":true})),
+            Ok(json!({"cancelled":true})),
+        ]);
+        let bounds = service.connection.as_ref().unwrap().window.bounds;
+        service
+            .connection
+            .as_mut()
+            .unwrap()
+            .frames
+            .push_back(Frame {
+                id: "frame-1".into(),
+                path: frame_path,
+                width: 100,
+                height: 100,
+                bounds,
+            });
+
+        assert_eq!(
+            service
+                .execute(json!({"action":"disconnect","connectionId":connection_id}))
+                .unwrap_err()
+                .code,
+            "CANCEL_UNCONFIRMED"
+        );
+        assert_eq!(
+            service.execute(json!({"action":"status"})).unwrap()["connected"],
+            true
+        );
+
+        for request in [
+            json!({"action":"click","connectionId":connection_id,"frameId":"frame-1","x":1,"y":1}),
+            json!({"action":"scroll","connectionId":connection_id,"frameId":"frame-1","x":1,"y":1,"deltaY":1}),
+            json!({"action":"type","connectionId":connection_id,"frameId":"frame-1","text":"hello"}),
+            json!({"action":"press","connectionId":connection_id,"frameId":"frame-1","key":"Enter"}),
+            select_request(&connection_id, "/tmp/not-opened.txt"),
+        ] {
+            assert_eq!(
+                service.execute(request).unwrap_err().code,
+                "CANCEL_UNCONFIRMED"
+            );
+        }
+
+        assert!(service
+            .execute(json!({"action":"observe","connectionId":connection_id}))
+            .is_ok());
+        assert_eq!(
+            service
+                .execute(json!({"action":"disconnect","connectionId":connection_id}))
+                .unwrap(),
+            json!({"connected":false})
+        );
+        assert_eq!(
+            service.native.requests,
+            vec![
+                json!({"action":"cancel"}),
+                json!({"action":"window","windowId":7,"pid":42}),
+                json!({"action":"observe","windowId":7,"pid":42,"maxEdge":1600,"imagePath":service.native.requests[2]["imagePath"]}),
+                json!({"action":"cancel"}),
+            ]
+        );
+        assert_eq!(
+            service
+                .execute(json!({"action":"observe","connectionId":connection_id}))
+                .unwrap_err()
+                .code,
+            "CONNECTION_INVALID"
+        );
+    }
+
+    #[test]
+    fn given_disconnect_when_native_cancel_fails_then_do_not_report_success_or_clear_connection() {
+        let (mut service, connection_id) =
+            service_with_connection([Err(Error::new("CANCEL_FAILED", "native cancel failed"))]);
+
+        let error = service
+            .execute(json!({"action":"disconnect","connectionId":connection_id}))
+            .unwrap_err();
+
+        assert_eq!(error.code, "CANCEL_FAILED");
+        assert_ne!(error.code, "OK");
+        assert_eq!(service.native.requests, vec![json!({"action":"cancel"})]);
+        assert_eq!(
+            service.execute(json!({"action":"status"})).unwrap()["connected"],
+            true
+        );
     }
 
     #[test]
@@ -769,6 +1186,7 @@ mod tests {
             ("FILE_DIALOG_TIMEOUT", "FILE_DIALOG_TIMEOUT"),
             ("INPUT_FAILED", "FILE_SELECTION_FAILED"),
             ("FILE_SELECTION_FAILED", "FILE_SELECTION_FAILED"),
+            ("USER_PAUSED", "USER_PAUSED"),
             (
                 "ACCESSIBILITY_PERMISSION_REQUIRED",
                 "ACCESSIBILITY_PERMISSION_REQUIRED",
@@ -861,6 +1279,21 @@ mod tests {
 
         assert_eq!(error.code, "WINDOW_UNAVAILABLE");
         assert!(!error.to_string().contains(path.to_str().unwrap()));
+        assert_eq!(
+            service.native.requests,
+            vec![
+                json!({"action":"permissions","request":false}),
+                json!({"action":"windows"}),
+                json!({"action":"window","windowId":7,"pid":42}),
+                json!({
+                    "action":"select-file",
+                    "windowId":7,
+                    "pid":42,
+                    "path":path.canonicalize().unwrap()
+                }),
+                json!({"action":"cancel"}),
+            ]
+        );
         assert_eq!(
             service.execute(json!({"action":"status"})).unwrap()["connected"],
             false

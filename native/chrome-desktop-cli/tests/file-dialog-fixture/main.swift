@@ -51,8 +51,51 @@ repeat {
 guard let root else { fputs("FAIL: 无法确认隔离测试窗口\n", stderr); exit(1) }
 let title = attribute(root, kAXTitleAttribute) as? String ?? ""
 require(title.contains("CopisFileChooserFixture") || title.contains("CopisFileChosen:"), "只能操作隔离文件选择测试页")
-switch CommandLine.arguments[3] {
-case "open":
+let controlAction = CommandLine.arguments[3].split(separator: ":", maxSplits: 1).map(String.init)
+if controlAction.count == 2, ["pause-control", "execute-control", "control-paused", "control-closed", "foreign-pointer"].contains(controlAction[0]) {
+    guard let helperPID = Int32(controlAction[1]), helperPID > 0, helperPID != pid else { exit(2) }
+    let helper = AXUIElementCreateApplication(helperPID)
+    AXUIElementSetMessagingTimeout(helper, 0.5)
+    if controlAction[0] == "control-closed" {
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        require(!windows.contains { ($0[kCGWindowOwnerPID as String] as? Int32) == helperPID }, "断开后控制条仍可见")
+        exit(0)
+    }
+    if controlAction[0] == "foreign-pointer" {
+        guard CGPreflightPostEventAccess(),
+              let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]],
+              let target = windows.first(where: { ($0[kCGWindowNumber as String] as? UInt32) == windowID && ($0[kCGWindowOwnerPID as String] as? Int32) == pid }),
+              let rawBounds = target[kCGWindowBounds as String] as? [String: Any],
+              let rect = CGRect(dictionaryRepresentation: rawBounds as CFDictionary),
+              let source = CGEventSource(stateID: .privateState),
+              let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
+                                 mouseCursorPosition: CGPoint(x: rect.midX, y: rect.midY), mouseButton: .left) else { exit(2) }
+        move.post(tap: .cghidEventTap)
+        print("PASS: 仅向隔离 Chrome 中心投递来自外部测试进程的鼠标移动")
+        exit(0)
+    }
+    let identifier = controlAction[0] == "pause-control" ? "copis-chrome-pause" : "copis-chrome-execute"
+    let controlDeadline = ProcessInfo.processInfo.systemUptime + 3
+    repeat {
+        var queue = attribute(helper, kAXWindowsAttribute) as? [AXUIElement] ?? [], index = 0
+        while index < queue.count && index < 128 {
+            let node = queue[index]; index += 1
+            if attribute(node, kAXIdentifierAttribute) as? String == identifier {
+                if attribute(node, kAXEnabledAttribute) as? Bool != true { break }
+                if controlAction[0] != "control-paused" {
+                    require(AXUIElementPerformAction(node, kAXPressAction as CFString) == .success, "操作隔离 helper 控制按钮失败")
+                }
+                exit(0)
+            }
+            queue.append(contentsOf: attribute(node, kAXChildrenAttribute) as? [AXUIElement] ?? [])
+        }
+        Thread.sleep(forTimeInterval: 0.04)
+    } while ProcessInfo.processInfo.systemUptime < controlDeadline
+    let windowCount = (attribute(helper, kAXWindowsAttribute) as? [AXUIElement])?.count ?? 0
+    fputs("FAIL: 隔离 helper 控制按钮未就绪（AX 窗口数：\(windowCount)）\n", stderr)
+    exit(1)
+}
+func activateFixture() {
     // 模拟真实点击上传按钮的前置条件：目标窗口处于前台。
     require(running.activate(options: []), "无法激活隔离 Chrome")
     let focusDeadline = ProcessInfo.processInfo.systemUptime + 2
@@ -60,6 +103,13 @@ case "open":
         require(ProcessInfo.processInfo.systemUptime < focusDeadline, "隔离 Chrome 未进入前台")
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
     }
+}
+switch CommandLine.arguments[3] {
+case "activate":
+    activateFixture()
+    exit(0)
+case "open":
+    activateFixture()
     var queue = [root], index = 0
     while index < queue.count && index < 1000 {
         let node = queue[index]; index += 1

@@ -78,6 +78,96 @@ describe('Chrome 桌面工具组件服务 BDD', () => {
     expect(f.component.cancels).toBe(0)
   })
 
+  test('Given native USER_PAUSED When Start、Observe及新输入重试 Then 保留授权帧与回执直到执行门禁放行', async () => {
+    const f = fixture(); const { controlId, confirm } = await f.begin(); await confirm()
+    const originalFrame = await f.observe(controlId)
+    const priorInput = { controlId, frameId: originalFrame.frame.frameId, key: 'Enter' }
+    const priorReceipt = await f.call('ChromeDesktopPress', 'already-succeeded', priorInput)
+    const cachedObserve = await f.observe(controlId, 'observe-before-pause')
+    f.component.onInput = async () => { throw new Error('CHROME_USER_PAUSED: 请等待用户恢复') }
+
+    await expect(f.call('ChromeDesktopPress', 'blocked-input', { ...priorInput, key: 'Tab' })).rejects.toThrow('CHROME_USER_PAUSED')
+    expect(await f.observe(controlId, 'observe-before-pause')).toEqual(cachedObserve)
+    expect(f.component.observeCalls).toBe(2)
+    expect(f.service.getSessionState()).toMatchObject({ state: 'paused', pauseReason: 'CHROME_USER_PAUSED' })
+    expect(f.component.cancels).toBe(0)
+    expect(await f.call('ChromeDesktopPress', 'already-succeeded', priorInput)).toEqual(priorReceipt)
+    expect(f.component.inputCalls).toHaveLength(2)
+
+    const resumedStart = await f.call('ChromeDesktopStart', 'start-while-user-paused')
+    expect(resumedStart).toMatchObject({ kind: 'json', value: { status: 'paused', controlId, error: 'CHROME_USER_PAUSED' } })
+    expect(f.component.connectCalls).toBe(1)
+    expect(await f.call('ChromeDesktopStart', 'other-session-start', {}, 'B', 'token-B')).toMatchObject({ kind: 'json', value: { error: 'CHROME_BUSY' } })
+
+    f.component.onInput = async () => { throw new Error('CHROME_USER_PAUSED: still paused') }
+    await expect(f.call('ChromeDesktopPress', 'retry-before-user-resume', priorInput)).rejects.toThrow('CHROME_USER_PAUSED')
+    expect(f.component.cancels).toBe(0)
+    expect(f.service.getSessionState()).toMatchObject({ state: 'paused', pauseReason: 'CHROME_USER_PAUSED' })
+
+    const pausedFrame = await f.observe(controlId, 'observe-while-user-paused')
+    expect(pausedFrame.kind).toBe('image')
+    expect(f.service.getSessionState()).toMatchObject({ state: 'paused', pauseReason: 'CHROME_USER_PAUSED' })
+    f.component.onInput = async () => {}
+    await f.call('ChromeDesktopPress', 'after-user-resume', { controlId, frameId: pausedFrame.frame.frameId, key: 'Enter' })
+    expect(f.service.getSessionState()).toMatchObject({ state: 'active', mode: 'control', pauseReason: undefined })
+    expect(f.component.connectCalls).toBe(1)
+    expect(f.component.cancels).toBe(0)
+  })
+
+  test('Given 用户暂停后Observe普通失败或明确连接失效 When Observe Then 普通错误保留暂停且失效错误清理连接', async () => {
+    const ordinary = fixture(); const ordinaryControl = await ordinary.begin(); await ordinaryControl.confirm()
+    const ordinaryFrame = await ordinary.observe(ordinaryControl.controlId)
+    ordinary.component.onInput = async () => { throw new Error('CHROME_USER_PAUSED: 请等待用户恢复') }
+    await expect(ordinary.call('ChromeDesktopPress', 'pause-before-transient', { controlId: ordinaryControl.controlId, frameId: ordinaryFrame.frame.frameId, key: 'Enter' })).rejects.toThrow('CHROME_USER_PAUSED')
+    ordinary.component.onObserve = async () => { throw new Error('CHROME_CAPTURE_FAILED: transient read failure') }
+    await expect(ordinary.observe(ordinaryControl.controlId, 'ordinary-observe-failure')).rejects.toThrow('CHROME_CAPTURE_FAILED')
+    expect(ordinary.service.getSessionState()).toMatchObject({ state: 'paused', pauseReason: 'CHROME_USER_PAUSED' })
+    expect(ordinary.component.cancels).toBe(0)
+    ordinary.component.onInput = async () => { throw new Error('CHROME_BUSY: another operation is in flight') }
+    await expect(ordinary.call('ChromeDesktopPress', 'still-user-paused', { controlId: ordinaryControl.controlId, frameId: ordinaryFrame.frame.frameId, key: 'Tab' })).rejects.toThrow('CHROME_BUSY')
+    expect(ordinary.service.getSessionState()).toMatchObject({ state: 'paused', pauseReason: 'CHROME_USER_PAUSED' })
+    expect(ordinary.component.cancels).toBe(0)
+
+    const unreadable = fixture(); const unreadableControl = await unreadable.begin(); await unreadableControl.confirm()
+    const unreadableFrame = await unreadable.observe(unreadableControl.controlId)
+    unreadable.component.onInput = async () => { throw new Error('CHROME_USER_PAUSED: 请等待用户恢复') }
+    await expect(unreadable.call('ChromeDesktopPress', 'pause-before-file-error', { controlId: unreadableControl.controlId, frameId: unreadableFrame.frame.frameId, key: 'Enter' })).rejects.toThrow('CHROME_USER_PAUSED')
+    unreadable.component.onSelectFile = async () => { throw new Error('CHROME_FILE_NOT_READABLE: path is not readable') }
+    await expect(unreadable.call('ChromeDesktopSelectFile', 'unreadable-while-paused', { controlId: unreadableControl.controlId, path: '/tmp/a.pdf' })).rejects.toThrow('CHROME_FILE_NOT_READABLE')
+    expect(unreadable.service.getSessionState()).toMatchObject({ state: 'paused', pauseReason: 'CHROME_USER_PAUSED' })
+    expect(unreadable.component.cancels).toBe(0)
+
+    const inputFailure = fixture(); const inputControl = await inputFailure.begin(); await inputControl.confirm()
+    const inputFrame = await inputFailure.observe(inputControl.controlId)
+    inputFailure.component.onInput = async () => { throw new Error('CHROME_USER_PAUSED: 请等待用户恢复') }
+    await expect(inputFailure.call('ChromeDesktopPress', 'pause-before-helper-exit', { controlId: inputControl.controlId, frameId: inputFrame.frame.frameId, key: 'Enter' })).rejects.toThrow('CHROME_USER_PAUSED')
+    inputFailure.component.onInput = async () => { throw new Error('CHROME_HELPER_FAILED: helper exited') }
+    await expect(inputFailure.call('ChromeDesktopPress', 'helper-exited', { controlId: inputControl.controlId, frameId: inputFrame.frame.frameId, key: 'Tab' })).rejects.toThrow('CHROME_HELPER_FAILED')
+    expect(inputFailure.service.getSessionState()).toMatchObject({ state: 'paused', pauseReason: 'CHROME_HELPER_FAILED' })
+    expect(inputFailure.component.cancels).toBe(1)
+
+    const selectFailure = fixture(); const selectControl = await selectFailure.begin(); await selectControl.confirm()
+    const selectFrame = await selectFailure.observe(selectControl.controlId)
+    selectFailure.component.onInput = async () => { throw new Error('CHROME_USER_PAUSED: 请等待用户恢复') }
+    await expect(selectFailure.call('ChromeDesktopPress', 'pause-before-select-timeout', { controlId: selectControl.controlId, frameId: selectFrame.frame.frameId, key: 'Enter' })).rejects.toThrow('CHROME_USER_PAUSED')
+    selectFailure.component.onSelectFile = async () => { throw new Error('CHROME_ACTION_UNCERTAIN: helper response lost') }
+    await expect(selectFailure.call('ChromeDesktopSelectFile', 'select-timeout', { controlId: selectControl.controlId, path: '/tmp/a.pdf' })).rejects.toThrow('CHROME_ACTION_UNCERTAIN')
+    expect(selectFailure.service.getSessionState()).toMatchObject({ state: 'paused', pauseReason: 'CHROME_ACTION_UNCERTAIN' })
+    expect(selectFailure.component.cancels).toBe(1)
+
+    for (const code of ['CHROME_WINDOW_UNAVAILABLE', 'CHROME_HELPER_FAILED', 'CHROME_ACTION_UNCERTAIN', 'CHROME_CANCELLED'] as const) {
+      const f = fixture(); const { controlId, confirm } = await f.begin(); await confirm()
+      const frame = await f.observe(controlId)
+      f.component.onInput = async () => { throw new Error('CHROME_USER_PAUSED: 请等待用户恢复') }
+      await expect(f.call('ChromeDesktopPress', `pause-${code}`, { controlId, frameId: frame.frame.frameId, key: 'Enter' })).rejects.toThrow('CHROME_USER_PAUSED')
+      f.component.onObserve = async () => { throw new Error(`${code}: helper no longer owns the window`) }
+      await expect(f.observe(controlId, `failed-${code}`)).rejects.toThrow(code)
+      expect(f.service.getSessionState()).toMatchObject({ state: 'paused', pauseReason: code })
+      expect(f.service.getSessionState()?.pauseReason).not.toBe('CHROME_USER_PAUSED')
+      expect(f.component.cancels).toBe(1)
+    }
+  })
+
   test('Given SelectFile已在途 When 再次执行输入或SelectFile Then 共用串行门禁', async () => {
     const f = fixture(); const { controlId, confirm } = await f.begin(); await confirm(); const frame = await f.observe(controlId)
     const gate = deferred<void>(); const started = deferred<void>()

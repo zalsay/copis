@@ -5,6 +5,8 @@ use std::io::{BufRead, Read};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
+pub(crate) const USER_PAUSED_PUBLIC_MESSAGE: &str =
+    "桌面输入已暂停，请点击屏幕上方控制条的执行按钮后再继续；不要自动重试输入";
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +43,15 @@ pub fn response(result: Result<Value>) -> Value {
             Value::Object(data)
         }
         Ok(_) => response(Err(Error::new("PROTOCOL_ERROR", "响应必须是 JSON 对象"))),
+        Err(error) if error.code == "USER_PAUSED" => json!({
+            "protocolVersion":PROTOCOL_VERSION,
+            "ok":false,
+            "error":{
+                "code":"FOCUS_LOST",
+                "reason":"USER_PAUSED",
+                "message":USER_PAUSED_PUBLIC_MESSAGE
+            }
+        }),
         Err(error) => json!({"protocolVersion":PROTOCOL_VERSION,"ok":false,"error":error}),
     }
 }
@@ -108,6 +119,34 @@ pub fn fields(value: &Value, allowed: &[&str]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn given_user_paused_when_serialized_then_emit_legacy_focus_code_and_reason() {
+        let value = response(Err(Error::new("USER_PAUSED", "raw helper detail")));
+
+        assert_eq!(value["protocolVersion"], PROTOCOL_VERSION);
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "FOCUS_LOST");
+        assert_eq!(value["error"]["reason"], "USER_PAUSED");
+        assert_eq!(value["error"]["message"], USER_PAUSED_PUBLIC_MESSAGE);
+        assert!(!value.to_string().contains("raw helper detail"));
+    }
+
+    #[test]
+    fn given_plain_focus_lost_with_paused_copy_when_serialized_then_do_not_infer_reason_from_message(
+    ) {
+        let value = response(Err(Error::new("FOCUS_LOST", USER_PAUSED_PUBLIC_MESSAGE)));
+        assert_eq!(value["error"]["code"], "FOCUS_LOST");
+        assert!(value["error"].get("reason").is_none());
+    }
+
+    #[test]
+    fn given_other_error_when_serialized_then_keep_code_without_reason() {
+        let value = response(Err(Error::new("INVALID_ARGUMENT", "bad argument")));
+        assert_eq!(value["error"]["code"], "INVALID_ARGUMENT");
+        assert!(value["error"].get("reason").is_none());
+    }
+
     #[test]
     fn oversized_or_unterminated_protocol_is_rejected() {
         assert_eq!(

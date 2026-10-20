@@ -39,6 +39,9 @@ swiftc -O -target "${arch}-apple-macosx14.0" "${library_sources[@]}" \
   "$root/tests/focus-validation/main.swift" -o "$scratch/focus-validation-tests"
 swiftc -O -target "${arch}-apple-macosx14.0" "${library_sources[@]}" \
   "$root/tests/file-dialog/main.swift" -o "$scratch/file-dialog-tests"
+swiftc -O -target "${arch}-apple-macosx14.0" "${library_sources[@]}" \
+  "$root/tests/execution-control/main.swift" -o "$scratch/execution-control-tests"
+"$scratch/execution-control-tests"
 "$scratch/file-dialog-tests"
 "$scratch/focus-validation-tests"
 swiftc -O -target "${arch}-apple-macosx14.0" "${library_sources[@]}" \

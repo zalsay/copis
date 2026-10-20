@@ -30,7 +30,11 @@ func handleLine(_ line: Data, oversized: Bool) {
             throw HelperFailure(code: "INVALID_REQUEST", message: "每行必须是有效的 JSON 请求对象")
         }
         if let id = json["id"] as? String, validRequestID(id) { responseID = id }
-        let request = try NativeRequest.decode(json)
+        var decodedRequest = try NativeRequest.decode(json)
+        if ["click", "scroll", "type", "press", "select-file"].contains(decodedRequest.action) {
+            decodedRequest.inputEpoch = cancellation.inputSnapshot()
+        }
+        let request = decodedRequest
         if request.action == "cancel" {
             // 直接在 stdin 线程处理，不排在截图、焦点等待或文本输入后面。
             cancellation.cancel()
@@ -97,6 +101,5 @@ DispatchQueue.global(qos: .userInitiated).async {
     cancellation.cancel()
     actionQueue.async { exit(0) }
 }
-let keepAlive = Port()
-RunLoop.main.add(keepAlive, forMode: .default)
-RunLoop.main.run()
+// 交互式 NSPanel 需要 AppKit 完成启动并派发鼠标事件；普通 RunLoop 不能替代应用事件循环。
+NSApplication.shared.run()

@@ -1,6 +1,6 @@
 # 其他 Agent 接入 Copis Chrome CLI
 
-本文面向能够执行本机命令的 Agent，以及为 Agent 编写工具适配器的开发者。命令与响应按 `copis-chrome v0.1.5`、JSON 协议 `1` 核对。快速交给 Agent 使用时，提供 CLI 绝对路径并复制第 9 节的调用约定；程序化集成可参考第 7 节。
+本文面向能够执行本机命令的 Agent，以及为 Agent 编写工具适配器的开发者。命令与响应按 `copis-chrome v0.1.6`、JSON 协议 `1` 核对。快速交给 Agent 使用时，提供 CLI 绝对路径并复制第 9 节的调用约定；程序化集成可参考第 7 节。
 
 接入方式是 **执行 CLI → 解析 JSON → 读取本地截图 → 决策 → 执行动作 → 观察确认**。CLI 提供原生窗口截图、鼠标和键盘输入；页面理解、操作决策和任务结果判断由调用方完成。它没有 DOM、CSS selector、按网页文字定位按钮或执行页面 JavaScript 的接口。
 
@@ -16,7 +16,7 @@
 将对应架构的归档解压到稳定位置。ARM Mac 使用 `darwin-arm64`，Intel Mac 使用 `darwin-x64`。保持这三个文件相邻：
 
 ```text
-copis-chrome-0.1.5-darwin-arm64/
+copis-chrome-0.1.6-darwin-arm64/
 ├── copis-chrome
 ├── copis-chrome-helper
 └── module.json
@@ -25,7 +25,7 @@ copis-chrome-0.1.5-darwin-arm64/
 配置调用方使用的绝对路径，然后检查版本：
 
 ```bash
-export COPIS_CHROME_CLI='/绝对路径/copis-chrome-0.1.5-darwin-arm64/copis-chrome'
+export COPIS_CHROME_CLI='/绝对路径/copis-chrome-0.1.6-darwin-arm64/copis-chrome'
 "$COPIS_CHROME_CLI" --version
 "$COPIS_CHROME_CLI" --help
 ```
@@ -363,3 +363,10 @@ CONNECTION_BUSY 时不抢占别人的连接，不自动 daemon stop。
 成功回执为 `{connectionId, selected: true, dialogClosed: true}`。随后 Observe 页面确认选中文件和上传状态；不要把对话框关闭回执描述为上传完成或发布成功。没有打开对话框返回 `FILE_DIALOG_NOT_FOUND`；无法确认归属、结构不支持、处理超时或文件不可读各自返回 `FILE_DIALOG_UNVERIFIED`、`FILE_DIALOG_UNSUPPORTED`、`FILE_DIALOG_TIMEOUT`、`FILE_NOT_READABLE`。这些失败保留连接，可检查状态后继续；取消和紧急停止保持原有约定。
 
 单次动作总等待有界，不会无限发送回车。路径和文件内容不写入 CLI 运行日志；Agent 自身会话是否保存工具参数由调用方管理。内置工具名为 `ChromeDesktopSelectFile`，参数 `{controlId, path}`；在工具列表中没有它时应更新主程序/Worker，新组件本身不会增加旧 Worker 的工具定义。
+
+
+## 执行控制条与鼠标接管（v0.1.6）
+
+屏幕上方的控制条持续提供“执行/暂停”。用户接管鼠标或切走应用时暂停输入；Agent 收到 `FOCUS_LOST` 且 `reason: USER_PAUSED` 时必须停止输入重试，并保留原连接。内置工具对应 `CHROME_USER_PAUSED`。用户点击“执行”后，后续的新操作可以继续；先 Observe 确认上一步是否部分生效，再构造新操作，不能重放中断的点击或整段文本。不要通过 shell、AX 或裸 CGEvent 点击控制条来解除用户暂停。
+
+暂停期间可正常 Observe；重复 Start 不会重新请求授权或解除暂停。协议主版本仍为 1，旧客户端把暂停视为可恢复的 `FOCUS_LOST`，新客户端进一步读取固定 `reason`，原连接和 frame 不因暂停消费或失效。不要发起额外的 connect 来抢占连接。disconnect/daemon stop 才结束本控制，随后控制条关闭。

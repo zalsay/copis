@@ -41,6 +41,7 @@ export type ChromeDesktopErrorCode =
   | 'CHROME_INPUT_PERMISSION_REQUIRED'
   | 'CHROME_STOP_SHORTCUT_UNAVAILABLE'
   | 'CHROME_FOCUS_LOST'
+  | 'CHROME_USER_PAUSED'
   | 'CHROME_GEOMETRY_CHANGED'
   | 'CHROME_FRAME_STALE'
   | 'CHROME_CAPTURE_FAILED'
@@ -57,7 +58,7 @@ export type ChromeDesktopErrorCode =
   | 'CHROME_CANCELLED'
   | 'CHROME_CAPABILITY_STALE'
 
-/** 焦点或窗口几何变化只暂停输入，已授权的采集会话可以继续恢复。 */
+/** 可自动恢复的错误暂停保留授权；CHROME_USER_PAUSED 必须等待用户解除。 */
 export function isRecoverableChromeDesktopPauseReason(
   reason?: ChromeDesktopErrorCode,
 ): boolean {
@@ -70,6 +71,11 @@ export function isRecoverableChromeDesktopPauseReason(
     || reason === 'CHROME_FILE_NOT_READABLE'
     || reason === 'CHROME_FILE_SELECTION_FAILED'
     || reason === 'CHROME_COMPONENT_VERSION_UNSUPPORTED'
+}
+
+/** 授权与预览仍有效；不代表 USER_PAUSED 可自动恢复输入。 */
+export function retainsChromeDesktopAuthorization(reason?: ChromeDesktopErrorCode): boolean {
+  return reason === 'CHROME_USER_PAUSED' || isRecoverableChromeDesktopPauseReason(reason)
 }
 
 export type ChromeDesktopMode = 'observe' | 'control'

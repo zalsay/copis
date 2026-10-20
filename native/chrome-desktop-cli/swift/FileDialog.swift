@@ -55,19 +55,18 @@ final class ChromeFileSelector {
               FileManager.default.isReadableFile(atPath: file.path) else {
             throw HelperFailure(code: "FILE_NOT_READABLE", message: "请选择存在且可读取的普通文件")
         }
-        try desktop.requireInputPermission()
+        let permit = try desktop.prepareInput(target, cancellation: cancellation, generation: generation, expectedEpoch: request.inputEpoch)
         let deadline = ProcessInfo.processInfo.systemUptime + 12
         func check() throws {
-            try cancellation.check(generation)
+            try cancellation.checkInput(permit)
             guard ProcessInfo.processInfo.systemUptime < deadline else {
                 throw HelperFailure(code: "FILE_DIALOG_TIMEOUT", message: "文件选择框未在限定时间内完成，请检查对话框后重试")
             }
         }
         let app = desktop.axApplication(target.pid)
         let bounds = try desktop.window(target).bounds
-        let wasFrontmost = onMain { NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid }
         // 后台 Chrome 的 AppKit modal 可能不响应 AXWindows；这是输入操作，先激活已验证的原应用再查询 sheet。
-        try desktop.activateApplication(target, cancellation: cancellation, generation: generation)
+        try desktop.activateApplication(target, cancellation: cancellation, generation: generation, permit: permit)
         func resolveRoot() throws -> AXUIElement {
             try check()
             _ = try desktop.window(target)
@@ -126,10 +125,9 @@ final class ChromeFileSelector {
                 return nil
             }
         }
-        let restoringFocus = !wasFrontmost || (try? state()) == nil
         // 仅提升原主窗口；附属 modal sheet 自己取得焦点，绝不把焦点强制写回网页。
         let original = try root()
-        try effect(generation, check: check) { AXUIElementPerformAction(original, kAXRaiseAction as CFString) }
+        try effect(permit, check: check) { AXUIElementPerformAction(original, kAXRaiseAction as CFString) }
         let focusDeadline = min(deadline, ProcessInfo.processInfo.systemUptime + 1.5)
         var focusFailure: HelperFailure?
         try waitForFileDialog(check: {
@@ -144,7 +142,7 @@ final class ChromeFileSelector {
                 return false
             }
         })
-        if restoringFocus { try desktop.showOperationToast(target, bounds: bounds, cancellation: cancellation, generation: generation) }
+        try desktop.showOperationToast(target, bounds: bounds, cancellation: cancellation, generation: generation)
         func key(_ code: CGKeyCode, flags: CGEventFlags = [], verify: () throws -> Void) throws {
             try verify()
             guard let source = CGEventSource(stateID: .privateState),
@@ -154,7 +152,7 @@ final class ChromeFileSelector {
             }
             down.flags = flags; up.flags = []
             try check()
-            let held = try cancellation.keyDown(down, release: up, generation: generation)
+            let held = try cancellation.keyDown(down, release: up, permit: permit)
             defer { cancellation.release(held) }
             Thread.sleep(forTimeInterval: 0.008)
             try check()
@@ -177,12 +175,12 @@ final class ChromeFileSelector {
                   CFEqual(currentField, field) else { throw self.unsupported() }
         }
         try verifyPathField()
-        try effect(generation, check: check) { AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, file.path as CFString) }
+        try effect(permit, check: check) { AXUIElementSetAttributeValue(field, kAXValueAttribute as CFString, file.path as CFString) }
         try verifyPathField()
-        try effect(generation, check: check) { AXUIElementSetAttributeValue(field, kAXFocusedAttribute as CFString, kCFBooleanTrue) }
+        try effect(permit, check: check) { AXUIElementSetAttributeValue(field, kAXFocusedAttribute as CFString, kCFBooleanTrue) }
         try verifyPathField()
         // AppKit 的远程面板只设置字段 AXFocused 不足以路由回车，应用的 focused element 也要同步。
-        try effect(generation, check: check) { AXUIElementSetAttributeValue(app, kAXFocusedUIElementAttribute as CFString, field) }
+        try effect(permit, check: check) { AXUIElementSetAttributeValue(app, kAXFocusedUIElementAttribute as CFString, field) }
         try waitForFileDialog(check: check) { self.string(field, kAXValueAttribute) == file.path && self.bool(field, kAXFocusedAttribute) == true }
         try key(36) {
             try verifyPathField()
@@ -204,7 +202,7 @@ final class ChromeFileSelector {
               CFEqual(currentButton, openButton) else { throw unsupported() }
         // 控件查询可能耗时；提交前重新核实原 modal 的焦点，不能沿用查询前的快照。
         guard try state().goTo == nil else { throw unsupported() }
-        try effect(generation, check: check) { AXUIElementPerformAction(openButton, kAXPressAction as CFString) }
+        try effect(permit, check: check) { AXUIElementPerformAction(openButton, kAXPressAction as CFString) }
         try waitForFileDialog(check: check) {
             let current = try sheets(root())
             return !current.contains { self.desktop.identifier($0) == panelID }
@@ -213,9 +211,9 @@ final class ChromeFileSelector {
         return ["selected": true, "dialogClosed": true]
     }
 
-    private func effect(_ generation: UInt64, check: () throws -> Void, _ operation: () -> AXError) throws {
+    private func effect(_ permit: ChromeInputPermit, check: () throws -> Void, _ operation: () -> AXError) throws {
         try check()
-        guard try cancellation.effect(generation: generation, operation) == .success else {
+        guard try cancellation.inputEffect(permit: permit, operation) == .success else {
             throw HelperFailure(code: "FILE_SELECTION_FAILED", message: "系统未完成文件选择操作，请检查对话框状态后重试")
         }
     }

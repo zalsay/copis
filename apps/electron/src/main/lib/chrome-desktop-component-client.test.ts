@@ -40,7 +40,7 @@ const reply = value => console.log(JSON.stringify({protocolVersion: 1, ok: true,
  if (config.failAction === action) {
    if (config.stderr) console.error(config.stderr);
    if (config.raw !== undefined) process.stdout.write(config.raw);
-   else reply({ ...(config.response || {}), ...(config.code ? {ok: false, error: {code: config.code, message: config.stderr || 'native error'}} : {}) });
+   else reply({ ...(config.response || {}), ...(config.code ? {ok: false, error: {code: config.code, ...(config.reason ? {reason: config.reason} : {}), message: config.stderr || 'native error'}} : {}) });
    process.exitCode = config.exitCode || 0; return;
  }
  const win = ${JSON.stringify(windowInfo)};
@@ -376,6 +376,49 @@ describeUnixIntegration('Chrome 组件：连接、原生帧和取消 BDD', () =>
     await f.client.connectWindow(42, 123)
     await f.configure({ selectFileResponse: { connectionId: 'native-connection', selected: true, dialogClosed: false } })
     await expect(f.client.selectFile('/tmp/a.pdf')).rejects.toThrow('CHROME_HELPER_FAILED')
+  })
+
+  test('Given public FOCUS_LOST且reason为USER_PAUSED When CLI返回 Then 精确识别用户暂停且保留连接', async () => {
+    const f = await fixture()
+    await f.client.connectWindow(42, 123)
+    const runtimeBefore = (await f.events()).find(event => event.action === 'connect')!.runtime
+    await f.configure({ failAction: 'press', code: 'FOCUS_LOST', reason: 'USER_PAUSED', exitCode: 1, stderr: '/private/path secret-token' })
+    await rejectsCode(f.client.input('native-frame', { action: 'press', key: 'Enter' }), 'CHROME_USER_PAUSED')
+    await f.configure({})
+    expect((await f.client.observe()).frameId).toBe('native-frame')
+    await f.client.input('native-frame', { action: 'press', key: 'Enter' })
+    const events = await f.events()
+    expect(events.filter(event => event.action === 'connect')).toHaveLength(1)
+    expect(events.filter(event => event.action === 'press')).toHaveLength(2)
+    expect(events.filter(event => event.action === 'observe')).toHaveLength(1)
+    expect(events.find(event => event.action === 'observe')!.runtime).toBe(runtimeBefore)
+  })
+
+  test('Given FOCUS_LOST带未知reason或其他code带USER_PAUSED reason When CLI返回 Then 不得升级分类为用户暂停', async () => {
+    const f = await fixture()
+    await f.client.connectWindow(42, 123)
+    for (const [code, reason, expected] of [
+      ['FOCUS_LOST', 'PAUSED_SPOOF', 'CHROME_FOCUS_LOST'],
+      ['WINDOW_UNAVAILABLE', 'USER_PAUSED', 'CHROME_WINDOW_UNAVAILABLE'],
+    ] as const) {
+      await f.configure({ failAction: 'press', code, reason, exitCode: 1 })
+      await rejectsCode(f.client.input('native-frame', { action: 'press', key: 'Enter' }), expected)
+    }
+    expect((await f.events()).filter(event => event.action === 'connect')).toHaveLength(1)
+  })
+
+  test('Given native USER_PAUSED When input返回 Then 映射固定可诊断错误且不泄露stderr', async () => {
+    const f = await fixture()
+    await f.client.connectWindow(42, 123)
+    await f.configure({ failAction: 'press', code: 'USER_PAUSED', exitCode: 1, stderr: '/private/path secret-token' })
+    let message = ''
+    try { await f.client.input('native-frame', { action: 'press', key: 'Enter' }) }
+    catch (error) { message = (error as Error).message }
+    expect(message).toContain('CHROME_USER_PAUSED:')
+    expect(message).toContain('用户已接管鼠标或点击暂停，请在屏幕上方控制条点击执行后再继续；不要自动重试输入')
+    expect(message).not.toContain('/private/path')
+    expect(message).not.toContain('secret-token')
+    expect((await f.events()).filter(e => e.action === 'press')).toHaveLength(1)
   })
 
   for (const [native, code] of Object.entries({ CONNECTION_BUSY: 'CHROME_BUSY', BUSY: 'CHROME_BUSY', FRAME_UNKNOWN: 'CHROME_FRAME_STALE', FRAME_GEOMETRY_CHANGED: 'CHROME_GEOMETRY_CHANGED', WINDOW_UNAVAILABLE: 'CHROME_WINDOW_UNAVAILABLE', FOCUS_LOST: 'CHROME_FOCUS_LOST', FOCUS_UNVERIFIED: 'CHROME_FOCUS_LOST', SCREEN_PERMISSION_REQUIRED: 'CHROME_SCREEN_PERMISSION_REQUIRED', ACCESSIBILITY_PERMISSION_REQUIRED: 'CHROME_INPUT_PERMISSION_REQUIRED', HELPER_TIMEOUT: 'CHROME_ACTION_UNCERTAIN', HELPER_EOF: 'CHROME_ACTION_UNCERTAIN', CAPTURE_TIMEOUT: 'CHROME_ACTION_UNCERTAIN', CAPTURE_FAILED: 'CHROME_CAPTURE_FAILED', IMAGE_TOO_LARGE: 'CHROME_CAPTURE_FAILED' })) {

@@ -37,3 +37,36 @@ require(narrowFrame == CGRect(x: 16, y: 599, width: 288, height: 52), "窄屏 to
 require(chromeToastFrame(window: WindowBounds(x: 0, y: 0, width: 800, height: 600), screens: []) == nil, "无屏幕时应跳过 toast")
 require(chromeToastFrame(window: WindowBounds(x: 5000, y: 0, width: 800, height: 600), screens: [primary]) == nil, "离屏目标不应在其他屏幕弹 toast")
 print("PASS: 7 项 toast 布局 BDD 回归；未创建窗口或发送输入")
+
+// Given 鼠标事件来源，Then 只忽略本 helper 和控制条区域，缺少 CG 读数时保守暂停。
+require(!shouldPauseChromeForPointer(sourcePID: 42, helperPID: 42, insideControls: false), "本 helper 事件不应暂停")
+require(shouldPauseChromeForPointer(sourcePID: 99, helperPID: 42, insideControls: false), "外部事件必须暂停")
+require(shouldPauseChromeForPointer(sourcePID: nil, helperPID: 42, insideControls: false), "无 CG 读数应保守暂停")
+require(shouldPauseChromeForPointer(sourcePID: 0, helperPID: 42, insideControls: false), "系统事件也应暂停")
+for source: Int64? in [42, 99, nil] {
+    require(!shouldPauseChromeForPointer(sourcePID: source, helperPID: 42, insideControls: true), "HUD 区域不应暂停")
+}
+
+// Given AI 目标落在顶部 HUD 内，Then 移到同屏底部，不改变尺寸也不隐藏。
+let topHUD = CGRect(x: 540, y: 799, width: 360, height: 52)
+let bottomHUD = chromeToastFrameAvoidingPointer(frame: topHUD, screenPoint: CGPoint(x: 600, y: 75), screens: [primary])
+require(bottomHUD == CGRect(x: 540, y: 24, width: 360, height: 52), "覆盖目标时未移到同屏底部")
+require(chromeToastFrameAvoidingPointer(frame: bottomHUD, screenPoint: CGPoint(x: 600, y: 850), screens: [primary]) == topHUD,
+        "底部 HUD 覆盖目标时未移回顶部")
+require(chromeToastFrameAvoidingPointer(frame: topHUD, screenPoint: CGPoint(x: 10, y: 10), screens: [primary]) == topHUD,
+        "不覆盖目标时不应移动 HUD")
+let upperHUD = CGRect(x: 540, y: 1699, width: 360, height: 52)
+require(chromeToastFrameAvoidingPointer(frame: upperHUD, screenPoint: CGPoint(x: 600, y: -825), screens: [primary, above]) ==
+        CGRect(x: 540, y: 924, width: 360, height: 52), "上方副屏避让错误或移动到了主屏")
+let leftHUD = CGRect(x: -820, y: 699, width: 360, height: 52)
+require(chromeToastFrameAvoidingPointer(frame: leftHUD, screenPoint: CGPoint(x: -700, y: 175), screens: [primary, left]) ==
+        CGRect(x: -820, y: 24, width: 360, height: 52), "负坐标副屏避让错误")
+require(chromeToastFrameAvoidingPointer(frame: topHUD, screenPoint: CGPoint(x: 600, y: 75), screens: []) == topHUD,
+        "未知屏幕时应保留 HUD，由完整指针 guard 拒绝被遮挡的输入")
+// 两个垂直边缘仍覆盖目标时保持位置，不能挪到另一个仍会点击控制按钮的位置。
+let shortScreen = ChromeToastScreen(frame: CGRect(x: 0, y: 0, width: 320, height: 120),
+                                   visibleFrame: CGRect(x: 0, y: 0, width: 320, height: 120))
+let overlappingHUD = CGRect(x: 16, y: 44, width: 288, height: 52)
+require(chromeToastFrameAvoidingPointer(frame: overlappingHUD, screenPoint: CGPoint(x: 160, y: 60), screens: [shortScreen]) == overlappingHUD,
+        "没有安全位置时应保留 HUD，让完整指针 guard 拒绝输入")
+print("PASS: 鼠标来源分类与同屏双向避让 BDD；未创建窗口或发送输入")

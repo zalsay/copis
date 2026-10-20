@@ -1,5 +1,7 @@
 use crate::native::{Canceller, Helper};
-use crate::protocol::{read_message, response, Error, Result, PROTOCOL_VERSION};
+use crate::protocol::{
+    read_message, response, Error, Result, PROTOCOL_VERSION, USER_PAUSED_PUBLIC_MESSAGE,
+};
 use crate::runtime::{helper_path, Runtime};
 use crate::service::Service;
 use serde::Deserialize;
@@ -45,8 +47,7 @@ pub fn call(runtime: &Runtime, request: Value) -> Result<Value> {
         ));
     }
     if value["ok"] == false {
-        return Err(serde_json::from_value(value["error"].clone())
-            .map_err(|_| Error::new("PROTOCOL_ERROR", "后台进程错误格式无效"))?);
+        return Err(relayed_error(&value["error"])?);
     }
     let mut object = value
         .as_object()
@@ -56,6 +57,14 @@ pub fn call(runtime: &Runtime, request: Value) -> Result<Value> {
     object.remove("protocolVersion");
     Ok(Value::Object(object))
 }
+fn relayed_error(value: &Value) -> Result<Error> {
+    if value["code"] == "FOCUS_LOST" && value["reason"] == "USER_PAUSED" {
+        return Ok(Error::new("USER_PAUSED", USER_PAUSED_PUBLIC_MESSAGE));
+    }
+    serde_json::from_value(value.clone())
+        .map_err(|_| Error::new("PROTOCOL_ERROR", "后台进程错误格式无效"))
+}
+
 fn available(runtime: &Runtime) -> Result<bool> {
     if !runtime.root.exists() {
         return Ok(false);
@@ -271,4 +280,44 @@ fn write_response(stream: &mut UnixStream, result: Result<Value>) -> Result<()> 
     stream
         .write_all(&bytes)
         .map_err(|e| Error::io("无法写入本地响应", e))
+}
+
+#[cfg(test)]
+mod relayed_error_tests {
+    use super::*;
+
+    #[test]
+    fn given_focus_lost_with_user_paused_reason_when_decoding_then_restore_internal_code_safely() {
+        let error = relayed_error(&json!({
+            "code":"FOCUS_LOST",
+            "reason":"USER_PAUSED",
+            "message":"untrusted helper message"
+        }))
+        .unwrap();
+        assert_eq!(error.code, "USER_PAUSED");
+        assert_eq!(error.message, USER_PAUSED_PUBLIC_MESSAGE);
+    }
+
+    #[test]
+    fn given_focus_lost_without_reason_when_decoding_then_keep_code_even_with_paused_copy() {
+        let error = relayed_error(&json!({
+            "code":"FOCUS_LOST",
+            "message":USER_PAUSED_PUBLIC_MESSAGE
+        }))
+        .unwrap();
+        assert_eq!(error.code, "FOCUS_LOST");
+        assert_eq!(error.message, USER_PAUSED_PUBLIC_MESSAGE);
+    }
+
+    #[test]
+    fn given_other_focus_lost_reason_when_decoding_then_keep_original_error() {
+        let error = relayed_error(&json!({
+            "code":"FOCUS_LOST",
+            "reason":"OTHER",
+            "message":"焦点已变化"
+        }))
+        .unwrap();
+        assert_eq!(error.code, "FOCUS_LOST");
+        assert_eq!(error.message, "焦点已变化");
+    }
 }

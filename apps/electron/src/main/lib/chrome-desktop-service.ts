@@ -9,13 +9,16 @@ import type {
   ChromeDesktopSystemStatus, ChromeDesktopToolName, ChromeDesktopToolRequest,
   ChromeDesktopToolResponse, ChromeDesktopWindowInfo,
 } from '@copis/shared'
-import { CHROME_DESKTOP_ALLOWED_KEYS, CHROME_DESKTOP_DEFAULT_SHORTCUT, isRecoverableChromeDesktopPauseReason } from '@copis/shared'
+import { CHROME_DESKTOP_ALLOWED_KEYS, CHROME_DESKTOP_DEFAULT_SHORTCUT, isRecoverableChromeDesktopPauseReason, retainsChromeDesktopAuthorization } from '@copis/shared'
 import { ChromeDesktopComponentClient, type ChromeDesktopBackend, type ChromeDesktopComponentAction } from './chrome-desktop-component-client'
 import { isValidChromeDesktopFilePath } from './chrome-desktop-file-path'
 
 export const MAX_ACTION_HISTORY_SIZE = 50
 export const ACTION_HISTORY_TTL_MS = 5 * 60 * 1000
 const MAX_CONTROL_FRAMES = 32
+const USER_PAUSED_TERMINAL_ERRORS = new Set<ChromeDesktopErrorCode>([
+  'CHROME_WINDOW_UNAVAILABLE', 'CHROME_HELPER_FAILED', 'CHROME_ACTION_UNCERTAIN', 'CHROME_CANCELLED',
+])
 
 export interface ChromeDesktopServiceDependencies {
   componentClient?: ChromeDesktopBackend
@@ -174,13 +177,12 @@ export class ChromeDesktopService {
     }
 
     record.inFlightAction = true
-    // 与普通输入一致，仅释放Observe重试缓存；已授权帧仍可按既有策略复用。
+    // 与普通输入一致，仅释放Observe重试缓存；用户暂停拒绝时会恢复该缓存。
+    const previousObservedFrame = record.latestObservedFrame
     record.latestObservedFrame = undefined
     try {
       await this.backend.selectFile(path)
-      this.assertCurrentRecord(record)
-      record.mode = 'control'
-      this.broadcastState()
+      this.completeInputAction(record)
       const response: ChromeDesktopToolResponse = {
         kind: 'json',
         value: {
@@ -195,9 +197,10 @@ export class ChromeDesktopService {
       this.cache(record, request, response)
       return response
     } catch (error) {
-      if (this.activeControl === record && record.state === 'active') {
-        const code = errorCode(error, 'CHROME_FILE_SELECTION_FAILED')
-        if (code !== 'CHROME_BUSY') this.transitionToPaused(record, code, errorMessage(error))
+      const code = errorCode(error, 'CHROME_FILE_SELECTION_FAILED')
+      if (code === 'CHROME_USER_PAUSED') record.latestObservedFrame = previousObservedFrame
+      if (this.shouldPauseAfterOperationFailure(record, code, ['CHROME_BUSY'])) {
+        this.transitionToPaused(record, code, errorMessage(error))
       }
       throw error
     } finally { record.inFlightAction = false }
@@ -212,7 +215,8 @@ export class ChromeDesktopService {
     }
     const current = this.activeControl
     if (current) {
-      const holdsControl = ['awaiting_user', 'starting', 'active'].includes(current.state) || isRecoverableChromeDesktopPauseReason(current.pauseReason)
+      const holdsControl = ['awaiting_user', 'starting', 'active'].includes(current.state)
+        || retainsChromeDesktopAuthorization(current.pauseReason)
       if (current.sessionId !== request.sessionId && holdsControl) return { kind: 'json', value: { error: 'CHROME_BUSY', message: '已有其他会话持有 Chrome 控制或授权' } }
       if (current.sessionId === request.sessionId) {
         if (current.capabilityToken !== request.capabilityToken) return { kind: 'json', value: { error: 'CHROME_CAPABILITY_STALE', message: '调用凭据与当前授权不匹配' } }
@@ -287,10 +291,11 @@ export class ChromeDesktopService {
   private async handleObserve(record: ActiveControlRecord, request: ChromeDesktopToolRequest): Promise<ChromeDesktopToolResponse> {
     if (record.inFlightAction) throw new Error('CHROME_BUSY: 已有动作正在执行')
     record.inFlightAction = true
+    const previousObservedFrame = record.latestObservedFrame
     record.latestObservedFrame = undefined
     try {
       const captured = await this.backend.observe()
-      this.assertCurrentRecord(record)
+      this.assertCurrentControlRecord(record)
       if (!captured.frameId || !Number.isInteger(captured.width) || !Number.isInteger(captured.height) || captured.width <= 0 || captured.height <= 0 || Math.max(captured.width, captured.height) > 1600 || !captured.data || captured.data.length > 1_398_104 || !Number.isFinite(captured.capturedAt) || captured.capturedAt < 0) throw new Error('CHROME_CAPTURE_FAILED: 组件截图元数据不合法')
       if (!record.targetWindow || !sameBounds(record.targetWindow.bounds, captured.bounds)) record.geometryVersion++
       record.targetWindow!.bounds = captured.bounds
@@ -304,9 +309,10 @@ export class ChromeDesktopService {
       this.cache(record, request, response)
       return response
     } catch (error) {
-      if (this.activeControl === record && record.state === 'active') {
-        const code = errorCode(error, 'CHROME_CAPTURE_FAILED')
-        if (code !== 'CHROME_BUSY') this.transitionToPaused(record, code, errorMessage(error))
+      if (this.isUserPaused(record)) record.latestObservedFrame = previousObservedFrame
+      const code = errorCode(error, 'CHROME_CAPTURE_FAILED')
+      if (this.shouldPauseAfterOperationFailure(record, code, ['CHROME_BUSY'])) {
+        this.transitionToPaused(record, code, errorMessage(error))
       }
       throw error
     } finally { record.inFlightAction = false }
@@ -345,19 +351,19 @@ export class ChromeDesktopService {
     if (!frame) throw new Error('CHROME_FRAME_STALE: 该帧不属于当前控制或已超出最近 32 帧')
     const action = this.actionFor(request, frame)
     record.inFlightAction = true
+    const previousObservedFrame = record.latestObservedFrame
     record.latestObservedFrame = undefined
     try {
       await this.backend.input(frame.frameId, action)
-      this.assertCurrentRecord(record)
-      record.mode = 'control'
-      this.broadcastState()
+      this.completeInputAction(record)
       const response: ChromeDesktopToolResponse = { kind: 'json', value: { ok: true, action: action.action, targetWindowId: record.targetWindow!.windowId, ...(action.action === 'click' ? { clickCount: action.clickCount } : {}) } }
       this.cache(record, request, response)
       return response
     } catch (error) {
-      if (this.activeControl === record && record.state === 'active') {
-        const code = errorCode(error, 'CHROME_HELPER_FAILED')
-        if (code !== 'CHROME_BUSY' && code !== 'CHROME_FRAME_STALE') this.transitionToPaused(record, code, errorMessage(error))
+      const code = errorCode(error, 'CHROME_HELPER_FAILED')
+      if (code === 'CHROME_USER_PAUSED') record.latestObservedFrame = previousObservedFrame
+      if (this.shouldPauseAfterOperationFailure(record, code, ['CHROME_BUSY', 'CHROME_FRAME_STALE'])) {
+        this.transitionToPaused(record, code, errorMessage(error))
       }
       throw error
     } finally { record.inFlightAction = false }
@@ -373,8 +379,36 @@ export class ChromeDesktopService {
     const record = this.activeControl
     if (!record || record.sessionId !== sessionId || record.controlId !== controlId || record.capabilityToken !== token) throw new Error('CHROME_CAPABILITY_STALE: 控制标识或调用凭据不匹配')
     if (isRecoverableChromeDesktopPauseReason(record.pauseReason)) this.resumeRecoverableControl(record)
-    if (record.state !== 'active') throw new Error(`CHROME_CAPABILITY_STALE: 当前控制处于 ${record.state} 状态`)
-    return record
+    if (record.state === 'active' || this.isUserPaused(record)) return record
+    throw new Error(`CHROME_CAPABILITY_STALE: 当前控制处于 ${record.state} 状态`)
+  }
+  private isUserPaused(record: ActiveControlRecord): boolean {
+    return record.state === 'paused' && record.pauseReason === 'CHROME_USER_PAUSED'
+  }
+  private shouldPauseAfterOperationFailure(
+    record: ActiveControlRecord,
+    code: ChromeDesktopErrorCode,
+    activeIgnoredCodes: ChromeDesktopErrorCode[],
+  ): boolean {
+    if (this.activeControl !== record) return false
+    if (record.state === 'active') return !activeIgnoredCodes.includes(code)
+    return this.isUserPaused(record) && USER_PAUSED_TERMINAL_ERRORS.has(code)
+  }
+  private assertCurrentControlRecord(record: ActiveControlRecord): void {
+    if (this.activeControl !== record || (record.state !== 'active' && !this.isUserPaused(record))) {
+      throw new Error('CHROME_CAPABILITY_STALE: 控制已取消或切换')
+    }
+  }
+  private completeInputAction(record: ActiveControlRecord): void {
+    this.assertCurrentControlRecord(record)
+    if (this.isUserPaused(record)) {
+      record.state = 'active'
+      record.pauseReason = undefined
+      record.errorMessage = undefined
+      this.setThrottlingFn(false)
+    }
+    record.mode = 'control'
+    this.broadcastState()
   }
   private assertCurrentRecord(record: ActiveControlRecord, state: ChromeDesktopState = 'active'): void {
     if (this.activeControl !== record || record.state !== state) throw new Error('CHROME_CAPABILITY_STALE: 控制已取消或切换')
@@ -427,13 +461,16 @@ export class ChromeDesktopService {
   private transitionToPaused(record: ActiveControlRecord, reason: ChromeDesktopErrorCode, message: string): void {
     if (this.activeControl !== record) return
     // 旧 CLI 在参数解析阶段拒绝新命令时，连接与既有授权帧仍有效。
-    if (reason !== 'CHROME_COMPONENT_VERSION_UNSUPPORTED') this.clearControlFrames(record)
+    const userPaused = reason === 'CHROME_USER_PAUSED'
+    const retainsFrames = userPaused || reason === 'CHROME_COMPONENT_VERSION_UNSUPPORTED'
+    const retainsConnection = retainsChromeDesktopAuthorization(reason)
+    if (!retainsFrames) this.clearControlFrames(record)
     record.state = 'paused'
     record.pauseReason = reason
     record.errorMessage = message
-    // 可恢复暂停只丢弃坐标参考，不能杀死已获得授权的组件连接。
-    if (!isRecoverableChromeDesktopPauseReason(reason)) this.cancelBackend()
-    this.unregisterShortcutFn(record.shortcut)
+    // 可恢复错误及用户暂停都保留授权连接；其余错误会清理组件。
+    if (!retainsConnection) this.cancelBackend()
+    if (!userPaused) this.unregisterShortcutFn(record.shortcut)
     this.setThrottlingFn(true)
     this.broadcastState()
   }

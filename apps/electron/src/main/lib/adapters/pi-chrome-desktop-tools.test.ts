@@ -31,6 +31,9 @@ describe('pi-chrome-desktop-tools', () => {
     expect(descriptions).toContain('可重复使用')
     expect(descriptions).toContain('已有控制权时直接复用')
     expect(descriptions).toContain('普通任务完成后不要自动调用')
+    const startTool = tools.find(tool => tool.name === 'ChromeDesktopStart')!
+    expect(startTool.description).toContain('CHROME_USER_PAUSED')
+    expect(startTool.description).toContain('停止自动重试输入')
     expect(descriptions).toContain('当前任务要求在已授权')
     expect(descriptions).not.toContain('仅按用户明确指定')
 
@@ -59,6 +62,22 @@ describe('pi-chrome-desktop-tools', () => {
     expect((result.content[0] as { text: string }).text).toContain('uploadConfirmed')
     expect((result.content[0] as { text: string }).text).toContain('requiresObserve')
     expect((result.content[0] as { text: string }).text).not.toContain('上传已完成')
+  })
+
+  it('reports USER_PAUSED from Start as a retained user handoff, not an authorization failure', async () => {
+    const bridge = new PiChromeDesktopToolBridge({
+      sessionId: 'sess-1',
+      capability: { endpoint: '/api/internal/agent/chrome-desktop-tool', token: 'tok-1' },
+      fetchImpl: async () => new Response(JSON.stringify({ kind: 'json', value: {
+        status: 'paused', controlId: 'control-1', error: 'CHROME_USER_PAUSED',
+        message: '用户已接管鼠标或点击暂停，请在屏幕上方控制条点击执行后再继续；不要自动重试输入',
+      } }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    })
+    const result = await bridge.execute('ChromeDesktopStart', 'start-paused', {})
+    const text = (result.content[0] as { text: string }).text
+    expect(text).toContain('CHROME_USER_PAUSED')
+    expect(text).toContain('点击执行')
+    expect(text).not.toContain('等待用户在界面授权')
   })
 
   it('transforms image response into Pi SDK content format with untrusted label', async () => {

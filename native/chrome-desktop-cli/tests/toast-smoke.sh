@@ -1,5 +1,5 @@
 #!/bin/bash
-# 显式展示短暂原生提示，仅验证 AppKit 状态，不操作 Chrome 或发送输入。
+# 显式验证常驻原生控制条的 AppKit 状态，不操作用户 Chrome 或发送系统输入。
 set -euo pipefail
 if [[ "$(uname -s)" != Darwin ]]; then exit 2; fi
 root="$(cd "$(dirname "$0")/.." && pwd)"

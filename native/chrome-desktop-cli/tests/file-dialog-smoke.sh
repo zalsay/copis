@@ -1,15 +1,15 @@
 #!/bin/bash
 # 显式桌面回归：独立 Chrome 配置、本机无上传页面和测试文件；不查看截图、不操作用户窗口。
 set -euo pipefail
-if [[ "$(uname -s)" != Darwin || $# != 1 ]]; then
-  echo '用法：bash tests/file-dialog-smoke.sh <copis-chrome绝对路径>' >&2
+if [[ "$(uname -s)" != Darwin || $# -lt 1 || $# -gt 2 || ( $# == 2 && "$2" != "--execution-control" ) ]]; then
+  echo '用法：bash tests/file-dialog-smoke.sh <copis-chrome绝对路径> [--execution-control]' >&2
   exit 2
 fi
 root="$(cd "$(dirname "$0")/.." && pwd)"
 scratch="$(mktemp -d /tmp/copis-file-dialog-smoke.XXXXXX)"
 trap 'rm -rf "$scratch"' EXIT
 swiftc -O -warnings-as-errors "$root/tests/file-dialog-fixture/main.swift" -o "$scratch/fixture-ax"
-/usr/bin/python3 - "$1" "$scratch" <<'PY'
+/usr/bin/python3 - "$1" "$scratch" "${2:-file-dialog}" <<'PY'
 import http.server
 import json
 import os
@@ -21,6 +21,7 @@ import time
 
 cli = str(Path(sys.argv[1]).resolve(strict=True))
 scratch = Path(sys.argv[2])
+execution_mode = sys.argv[3] == '--execution-control'
 chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 if not Path(chrome).is_file():
     raise SystemExit('找不到 Chrome 正式版')
@@ -56,12 +57,20 @@ def call(*args, error=None, runtime_env=None):
 previous_pid = subprocess.check_output([str(scratch / 'fixture-ax'), '--front-pid'], text=True).strip()
 assert int(previous_pid) > 0
 owned = None
+owned_daemon = None
+window = None
 cold_env = dict(env, COPIS_CHROME_RUNTIME_DIR=str(scratch / 'cold-runtime'))
 try:
     owned = subprocess.Popen([chrome, '--user-data-dir=' + str(scratch / 'profile'),
         '--no-first-run', '--no-default-browser-check', '--disable-sync', '--disable-background-networking',
         '--force-renderer-accessibility', '--window-size=1000,800', f'http://127.0.0.1:{server.server_port}/'],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if execution_mode:
+        owned_daemon = subprocess.Popen([cli, 'daemon', 'run'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ready = time.monotonic() + 5
+        while not (scratch / 'runtime' / 'daemon.sock').exists():
+            assert owned_daemon.poll() is None and time.monotonic() < ready, '隔离 daemon 未启动'
+            time.sleep(0.02)
     deadline = time.monotonic() + 12
     window = None
     while time.monotonic() < deadline:
@@ -71,28 +80,73 @@ try:
         time.sleep(0.1)
     assert window, '没有找到独立测试窗口'
     connection = call('connect', '--window', str(window['windowId']))['connectionId']
-    call('select-file', '--connection', 'wrong-connection', '--path', str(test_file), error='CONNECTION_INVALID')
-    call('select-file', '--connection', connection, '--path', str(scratch / 'missing.txt'), error='FILE_NOT_READABLE')
-    call('select-file', '--connection', connection, '--path', str(test_file), error='FILE_DIALOG_NOT_FOUND')
-    assert call('status')['connected'], '参数或对话框错误不应吊销连接'
-    subprocess.run([str(scratch / 'fixture-ax'), str(owned.pid), str(window['windowId']), 'open'], check=True, timeout=8)
-    selected = call('select-file', '--connection', connection, '--path', str(test_file))
-    assert selected['connectionId'] == connection and selected['selected'] and selected['dialogClosed'], selected
-    subprocess.run([str(scratch / 'fixture-ax'), str(owned.pid), str(window['windowId']), 'selected'], check=True, timeout=8)
-    assert call('status')['connected'], '选完文件应保留原连接'
-    call('disconnect', '--connection', connection)
-    # Given Chrome 在后台且新的 Helper 尚未查询 AX，Then 专用输入能激活原应用后精确定位面板。
-    cold_connection = call('connect', '--window', str(window['windowId']), runtime_env=cold_env)['connectionId']
-    subprocess.run([str(scratch / 'fixture-ax'), str(owned.pid), str(window['windowId']), 'open'], check=True, timeout=8)
-    background = subprocess.run([str(scratch / 'fixture-ax'), str(owned.pid), str(window['windowId']), 'background:' + previous_pid],
-        check=True, capture_output=True, text=True, timeout=5)
-    assert background.stdout.strip() == 'READY: FIXTURE_CHROME_IS_BACKGROUND'
-    cold_selected = call('select-file', '--connection', cold_connection, '--path', str(test_file), runtime_env=cold_env)
-    assert cold_selected['selected'] and cold_selected['dialogClosed']
-    subprocess.run([str(scratch / 'fixture-ax'), str(owned.pid), str(window['windowId']), 'selected'], check=True, timeout=8)
-    call('disconnect', '--connection', cold_connection, runtime_env=cold_env)
-    print('PASS: Chrome 明确在后台、独立冷 Helper 首次 AX 查询的真实文件选择回归')
-    print('PASS: CLI 真实文件选择 BDD；无 frame、中文空格路径、错误连接/文件/未打开面板拒绝且可恢复；隔离 fixture 无上传')
+    if execution_mode:
+        subprocess.run([str(scratch / 'fixture-ax'), str(owned.pid), str(window['windowId']), 'activate'], check=True, timeout=8)
+        observed = call('observe', '--connection', connection)
+        frame = observed['frameId']
+        call('press', '--connection', connection, '--frame', frame, '--key', 'Tab')
+        # 只点击自建空白测试页中心；验证 AI 自己的鼠标事件不会触发接管，不读取截图像素。
+        call('click', '--connection', connection, '--frame', frame,
+            '--x', str(observed['width'] // 2), '--y', str(observed['height'] // 2))
+        children = subprocess.check_output(['pgrep', '-P', str(owned_daemon.pid)], text=True).split()
+        helpers = [int(child) for child in children if Path(subprocess.check_output(['ps', '-p', child, '-o', 'comm='], text=True).strip()).name == 'copis-chrome-helper']
+        assert len(helpers) == 1, '不能唯一确认隔离 helper'
+        helper_pid = helpers[0]
+        def hud(action):
+            subprocess.run([str(scratch / 'fixture-ax'), str(owned.pid), str(window['windowId']), action + ':' + str(helper_pid)], check=True, timeout=8)
+        def paused_input():
+            result = call('press', '--connection', connection, '--frame', frame, '--key', 'ArrowDown', error='FOCUS_LOST')
+            assert result['error'].get('reason') == 'USER_PAUSED', result
+            assert call('status')['connected']
+        hud('pause-control')
+        paused_input()
+        call('observe', '--connection', connection)
+        background = subprocess.run([str(scratch / 'fixture-ax'), str(owned.pid), str(window['windowId']), 'background:' + previous_pid], check=True, capture_output=True, text=True, timeout=5)
+        paused_input()
+        assert subprocess.check_output([str(scratch / 'fixture-ax'), '--front-pid'], text=True).strip() == previous_pid, '暂停输入抢回了前台'
+        hud('execute-control')
+        call('press', '--connection', connection, '--frame', frame, '--key', 'Tab')
+        hud('foreign-pointer')
+        time.sleep(0.15)
+        hud('control-paused')
+        paused_input()
+        call('observe', '--connection', connection)
+        hud('execute-control')
+        call('press', '--connection', connection, '--frame', frame, '--key', 'Tab')
+        # 运行状态下真实切回原应用，也应自动暂停，且新输入不能抢回 Chrome。
+        subprocess.run([str(scratch / 'fixture-ax'), str(owned.pid), str(window['windowId']), 'background:' + previous_pid],
+            check=True, capture_output=True, text=True, timeout=5)
+        hud('control-paused')
+        paused_input()
+        hud('execute-control')
+        call('press', '--connection', connection, '--frame', frame, '--key', 'Tab')
+        call('disconnect', '--connection', connection)
+        time.sleep(0.1)
+        hud('control-closed')
+        print('PASS: 真实 CLI/原生按钮暂停与执行、外部鼠标自动接管、暂停不抢前台、Observe继续、连接/帧复用、断开清理；无截图分析')
+    else:
+        call('select-file', '--connection', 'wrong-connection', '--path', str(test_file), error='CONNECTION_INVALID')
+        call('select-file', '--connection', connection, '--path', str(scratch / 'missing.txt'), error='FILE_NOT_READABLE')
+        call('select-file', '--connection', connection, '--path', str(test_file), error='FILE_DIALOG_NOT_FOUND')
+        assert call('status')['connected'], '参数或对话框错误不应吊销连接'
+        subprocess.run([str(scratch / 'fixture-ax'), str(owned.pid), str(window['windowId']), 'open'], check=True, timeout=8)
+        selected = call('select-file', '--connection', connection, '--path', str(test_file))
+        assert selected['connectionId'] == connection and selected['selected'] and selected['dialogClosed'], selected
+        subprocess.run([str(scratch / 'fixture-ax'), str(owned.pid), str(window['windowId']), 'selected'], check=True, timeout=8)
+        assert call('status')['connected'], '选完文件应保留原连接'
+        call('disconnect', '--connection', connection)
+        # Given Chrome 在后台且新的 Helper 尚未查询 AX，Then 专用输入能激活原应用后精确定位面板。
+        cold_connection = call('connect', '--window', str(window['windowId']), runtime_env=cold_env)['connectionId']
+        subprocess.run([str(scratch / 'fixture-ax'), str(owned.pid), str(window['windowId']), 'open'], check=True, timeout=8)
+        background = subprocess.run([str(scratch / 'fixture-ax'), str(owned.pid), str(window['windowId']), 'background:' + previous_pid],
+            check=True, capture_output=True, text=True, timeout=5)
+        assert background.stdout.strip() == 'READY: FIXTURE_CHROME_IS_BACKGROUND'
+        cold_selected = call('select-file', '--connection', cold_connection, '--path', str(test_file), runtime_env=cold_env)
+        assert cold_selected['selected'] and cold_selected['dialogClosed']
+        subprocess.run([str(scratch / 'fixture-ax'), str(owned.pid), str(window['windowId']), 'selected'], check=True, timeout=8)
+        call('disconnect', '--connection', cold_connection, runtime_env=cold_env)
+        print('PASS: Chrome 明确在后台、独立冷 Helper 首次 AX 查询的真实文件选择回归')
+        print('PASS: CLI 真实文件选择 BDD；无 frame、中文空格路径、错误连接/文件/未打开面板拒绝且可恢复；隔离 fixture 无上传')
 finally:
     stop_failed = False
     try:
@@ -102,6 +156,12 @@ finally:
             except (AssertionError, OSError, subprocess.TimeoutExpired, ValueError):
                 stop_failed = True
     finally:
+        if owned_daemon:
+            try:
+                owned_daemon.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                owned_daemon.terminate()
+                owned_daemon.wait(timeout=3)
         if owned:
             if owned.poll() is None and window:
                 try:

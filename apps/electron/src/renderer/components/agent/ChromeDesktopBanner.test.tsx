@@ -176,6 +176,24 @@ describe('Chrome 原生连接与尽力预览', () => {
     expect(api.stopControl.mock.calls.some(([input]) => (input as typeof control).controlId === 'ctrl-2')).toBe(false)
   })
 
+  test('Given Chrome预览仍pending When 用户暂停后预览返回 Then 保留并发布预览且提示等待原生控制条执行', async () => {
+    let resolvePreview!: (stream: MediaStream) => void
+    getDisplayMedia.mockImplementation(() => new Promise<MediaStream>(resolve => { resolvePreview = resolve }))
+    await renderBanner()
+    await clickButton('开始观察')
+    await act(async () => {
+      store.set(chromeDesktopSessionStateAtom, { ...initialState, state: 'paused', pauseReason: 'CHROME_USER_PAUSED' })
+    })
+    expect(document.body.textContent).toContain('授权和预览仍保留，请在屏幕控制条点击执行后继续')
+    expect(document.body.textContent).not.toContain('结束控制”后重新授权启动')
+    expect(document.body.textContent).not.toContain('下一次观察或输入会自动恢复')
+
+    const { stream, stop } = previewStream()
+    await act(async () => { resolvePreview(stream) })
+    expect(store.get(chromeDesktopMediaStreamAtom)).toBe(stream)
+    expect(stop).not.toHaveBeenCalled()
+  })
+
   test('Given 原生连接已建立 When pending 的预览稍后被拒绝 Then 保持连接并可重试预览', async () => {
     let rejectPreview!: (error: Error) => void
     getDisplayMedia.mockImplementation(() => new Promise<MediaStream>((_resolve, reject) => { rejectPreview = reject }))

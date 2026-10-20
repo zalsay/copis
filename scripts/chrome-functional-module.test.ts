@@ -10,7 +10,7 @@ describe('Chrome 独立模块发布入口', () => {
   test('Given Chrome-only When 生成输入 Then 仅产生独立 macOS 可选归档并保留顶层入口', () => {
     const modules = buildFunctionalModuleBinaryInputs({ ...base, chromeDesktopCliOnly: true })
     expect(modules).toEqual([{ module: 'chrome-desktop-cli', version: '0.1.0', platform: 'darwin', arch: 'arm64', binaryPath: '/chrome.tar.gz', format: 'tar.gz', entrypoint: 'copis-chrome-0.1.0-darwin-arm64/copis-chrome', required: false }])
-    expect(applyFunctionalModuleVersionLocks(modules, loadFunctionalModuleVersionLocks())[0]?.entrypoint).toBe('copis-chrome-0.1.5-darwin-arm64/copis-chrome')
+    expect(applyFunctionalModuleVersionLocks(modules, loadFunctionalModuleVersionLocks())[0]?.entrypoint).toBe('copis-chrome-0.1.6-darwin-arm64/copis-chrome')
   })
   test('Given 全量发布 When darwin Then 包含 Chrome When win/linux Then 跳过', () => {
     expect(buildFunctionalModuleBinaryInputs(base).some(m => m.module === 'chrome-desktop-cli')).toBe(true)
