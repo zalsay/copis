@@ -272,3 +272,42 @@ fn given_finite_but_overflowing_bounds_when_connecting_then_invalid_coordinate_m
     drop(service);
     std::fs::remove_dir_all(path).unwrap();
 }
+
+#[test]
+fn given_native_capture_backend_when_observing_then_only_known_backend_labels_are_exposed() {
+    struct BackendInfo(Desktop, Value);
+    impl Native for BackendInfo {
+        fn request(&mut self, request: Value) -> Result<Value> {
+            let mut result = self.0.request(request.clone())?;
+            if request["action"] == "observe" {
+                result["captureBackend"] = self.1.clone();
+            }
+            Ok(result)
+        }
+    }
+    for backend in [
+        json!("screencapture"),
+        json!("screen-capture-kit"),
+        json!("private-token arbitrary backend text"),
+        json!({"secret": "private-token"}),
+    ] {
+        let (original, desktop, path) = setup();
+        drop(original);
+        let mut service = Service::new(BackendInfo(desktop, backend.clone()), path.clone());
+        let connection = service
+            .execute(json!({"action":"connect","windowId":42}))
+            .unwrap()["connectionId"]
+            .clone();
+        let frame = service
+            .execute(json!({"action":"observe","connectionId":connection}))
+            .unwrap();
+        if backend == "screencapture" || backend == "screen-capture-kit" {
+            assert_eq!(frame["captureBackend"], backend);
+        } else {
+            assert!(frame.get("captureBackend").is_none());
+            assert!(!frame.to_string().contains("private-token"));
+        }
+        drop(service);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}

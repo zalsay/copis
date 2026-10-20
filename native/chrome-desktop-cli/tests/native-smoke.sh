@@ -41,6 +41,9 @@ swiftc -O -target "${arch}-apple-macosx14.0" "${library_sources[@]}" \
 swiftc -O -target "${arch}-apple-macosx14.0" "${library_sources[@]}" \
   "$root/tests/toast-layout/main.swift" -o "$scratch/toast-layout-tests"
 "$scratch/toast-layout-tests"
+swiftc -O -target "${arch}-apple-macosx14.0" "${library_sources[@]}" \
+  "$root/tests/capture-fallback/main.swift" -o "$scratch/capture-fallback-tests"
+"$scratch/capture-fallback-tests"
 /usr/bin/python3 - "$helper" "$scratch/cancellation-tests" <<'PY'
 import json
 import os

@@ -15,6 +15,7 @@ final class InputCancellation {
     private let lock = NSLock()
     private var generation: UInt64 = 0
     private var held: (id: UUID, release: CGEvent)?
+    private var captureCleanup: (id: UUID, operation: () -> Void)?
 
     func snapshot() -> UInt64 {
         lock.lock(); defer { lock.unlock() }
@@ -34,12 +35,31 @@ final class InputCancellation {
         return try operation()
     }
 
+    // 回退采集的子进程和私有文件一起注册；取消 ACK 必须发生在清理完成之后。
+    func protectCapture(generation expected: UInt64, cleanup: @escaping () -> Void) throws -> UUID {
+        try effect(generation: expected) {
+            guard captureCleanup == nil else { throw HelperFailure(code: "BUSY", message: "已有窗口采集正在执行") }
+            let id = UUID()
+            captureCleanup = (id, cleanup)
+            return id
+        }
+    }
+
+    func finishCapture(_ id: UUID) {
+        lock.lock(); defer { lock.unlock() }
+        guard captureCleanup?.id == id else { return }
+        captureCleanup?.operation()
+        captureCleanup = nil
+    }
+
     func cancel() {
         lock.lock(); defer { lock.unlock() }
         generation &+= 1
         // 不发虚拟 modifier reset 或无主 mouse-up，绝不释放用户自己按住的键/鼠标。
         held?.release.post(tap: .cghidEventTap)
         held = nil
+        captureCleanup?.operation()
+        captureCleanup = nil
     }
 
     func post(_ event: CGEvent, generation expected: UInt64) throws {

@@ -1,6 +1,6 @@
 # 其他 Agent 接入 Copis Chrome CLI
 
-本文面向能够执行本机命令的 Agent，以及为 Agent 编写工具适配器的开发者。命令与响应按 `copis-chrome v0.1.2`、JSON 协议 `1` 核对。快速交给 Agent 使用时，提供 CLI 绝对路径并复制第 9 节的调用约定；程序化集成可参考第 7 节。
+本文面向能够执行本机命令的 Agent，以及为 Agent 编写工具适配器的开发者。命令与响应按 `copis-chrome v0.1.3`、JSON 协议 `1` 核对。快速交给 Agent 使用时，提供 CLI 绝对路径并复制第 9 节的调用约定；程序化集成可参考第 7 节。
 
 接入方式是 **执行 CLI → 解析 JSON → 读取本地截图 → 决策 → 执行动作 → 观察确认**。CLI 提供原生窗口截图、鼠标和键盘输入；页面理解、操作决策和任务结果判断由调用方完成。它没有 DOM、CSS selector、按网页文字定位按钮或执行页面 JavaScript 的接口。
 
@@ -16,7 +16,7 @@
 将对应架构的归档解压到稳定位置。ARM Mac 使用 `darwin-arm64`，Intel Mac 使用 `darwin-x64`。保持这三个文件相邻：
 
 ```text
-copis-chrome-0.1.2-darwin-arm64/
+copis-chrome-0.1.3-darwin-arm64/
 ├── copis-chrome
 ├── copis-chrome-helper
 └── module.json
@@ -25,7 +25,7 @@ copis-chrome-0.1.2-darwin-arm64/
 配置调用方使用的绝对路径，然后检查版本：
 
 ```bash
-export COPIS_CHROME_CLI='/绝对路径/copis-chrome-0.1.2-darwin-arm64/copis-chrome'
+export COPIS_CHROME_CLI='/绝对路径/copis-chrome-0.1.3-darwin-arm64/copis-chrome'
 "$COPIS_CHROME_CLI" --version
 "$COPIS_CHROME_CLI" --help
 ```
@@ -149,6 +149,7 @@ FRAME_ID='替换为本次返回的frameId'
 }
 ```
 
+- 可选 `captureBackend` 标记系统截图后端：`screen-capture-kit` 或 `screencapture`。截图服务故障时会限时回退到系统单窗口截图；回退不需要前台焦点，也不绕过权限、窗口身份或几何校验。
 - `imagePath` 是 JPEG 的本机绝对路径；最长边不超过 1600 像素，文件小于 1 MiB，stdout 不输出 base64。
 - 点击和滚动的 `x/y` 是这张图片上的整数像素坐标，左上角为 `(0,0)`。不能使用整屏坐标或自己再乘 Retina 倍率；CLI 会映射到实际屏幕位置。
 - 同一个 `frameId` 可以多次使用，没有 30 秒硬过期，也没有“一帧一动”限制；不要求只用最新帧。
@@ -198,6 +199,7 @@ Alt+ArrowLeft  Alt+ArrowRight
 | `CONNECTION_INVALID` | 旧连接已失效或凭据不符；确认任务归属后重新列窗、连接和观察 |
 | `FRAME_UNKNOWN` | 帧不属于当前连接或已被最近 32 帧策略移除；重新观察 |
 | `FRAME_GEOMETRY_CHANGED` | 窗口位置/尺寸变化；重新观察并重新确定位置 |
+| `CAPTURE_WINDOW_LIST_TIMEOUT` / `CAPTURE_IMAGE_TIMEOUT` / `CAPTURE_FALLBACK_TIMEOUT` / `CAPTURE_FALLBACK_FAILED` | 只读截图后端异常；本次观察没有投递输入，检查系统截图服务并在确认窗口后恢复观察 |
 | `FOCUS_LOST` / `FOCUS_UNVERIFIED` / `ACTIVATION_FAILED` | 确认目标窗口、当前桌面和权限状态；观察现场后再决定是否恢复操作 |
 | `POINTER_OBSCURED` / `POINTER_UNVERIFIED` | 目标点被覆盖或归属不明；消除遮挡并重新观察，不绕过校验 |
 | `WINDOW_UNAVAILABLE` | 重新列窗；不要猜测 ID 或自动改控另一窗口 |

@@ -42,9 +42,22 @@ const nativeErrors: Record<string, ChromeDesktopErrorCode> = {
   FOCUS_LOST: 'CHROME_FOCUS_LOST', FOCUS_UNVERIFIED: 'CHROME_FOCUS_LOST',
   SCREEN_PERMISSION_REQUIRED: 'CHROME_SCREEN_PERMISSION_REQUIRED', SCREEN_RECORDING_REQUIRED: 'CHROME_SCREEN_PERMISSION_REQUIRED',
   ACCESSIBILITY_PERMISSION_REQUIRED: 'CHROME_INPUT_PERMISSION_REQUIRED', ACCESSIBILITY_REQUIRED: 'CHROME_INPUT_PERMISSION_REQUIRED',
-  CAPTURE_FAILED: 'CHROME_CAPTURE_FAILED', IMAGE_TOO_LARGE: 'CHROME_CAPTURE_FAILED',
+  CAPTURE_FAILED: 'CHROME_CAPTURE_FAILED', CAPTURE_FALLBACK_FAILED: 'CHROME_CAPTURE_FAILED', IMAGE_TOO_LARGE: 'CHROME_CAPTURE_FAILED',
+  CAPTURE_WINDOW_LIST_TIMEOUT: 'CHROME_ACTION_UNCERTAIN', CAPTURE_IMAGE_TIMEOUT: 'CHROME_ACTION_UNCERTAIN', CAPTURE_FALLBACK_TIMEOUT: 'CHROME_ACTION_UNCERTAIN',
   CAPTURE_TIMEOUT: 'CHROME_ACTION_UNCERTAIN', HELPER_TIMEOUT: 'CHROME_ACTION_UNCERTAIN', HELPER_EOF: 'CHROME_ACTION_UNCERTAIN', DAEMON_UNAVAILABLE: 'CHROME_ACTION_UNCERTAIN',
   DAEMON_STOP_TIMEOUT: 'CHROME_ACTION_UNCERTAIN', UNSUPPORTED_PLATFORM: 'CHROME_UNSUPPORTED_CONTEXT', CANCELLED: 'CHROME_CANCELLED',
+}
+
+// 只输出固定原因和白名单错误码；不能把原生 message、argv 或 stderr 带进模型/日志。
+const nativeFailureReasons: Record<string, string> = {
+  CAPTURE_TIMEOUT: '系统窗口截图服务响应超时，本次观察没有发送输入',
+  CAPTURE_WINDOW_LIST_TIMEOUT: '系统可共享窗口枚举超时，本次观察没有发送输入',
+  CAPTURE_IMAGE_TIMEOUT: '窗口枚举成功，但系统抓图服务响应超时，本次观察没有发送输入',
+  CAPTURE_FALLBACK_TIMEOUT: '系统单窗口截图回退超时，本次观察没有发送输入',
+  CAPTURE_FALLBACK_FAILED: '系统抓图与单窗口截图回退均未成功，请检查系统截图服务',
+  HELPER_TIMEOUT: '原生 Helper 响应超时；如正在输入，结果需重新观察确认',
+  HELPER_EOF: '原生 Helper 已退出；如正在输入，结果需重新观察确认',
+  DAEMON_UNAVAILABLE: '无法连接组件后台进程，请确认原任务状态后重新连接',
 }
 
 export class ChromeDesktopComponentClient implements ChromeDesktopBackend {
@@ -220,8 +233,10 @@ export class ChromeDesktopComponentClient implements ChromeDesktopBackend {
     } catch { throw helperFailure() }
     if (result.ok === false) {
       const error = parseObject(result.error)
-      const code = typeof error.code === 'string' && Object.hasOwn(nativeErrors, error.code) ? nativeErrors[error.code] : undefined
-      throw componentError(code ?? 'CHROME_HELPER_FAILED', 'Chrome 组件无法完成操作，请按错误类型检查权限、窗口或重新观察')
+      const nativeCode = typeof error.code === 'string' && Object.hasOwn(nativeErrors, error.code) ? error.code : undefined
+      if (!nativeCode) throw helperFailure()
+      const reason = nativeFailureReasons[nativeCode] ?? '请按错误类型检查权限、窗口或重新观察'
+      throw componentError(nativeErrors[nativeCode]!, `Chrome ${args[0]} 失败（${nativeCode}）：${reason}`)
     }
     if (output.exitCode !== 0) throw helperFailure()
     return result

@@ -18,12 +18,12 @@ private final class CaptureResult<Value> {
         ready.signal()
     }
 
-    func wait(cancellation: InputCancellation, generation: UInt64) throws -> Value {
+    func wait(cancellation: InputCancellation, generation: UInt64, stage: String) throws -> Value {
         let deadline = ProcessInfo.processInfo.systemUptime + 6
         while ready.wait(timeout: .now() + 0.025) == .timedOut {
             try cancellation.check(generation)
             guard ProcessInfo.processInfo.systemUptime < deadline else {
-                throw HelperFailure(code: "CAPTURE_TIMEOUT", message: "系统截图服务响应超时，请稍后重试")
+                throw HelperFailure(code: stage == "window-list" ? "CAPTURE_WINDOW_LIST_TIMEOUT" : "CAPTURE_IMAGE_TIMEOUT", message: "系统截图服务 \(stage) 阶段响应超时")
             }
         }
         try cancellation.check(generation)
@@ -38,6 +38,7 @@ private final class CaptureResult<Value> {
 final class ChromeCapture {
     private let desktop: ChromeDesktop
     private let cancellation: InputCancellation
+    private let captureStrategy = WindowCaptureStrategy()
 
     init(desktop: ChromeDesktop, cancellation: InputCancellation) {
         self.desktop = desktop; self.cancellation = cancellation
@@ -47,12 +48,38 @@ final class ChromeCapture {
         try cancellation.check(generation)
         try desktop.requireScreenPermission()
         let before = try desktop.window(target)
+        let image = try captureStrategy.capture(primary: {
+            try screenCaptureKitImage(target, before: before, generation: generation)
+        }, fallback: {
+            return try captureSystemWindow(target, bounds: before.bounds, desktop: desktop,
+                                           cancellation: cancellation, generation: generation)
+        })
+        let capturedAtMs = UInt64(Date().timeIntervalSince1970 * 1000)
+        try desktop.verifyGeometry(target, expected: before.bounds)
+        let jpeg = try encodeJPEG(image)
+        // 编码期间也可能有移动/缩放，落盘前再核对一次，失败不留下错误坐标的图像。
+        try cancellation.check(generation)
+        try desktop.verifyGeometry(target, expected: before.bounds)
+        try saveExclusive(jpeg, path: imagePath)
+        do {
+            try cancellation.check(generation)
+            try desktop.verifyGeometry(target, expected: before.bounds)
+        } catch {
+            // 此文件由 O_EXCL 新建，失败时只移除自己的图像。
+            _ = unlink(imagePath)
+            throw error
+        }
+        return ["imagePath": imagePath, "width": image.width, "height": image.height,
+                "bounds": before.bounds.json, "capturedAtMs": capturedAtMs, "captureBackend": captureStrategy.usesFallback ? "screencapture" : "screen-capture-kit"]
+    }
+
+    private func screenCaptureKitImage(_ target: TargetWindow, before: ChromeWindow, generation: UInt64) throws -> CGImage {
         let contentResult = CaptureResult<SCShareableContent>()
         SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: true) { content, _ in
             if let content { contentResult.finish(.success(content)) }
             else { contentResult.finish(.failure(HelperFailure(code: "CAPTURE_FAILED", message: "无法获取系统可共享窗口列表"))) }
         }
-        let content = try contentResult.wait(cancellation: cancellation, generation: generation)
+        let content = try contentResult.wait(cancellation: cancellation, generation: generation, stage: "window-list")
         guard let window = content.windows.first(where: {
             $0.windowID == target.windowId && $0.owningApplication?.processID == target.pid &&
             $0.owningApplication?.bundleIdentifier == "com.google.Chrome" && $0.windowLayer == 0 && $0.isOnScreen
@@ -88,25 +115,9 @@ final class ChromeCapture {
             if let image { imageResult.finish(.success(image)) }
             else { imageResult.finish(.failure(HelperFailure(code: "CAPTURE_FAILED", message: "系统未能捕获目标 Chrome 窗口"))) }
         }
-        let image = try imageResult.wait(cancellation: cancellation, generation: generation)
-        let capturedAtMs = UInt64(Date().timeIntervalSince1970 * 1000)
-        try desktop.verifyGeometry(target, expected: before.bounds)
+        let image = try imageResult.wait(cancellation: cancellation, generation: generation, stage: "capture-image")
         guard image.width == width, image.height == height else { throw geometryFailure() }
-        let jpeg = try encodeJPEG(image)
-        // 编码期间也可能有移动/缩放，落盘前再核对一次，失败不留下错误坐标的图像。
-        try cancellation.check(generation)
-        try desktop.verifyGeometry(target, expected: before.bounds)
-        try saveExclusive(jpeg, path: imagePath)
-        do {
-            try cancellation.check(generation)
-            try desktop.verifyGeometry(target, expected: before.bounds)
-        } catch {
-            // 此文件由 O_EXCL 新建，失败时只移除自己的图像。
-            _ = unlink(imagePath)
-            throw error
-        }
-        return ["imagePath": imagePath, "width": image.width, "height": image.height,
-                "bounds": before.bounds.json, "capturedAtMs": capturedAtMs]
+        return image
     }
 
     private func geometryFailure() -> HelperFailure {

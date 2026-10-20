@@ -17,7 +17,7 @@ describe('功能模块版本锁', () => {
       'agently-cli': '1.0.17',
       dsh: '0.1.3',
       'codex-cli': '0.154.1',
-      'chrome-desktop-cli': '0.1.2',
+      'chrome-desktop-cli': '0.1.3',
     })
   })
 

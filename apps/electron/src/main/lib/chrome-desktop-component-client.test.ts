@@ -641,3 +641,20 @@ describe('Chrome 组件：跨平台纯逻辑 BDD', () => {
     })
   }
 })
+
+describe('Chrome 组件：保留安全的底层故障定位', () => {
+  for (const native of ['CAPTURE_TIMEOUT', 'CAPTURE_IMAGE_TIMEOUT', 'CAPTURE_WINDOW_LIST_TIMEOUT', 'CAPTURE_FALLBACK_TIMEOUT', 'CAPTURE_FALLBACK_FAILED', 'HELPER_EOF']) {
+    test(`Given 底层 ${native} When Observe失败 Then 提示动作与固定原因且不泄露原文`, async () => {
+      const f = await fixture()
+      await f.client.connectWindow(42, 123)
+      await f.configure({ failAction: 'observe', code: native, exitCode: 1, stderr: 'private-connection-token 用户输入全文' })
+      let message = ''
+      try { await f.client.observe() } catch (error) { message = (error as Error).message }
+      expect(message).toContain(native)
+      expect(message).toContain('observe')
+      expect(message).not.toContain('private-connection-token')
+      expect(message).not.toContain('用户输入全文')
+      expect((await f.events()).filter(e => e.action === 'observe')).toHaveLength(1)
+    })
+  }
+})

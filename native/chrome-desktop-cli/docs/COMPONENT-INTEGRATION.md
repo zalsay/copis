@@ -29,6 +29,8 @@ Electron 主进程中的轻量 component client 将工具动作映射为 copis-c
 
 ## 验证与本机状态
 
-验证明细见 COMPONENT-VERIFICATION.md。内置工具已完整委派组件，旧 helper 与 renderer 帧 IPC 已移除。本机正式配置目录中的 chrome-desktop-cli v0.1.2 已按受管流程安装激活；权限、列窗、恢复前台与原生提示生命周期验证通过，验证后台进程已停止。焦点修复与实测见 FOCUS-VERIFICATION.md。未发布线上归档或 manifest；默认开发/应用构建不捆绑该组件。
+验证明细见 COMPONENT-VERIFICATION.md。内置工具已完整委派组件，旧 helper 与 renderer 帧 IPC 已移除。本机正式配置目录中的 chrome-desktop-cli v0.1.3 已按受管流程安装激活；权限、列窗、恢复前台与原生提示生命周期验证通过，验证后台进程已停止。焦点修复与实测见 FOCUS-VERIFICATION.md。未发布线上归档或 manifest；默认开发/应用构建不捆绑该组件。
 
 v0.1.2 在原生 CLI 恢复 Chrome 前台后展示屏幕顶部操作提示，默认 3 秒；连续输入不重复弹出，读取不提示。AppKit 状态与受管 CLI 验证见 TOAST-VERIFICATION.md，视觉效果由用户在实际屏幕确认。
+
+v0.1.3 针对系统截图服务断连/超时加入受限的系统单窗口采集回退，不切换前台；错误保留白名单原生码和固定原因。排查与验证见 CAPTURE-VERIFICATION.md。既有连接需显式停止后重新开始，才使用当前 active 组件。

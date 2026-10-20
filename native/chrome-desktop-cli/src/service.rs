@@ -240,9 +240,13 @@ impl<N: Native> Service<N> {
                 let _ = std::fs::remove_file(oldest.path);
             }
         }
-        Ok(
-            json!({"connectionId":connection.id,"frameId":id,"imagePath":path,"width":width,"height":height,"bounds":bounds,"capturedAtMs":image["capturedAtMs"],"untrusted":true}),
-        )
+        let mut result = json!({"connectionId":connection.id,"frameId":id,"imagePath":path,"width":width,"height":height,"bounds":bounds,"capturedAtMs":image["capturedAtMs"],"untrusted":true});
+        if let Some(backend @ ("screen-capture-kit" | "screencapture")) =
+            image["captureBackend"].as_str()
+        {
+            result["captureBackend"] = json!(backend);
+        }
+        Ok(result)
     }
     fn input(&mut self, request: &Value) -> Result<Value> {
         let frame_id = string(request, "frameId")?;
