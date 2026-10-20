@@ -464,6 +464,12 @@ function injectCopisThemeAccent(): void {
       display: none !important;
     }
 
+    /* 隐藏 DSH 原生侧栏中遗留的旧版静态菜单（无 data-copis-placement），只保留 copis-creation-web 插件动态挂载的导航菜单 */
+    .copis-menu-section:not([data-copis-placement="before-workspaces"]),
+    .copis-rail-menu-section:not([data-copis-placement="before-workspaces"]) {
+      display: none !important;
+    }
+
     /* 侧边栏菜单项激活态：使用 creation-ui-primary 体系 */
     .copis-menu-section button.active,
     .copis-menu-section button[data-active="true"],
@@ -850,6 +856,12 @@ async function hideDshMenuItem(menuId: string): Promise<void> {
  */
 function syncDshSidebarMenuDoms(): void {
   if (typeof document === 'undefined') return
+
+  // 清理原生侧栏中可能遗留的旧版硬编码菜单节点（无 data-copis-placement），避免与独立插件菜单重复
+  const legacySections = document.querySelectorAll(
+    '.copis-menu-section:not([data-copis-placement="before-workspaces"]), .copis-rail-menu-section:not([data-copis-placement="before-workspaces"])',
+  )
+  legacySections.forEach((el) => el.remove())
 
   // 1. 宽侧边栏菜单项 (.copis-menu-section button)
   const wideButtons = document.querySelectorAll<HTMLButtonElement>('.copis-menu-section button')

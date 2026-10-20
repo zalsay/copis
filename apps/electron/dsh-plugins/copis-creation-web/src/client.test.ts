@@ -26,6 +26,16 @@ test('Given DSH 0.1.2 与 0.1.3 侧栏 When 插件挂载 Then 菜单使用稳定
   expect(source).not.toContain("ctx.slots.inject('conversation.composer.dock'")
 })
 
+test('Given 创造模式左侧菜单栏 When 检查样式与 DOM 契约 Then 包含隐藏旧版未带 data-copis-placement 的静态菜单与自动清理旧节点逻辑避免菜单重复', () => {
+  expect(source).toContain('.copis-menu-section:not([data-copis-placement="before-workspaces"])')
+  expect(source).toContain('.copis-rail-menu-section:not([data-copis-placement="before-workspaces"])')
+  expect(source).toContain('display: none !important;')
+  expect(source).toContain('legacySections.forEach((el) => el.remove())')
+  expect(preloadSource).toContain('.copis-menu-section:not([data-copis-placement="before-workspaces"])')
+  expect(preloadSource).toContain('.copis-rail-menu-section:not([data-copis-placement="before-workspaces"])')
+  expect(preloadSource).toContain('legacySections.forEach((el) => el.remove())')
+})
+
 test('Given 用户位于创造模式 When 操作搜索和设置 Then 事件进入 Copis 桥而非 DSH 默认页面', () => {
   expect(source).toContain('window.copisBridge.openSearch()')
   expect(source).toContain("sendNavigation('settings')")

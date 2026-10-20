@@ -142,3 +142,105 @@ test('Given DSH 侧边栏源码中包含意见反馈菜单项 When 执行 patchD
   expect(patchDshSidebarSource(patched)).toBe(patched)
 })
 
+test('Given DSH 侧边栏源码中包含旧版硬编码菜单栏 When 执行 patchDshSidebarSource Then 自动移除旧版写死的 copis-menu-section 与 copis-rail-menu-section 并保留新建会话与工作区容器', () => {
+  const sourceWithStaticMenus = `
+					(0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.Tooltip, {
+						label: t("session.new.label"),
+						children: (0, react_jsx_runtime.jsxs)("button", {
+							className: SidebarRoot_module_css_default.newSession,
+							onClick: () => {
+								triggerCopisNavigate("conversations");
+								startSession();
+							},
+							children: ["新建会话"]
+						})
+					}),
+					wide && (0, react_jsx_runtime.jsxs)("div", {
+						className: "copis-menu-section",
+						style: {
+							display: "flex",
+							flexDirection: "column",
+							gap: "1px",
+							margin: "2px 0 8px",
+							paddingBottom: "8px",
+							borderBottom: "0.5px solid var(--dsw-alias-border-l3, rgba(255, 255, 255, 0.08))"
+						},
+						children: [
+							(0, react_jsx_runtime.jsx)(CopisMenuItem, {
+								label: "搜索",
+								icon: iconSearch,
+								onClick: () => { window.parent.postMessage({ type: "COPIS_OPEN_SEARCH" }, "*"); }
+							}),
+							(0, react_jsx_runtime.jsx)(CopisMenuItem, {
+								label: "日程表",
+								view: "planning",
+								tab: "schedule",
+								icon: iconSchedule
+							}),
+							(0, react_jsx_runtime.jsx)(CopisMenuItem, {
+								label: "定时任务",
+								view: "automations",
+								icon: iconTimer
+							}),
+							(0, react_jsx_runtime.jsx)(CopisMenuItem, {
+								label: "记忆",
+								view: "memory",
+								icon: iconBrain
+							}),
+							(0, react_jsx_runtime.jsx)(CopisMenuItem, {
+								label: "知识库",
+								view: "knowledge",
+								icon: iconBook
+							}),
+							(0, react_jsx_runtime.jsx)(CopisMenuItem, {
+								label: "专家团队",
+								view: "expert-team",
+								icon: iconUsers
+							}),
+							(0, react_jsx_runtime.jsx)(CopisMenuItem, {
+								label: "技能市场",
+								view: "agent-skills",
+								icon: iconPuzzle
+							}),
+							(0, react_jsx_runtime.jsx)(CopisMenuItem, {
+								label: "我的投资",
+								view: "fund-stock",
+								icon: iconTrendingUp
+							})
+						]
+					}),
+					!wide && (0, react_jsx_runtime.jsxs)("div", {
+						className: "copis-rail-menu-section",
+						style: {
+							display: "flex",
+							flexDirection: "column",
+							alignItems: "center"
+						},
+						children: [
+							(0, react_jsx_runtime.jsx)(CopisRailItem, {
+								label: "搜索",
+								icon: iconSearch
+							}),
+							(0, react_jsx_runtime.jsx)(CopisRailItem, {
+								label: "记忆",
+								view: "memory"
+							})
+						]
+					}),
+					(0, react_jsx_runtime.jsx)("div", {
+						className: SidebarRoot_module_css_default.regionArea,
+						children: renderSlot("sidebar.workspaces", { wide })
+					})
+  `
+  const patched = patchDshSidebarSource(sourceWithStaticMenus)
+  expect(patched).not.toContain('className: "copis-menu-section"')
+  expect(patched).not.toContain('className: "copis-rail-menu-section"')
+  expect(patched).not.toContain('label: "日程表"')
+  expect(patched).not.toContain('label: "我的投资"')
+  expect(patched).toContain('className: SidebarRoot_module_css_default.newSession')
+  expect(patched).toContain('className: SidebarRoot_module_css_default.regionArea')
+
+  // 幂等性
+  expect(patchDshSidebarSource(patched)).toBe(patched)
+})
+

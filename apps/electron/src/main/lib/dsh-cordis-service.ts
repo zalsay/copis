@@ -742,6 +742,8 @@ async function doStartDshCordisServer(options: {
   )
   patchDshDetailsPanelFilePreviewRuntime(join(dshCmd, '..', '..', 'runtime'))
   patchDshSidebarRuntime(join(dshCmd, '..', '..', 'runtime'))
+  patchDshSidebarRuntime(join(dshHomeDir, 'profiles'))
+  patchDshSidebarRuntime(join(dshHomeDir, 'profiles', profile))
   registerDshCordisWebSessionHeaders()
 
   // 1. 端口冲突检测、自动回避与已有 DSH 实例自动复用

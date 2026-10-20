@@ -48,6 +48,16 @@ export function patchDshSidebarSource(source: string): string {
     '',
   )
 
+  // 确保移除 DSH 原生侧栏中硬编码的静态菜单容器（已由 copis-creation-web 独立插件接管，避免重复渲染）
+  source = source.replace(
+    /(?:wide\s*&&\s*)?\(0,\s*react_jsx_runtime\.jsxs?\)\("div",\s*\{\s*className:\s*"copis-menu-section"[\s\S]*?children:\s*\[[\s\S]*?\]\s*\}\),?\s*/g,
+    '',
+  )
+  source = source.replace(
+    /(?:!wide\s*&&\s*)?\(0,\s*react_jsx_runtime\.jsxs?\)\("div",\s*\{\s*className:\s*"copis-rail-menu-section"[\s\S]*?children:\s*\[[\s\S]*?\]\s*\}\),?\s*/g,
+    '',
+  )
+
   // 确保侧边栏 CopisLogo 升级为全新双环银色 Logo
   const COPIS_SIDEBAR_LOGO_MARKER = 'M 725.5 791.5 L 738.5 790.1'
   if (source.includes('const CopisLogo =') && !source.includes(COPIS_SIDEBAR_LOGO_MARKER)) {

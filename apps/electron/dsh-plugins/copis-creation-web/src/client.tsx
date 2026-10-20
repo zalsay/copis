@@ -175,6 +175,12 @@ const CREATION_UI_CSS = `
     background: var(--dsw-specific-sidebar-fill, hsl(0 0% 17%)) !important;
   }
 
+  /* 隐藏 DSH 原生侧栏中遗留的旧版静态菜单（无 data-copis-placement），只保留 copis-creation-web 插件动态挂载的导航菜单 */
+  .copis-menu-section:not([data-copis-placement="before-workspaces"]),
+  .copis-rail-menu-section:not([data-copis-placement="before-workspaces"]) {
+    display: none !important;
+  }
+
   .copis-menu-section {
     box-sizing: border-box;
     display: grid;
@@ -1120,6 +1126,12 @@ function attachSidebarMenu(element: HTMLElement): void {
   if (!sidebar) return
 
   sidebar.classList.add('copis-creation-sidebar')
+
+  // 清理原生侧栏中可能遗留的旧版硬编码菜单节点（无 data-copis-placement），避免与独立插件菜单重复
+  const legacySections = sidebar.querySelectorAll(
+    '.copis-menu-section:not([data-copis-placement="before-workspaces"]), .copis-rail-menu-section:not([data-copis-placement="before-workspaces"])',
+  )
+  legacySections.forEach((el) => el.remove())
 
   const target =
     sidebar.querySelector('[class*="_regionArea"], [class*="regionArea"]') ??
