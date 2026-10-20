@@ -6,7 +6,7 @@ const source = readFileSync(join(import.meta.dir, 'client.tsx'), 'utf8')
 const preloadSource = readFileSync(join(import.meta.dir, '../../../src/preload/dsh-bridge-preload.ts'), 'utf8')
 
 test('Given macOS 创造模式侧栏 When 检查内置插件菜单 Then 功能入口文案和顺序与参考界面一致', () => {
-  const labels = ['搜索', '日程表', '定时任务', '记忆', '知识库', '专家团队', '技能市场', '我的投资']
+  const labels = ['搜索', '日程表', '定时任务', '记忆', '知识库', '专家团队', '群聊协作', '技能市场', '我的投资']
   let previousIndex = -1
 
   for (const label of labels) {
@@ -74,20 +74,20 @@ test('Given 创造模式侧栏菜单图标与隐藏机制 When 检查源码 Then
   expect(source).toContain('data-copis-menu-id')
 })
 
-test('Given 创造模式中部对话区右上角 When 插件加载 Then 注入返回 Agent 模式与工作区文件展开按钮且支持模式切换', () => {
+test('Given 创造模式中部对话区右上角 When 插件加载 Then 右上角移除 Agent 模式按钮并仅保留工作区文件展开按钮', () => {
   // 1. 注入到会话右上角 utilities 插槽
   expect(source).toContain("ctx.slots.inject('conversation.session.header.utilities'")
   expect(source).toContain("name: 'conversation.session.header.utilities'")
   expect(source).toContain('CopisHeaderUtilities')
 
-  // 2. 具备返回 Agent 模式按钮及交互（使用统一的 CopisLogoIcon 双环矢量图标）
-  expect(source).toContain('handleSwitchToAgent')
-  expect(source).toContain("window.copisBridge.switchMode('agent')")
-  expect(source).toContain("type: 'COPIS_SWITCH_MODE', mode: 'agent'")
-  expect(source).toContain('切换回 Agent 模式')
-  expect(source).toContain('Agent 模式')
-  expect(source).toContain('CopisLogoIcon')
-  expect(source).not.toContain('<Sparkles')
+  // 2. 彻底移除右上角 Agent 模式按钮（包括自定义与官方 session-log-download）
+  expect(source).not.toContain('handleSwitchToAgent')
+  expect(source).not.toContain('切换回 Agent 模式')
+  expect(source).not.toContain('<span>Agent 模式</span>')
+  expect(source).toContain('button[class*="sessionLogButton"]')
+  expect(source).toContain('button[title*="返回 Agent 模式"]')
+  expect(preloadSource).toContain('button[class*="sessionLogButton"]')
+  expect(preloadSource).toContain('button[title*="返回 Agent 模式"]')
 
   // 3. 具备工作区文件展开/折叠按钮（与 Agent 模式对齐，单个 icon 图标控制，无多余文字标签）
   expect(source).toContain('handleToggleWorkspaceDetails')

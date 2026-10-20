@@ -431,9 +431,18 @@ function injectCopisThemeAccent(): void {
       border-radius: 7px !important;
       font-size: 13px !important;
     }
+    /* 隐藏顶部右上角原生的 session-log-download 及任何 Agent 模式切换按钮 */
+    button[class*="sessionLogButton"],
+    button[title*="返回 Agent 模式"],
+    button[title*="返回Agent 模式"],
+    button[aria-label*="返回 Agent 模式"],
+    button[aria-label*="返回Agent 模式"],
+    .copis-header-btn-agent,
+    [data-slot-id="session-log-download"] {
+      display: none !important;
+    }
     .copis-header-btn-agent {
-      border-radius: 7px !important;
-      font-size: 13px !important;
+      display: none !important;
     }
     .copis-header-btn-workspace {
       width: 30px !important;
@@ -643,9 +652,9 @@ function injectCopisThemeAccent(): void {
       border-right: none !important;
     }
 
-    body.copis-subview-active .hHd-Xa_root,
-    body.copis-subview-active [class*="_root"],
-    body.copis-subview-active [class*="SidebarRoot"],
+    body.copis-subview-active aside.copis-creation-sidebar,
+    body.copis-subview-active aside.hHd-Xa_root,
+    body.copis-subview-active aside[class*="SidebarRoot"],
     body.copis-subview-active aside {
       width: 100% !important;
       padding: 6px var(--dsh-sidebar-inline-padding, 12px) !important;
@@ -763,9 +772,44 @@ function injectCopisThemeAccent(): void {
     body.copis-subview-active [class*="regionArea"] {
       display: flex !important;
       flex-direction: column !important;
-      margin-left: 0 !important;
-      margin-right: 0 !important;
-      padding-left: 0 !important;
+      margin-left: -4px !important;
+      margin-right: calc(-1 * var(--dsh-sidebar-inline-padding, 12px)) !important;
+      padding-left: 4px !important;
+    }
+
+    /* 确保侧边栏工作区顶栏未展开搜索时，搜索按钮与操作按钮完整呈现，防止被 flex 压缩或裁剪 */
+    [class*="sectionHeader"] {
+      display: flex !important;
+      align-items: center !important;
+    }
+    [class*="searchSlot"]:not([class*="searchSlotExpanded"]):not([class*="_searchSlotExpanded"]) {
+      display: flex !important;
+      min-width: 28px !important;
+      max-width: 28px !important;
+      flex: 0 0 28px !important;
+      margin-left: auto !important;
+      opacity: 1 !important;
+      visibility: visible !important;
+    }
+    [class*="searchSlot"]:not([class*="searchSlotExpanded"]):not([class*="_searchSlotExpanded"]) [class*="search"] {
+      display: flex !important;
+      width: 28px !important;
+      height: 28px !important;
+    }
+    [class*="searchSlot"]:not([class*="searchSlotExpanded"]):not([class*="_searchSlotExpanded"]) [class*="searchButton"] {
+      display: inline-flex !important;
+      width: 28px !important;
+      height: 28px !important;
+    }
+    [class*="headerActions"]:not([class*="headerActionsHidden"]):not([class*="_headerActionsHidden"]) {
+      display: flex !important;
+      align-items: center !important;
+      gap: 4px !important;
+      min-width: 60px !important;
+      max-width: none !important;
+      flex: 0 0 auto !important;
+      opacity: 1 !important;
+      visibility: visible !important;
     }
 
     body.copis-subview-active .copis-menu-section {
@@ -815,6 +859,7 @@ const DSH_MENU_LABEL_TO_ID: Record<string, string> = {
   '记忆': 'memory',
   '知识库': 'knowledge',
   '专家团队': 'expert-team',
+  '群聊协作': 'group-chat',
   '技能市场': 'agent-skills',
   '我的投资': 'fund-stock',
 }

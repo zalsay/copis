@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { patchDshSidebarSource } from './dsh-sidebar-patch'
+import { patchDshDirectoryPickerSource, patchDshSidebarSource } from './dsh-sidebar-patch'
 
 const sampleSource = `
 const CopisMenuItem = (props) => {
@@ -243,4 +243,30 @@ test('Given DSH 侧边栏源码中包含旧版硬编码菜单栏 When 执行 pat
   // 幂等性
   expect(patchDshSidebarSource(patched)).toBe(patched)
 })
+
+test('Given DSH 原生目录选择器源码 When 执行 patchDshDirectoryPickerSource Then 将嵌套的 sidebar.workspaces.directoryFlow 解除绑定并平级注入', () => {
+  const samplePickerSource = `
+		function apply(ctx) {
+			const injected = () => ({ pick: () => ctx.uiWorkspace.pickDirectory() });
+			ctx.slots.inject("conversation.hero.workspace.directoryFlow", () => ctx.slots.inject("sidebar.workspaces.directoryFlow", function* () {
+				yield ctx.slots.register({
+					name: "conversation.hero.workspace.directoryFlow",
+					inject: injected
+				}, NativeDirectoryFlow);
+				yield ctx.slots.register({
+					name: "sidebar.workspaces.directoryFlow",
+					inject: injected
+				}, NativeDirectoryFlow);
+			}));
+		}
+  `
+  const patched = patchDshDirectoryPickerSource(samplePickerSource)
+  expect(patched).not.toContain('ctx.slots.inject("conversation.hero.workspace.directoryFlow", () => ctx.slots.inject')
+  expect(patched).toContain('ctx.slots.inject("sidebar.workspaces.directoryFlow", function* () {')
+  expect(patched).toContain('ctx.slots.inject("conversation.hero.workspace.directoryFlow", function* () {')
+
+  // 幂等性
+  expect(patchDshDirectoryPickerSource(patched)).toBe(patched)
+})
+
 

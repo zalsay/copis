@@ -38,7 +38,6 @@ import {
   type ReactElement,
   type RefObject,
 } from 'react'
-import { CopisLogoIcon } from '../../../src/renderer/components/ui/copis-logo-icon'
 
 interface LayoutController {
   openDetails(): void
@@ -90,6 +89,7 @@ type CreationView =
   | 'expert-team'
   | 'agent-skills'
   | 'fund-stock'
+  | 'group-chat'
   | 'settings'
 
 interface SidebarMenuItem {
@@ -143,6 +143,7 @@ const SIDEBAR_MENU_ITEMS: SidebarMenuItem[] = [
   { id: 'memory', label: '记忆', icon: Brain, view: 'memory' },
   { id: 'knowledge', label: '知识库', icon: BookOpen, view: 'knowledge' },
   { id: 'expert-team', label: '专家团队', icon: UsersRound, view: 'expert-team' },
+  { id: 'group-chat', label: '群聊协作', icon: UsersRound, view: 'group-chat' },
   { id: 'agent-skills', label: '技能市场', icon: Puzzle, view: 'agent-skills' },
   { id: 'fund-stock', label: '我的投资', icon: TrendingUp, view: 'fund-stock' },
 ]
@@ -364,9 +365,9 @@ const CREATION_UI_CSS = `
     border-right: none !important;
   }
 
-  body.copis-subview-active .hHd-Xa_root,
-  body.copis-subview-active [class*="_root"],
-  body.copis-subview-active [class*="SidebarRoot"],
+  body.copis-subview-active aside.copis-creation-sidebar,
+  body.copis-subview-active aside.hHd-Xa_root,
+  body.copis-subview-active aside[class*="SidebarRoot"],
   body.copis-subview-active aside {
     width: 100% !important;
     padding: 6px var(--dsh-sidebar-inline-padding, 12px) !important;
@@ -484,9 +485,44 @@ const CREATION_UI_CSS = `
   body.copis-subview-active [class*="regionArea"] {
     display: flex !important;
     flex-direction: column !important;
-    margin-left: 0 !important;
-    margin-right: 0 !important;
-    padding-left: 0 !important;
+    margin-left: -4px !important;
+    margin-right: calc(-1 * var(--dsh-sidebar-inline-padding, 12px)) !important;
+    padding-left: 4px !important;
+  }
+
+  /* 确保侧边栏工作区顶栏未展开搜索时，搜索按钮与操作按钮完整呈现，防止被 flex 压缩或裁剪 */
+  [class*="sectionHeader"] {
+    display: flex !important;
+    align-items: center !important;
+  }
+  [class*="searchSlot"]:not([class*="searchSlotExpanded"]):not([class*="_searchSlotExpanded"]) {
+    display: flex !important;
+    min-width: 28px !important;
+    max-width: 28px !important;
+    flex: 0 0 28px !important;
+    margin-left: auto !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+  }
+  [class*="searchSlot"]:not([class*="searchSlotExpanded"]):not([class*="_searchSlotExpanded"]) [class*="search"] {
+    display: flex !important;
+    width: 28px !important;
+    height: 28px !important;
+  }
+  [class*="searchSlot"]:not([class*="searchSlotExpanded"]):not([class*="_searchSlotExpanded"]) [class*="searchButton"] {
+    display: inline-flex !important;
+    width: 28px !important;
+    height: 28px !important;
+  }
+  [class*="headerActions"]:not([class*="headerActionsHidden"]):not([class*="_headerActionsHidden"]) {
+    display: flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+    min-width: 60px !important;
+    max-width: none !important;
+    flex: 0 0 auto !important;
+    opacity: 1 !important;
+    visibility: visible !important;
   }
 
   body.copis-subview-active .copis-menu-section {
@@ -545,7 +581,19 @@ const CREATION_UI_CSS = `
     transform: scale(0.97);
   }
 
+  /* 隐藏顶部右上角原生的 session-log-download 及任何 Agent 模式切换按钮 */
+  button[class*="sessionLogButton"],
+  button[title*="返回 Agent 模式"],
+  button[title*="返回Agent 模式"],
+  button[aria-label*="返回 Agent 模式"],
+  button[aria-label*="返回Agent 模式"],
+  .copis-header-btn-agent,
+  [data-slot-id="session-log-download"] {
+    display: none !important;
+  }
+
   .copis-header-btn-agent {
+    display: none !important;
     border: 1px solid color-mix(in srgb, var(--ui-primary, #f09a43) 30%, transparent) !important;
     background: var(--ui-primary-background, rgba(240, 161, 90, 0.15)) !important;
     color: var(--ui-primary, #f09a43) !important;
@@ -1046,13 +1094,6 @@ function sendSearchRequest(): void {
   window.postMessage({ type: 'COPIS_OPEN_SEARCH' }, '*')
 }
 
-function handleSwitchToAgent(): void {
-  if (window.copisBridge?.switchMode) {
-    window.copisBridge.switchMode('agent')
-  }
-  window.postMessage({ type: 'COPIS_SWITCH_MODE', mode: 'agent' }, '*')
-}
-
 function getFileIconColor(name: string): string {
   const ext = (name || '').split('.').pop()?.toLowerCase()
   switch (ext) {
@@ -1193,16 +1234,14 @@ export function CreationSidebarNavigation(props: {
       if (calling) return
       const frame = document.querySelector('[data-sidebar-collapsed]')
       const sidebar = rootRef.current?.closest(
-        '[class*="_root"], [class*="SidebarRoot"], [class*="_sidebarCol"], [class*="sidebarCol"], aside',
+        'aside.copis-creation-sidebar, aside.hHd-Xa_root, aside[class*="SidebarRoot"], aside',
       ) as HTMLElement | null
 
       const isCollapsed = Boolean(
         frame ||
         props.collapsed === true ||
-        props.wide === false ||
-        sidebar?.classList.contains('hHd-Xa_collapsed') ||
-        sidebar?.matches('[class*="_collapsed"], [class*="collapsed"]'),
-      )
+        sidebar?.classList.contains('hHd-Xa_collapsed')
+      ) && props.wide !== true
 
       if (isCollapsed && effectiveCtx?.layout?.toggleSidebar) {
         calling = true
@@ -1435,7 +1474,7 @@ export function CreationSidebarNavigation(props: {
   )
 }
 
-/** 中部对话区右上角操作按钮（切换回 Agent 模式 + 工作区文件操作） */
+/** 中部对话区右上角操作按钮（工作区文件操作） */
 export function CopisHeaderUtilities(props: { ctx: CordisContext }): ReactElement {
   const [detailsOpen, setDetailsOpen] = useState(false)
 
@@ -1498,18 +1537,6 @@ export function CopisHeaderUtilities(props: { ctx: CordisContext }): ReactElemen
 
   return (
     <div className="copis-header-utilities-bar">
-      {/* 切换回 Agent 模式按钮 */}
-      <button
-        type="button"
-        className="copis-header-action-btn copis-header-btn-agent"
-        onClick={handleSwitchToAgent}
-        title="切换回 Agent 模式"
-        aria-label="返回 Agent 模式"
-      >
-        <CopisLogoIcon size={14} style={{ color: 'var(--ui-primary, #f09a43)', flexShrink: 0 }} />
-        <span>Agent 模式</span>
-      </button>
-
       {/* 工作区文件操作展开/折叠按钮（与 Agent 模式对齐，单个 icon 图标控制） */}
       <button
         type="button"
@@ -2574,7 +2601,7 @@ export function apply(ctx: CordisContext): void {
     ),
   )
 
-  // 2. 中部对话区右上角操作项：切换回 Agent 模式与工作区文件展开
+  // 2. 中部对话区右上角操作项：工作区文件展开
   ctx.slots.inject('conversation.session.header.utilities', () =>
     ctx.slots.register(
       {

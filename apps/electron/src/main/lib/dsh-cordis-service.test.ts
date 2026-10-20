@@ -74,6 +74,7 @@ describe('dsh-cordis-service', () => {
       expect(content).toContain('id: llm-deepseek')
       expect(content).toContain('disabled: true')
       expect(content).toContain('id: ui-brand-official')
+      expect(content).toContain('id: session-log-download')
       expect(content).toContain('id: copis-creation-web')
 
       const pluginDir = join(profileDir, 'plugins', 'copis-creation-web')

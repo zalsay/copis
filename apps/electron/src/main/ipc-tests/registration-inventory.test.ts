@@ -17,7 +17,7 @@ const browserWorkflowSource = readFileSync(browserWorkflowSourcePath, 'utf8')
 const webSyncSourcePath = resolve(import.meta.dir, '../ipc/web-sync.ipc.ts')
 const webSyncSource = readFileSync(webSyncSourcePath, 'utf8')
 
-const baselineSha256 = '271d5709ceb0742fe1d72397b92484df0475457d9a624cdcce46f708cb3bb516'
+const baselineSha256 = 'a77bd7176a85257e0f9262c3a53adb7164786d2ae39e5e32aa7e3c1ab700b579'
 
 function inventoryFunction(text: string, fileName: string, functionName: string) {
   const file = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true)
@@ -74,6 +74,7 @@ for (const [domain, name] of [
   ['memory-ingestion', 'registerMemoryIngestionIpcHandlers'],
   ['trading', 'registerTradingIpcHandlers'],
   ['dsh', 'registerDshIpcHandlers'],
+  ['dsh-group-chat', 'registerDshGroupChatIpcHandlers'],
   ['agent-sessions', 'registerAgentSessionsIpcHandlers'],
   ['agent-workspaces', 'registerAgentWorkspacesIpcHandlers'],
   ['workspace-capabilities', 'registerWorkspaceCapabilitiesIpcHandlers'],
@@ -112,8 +113,8 @@ const canonical = entries.map((entry) => `${entry.kind}|${entry.channel}`).join(
 const handleCount = entries.filter((entry) => entry.kind === 'handle').length
 const onCount = entries.filter((entry) => entry.kind === 'on').length
 
-test('迁移前注册契约保持 383 个 handle 和 5 个 on', () => {
-  expect(handleCount).toBe(383)
+test('迁移前注册契约保持 402 个 handle 和 5 个 on', () => {
+  expect(handleCount).toBe(402)
   expect(onCount).toBe(5)
   expect(new Set(entries.map((entry) => `${entry.kind}|${entry.channel}`)).size).toBe(entries.length)
   expect(createHash('sha256').update(canonical).digest('hex')).toBe(baselineSha256)

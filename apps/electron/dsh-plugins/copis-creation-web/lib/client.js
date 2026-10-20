@@ -4,23 +4,10 @@ window.__ModuleLoader__.load({
     var module = { exports: {} };
     var exports = module.exports;
     Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
-var __create = Object.create;
-var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __toESM = (mod, isNodeMode, target) => {
-  target = mod != null ? __create(__getProtoOf(mod)) : {};
-  const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
-  for (let key of __getOwnPropNames(mod))
-    if (!__hasOwnProp.call(to, key))
-      __defProp(to, key, {
-        get: () => mod[key],
-        enumerable: true
-      });
-  return to;
-};
 var __moduleCache = /* @__PURE__ */ new WeakMap;
 var __toCommonJS = (from) => {
   var entry = __moduleCache.get(from), desc;
@@ -300,36 +287,7 @@ var X = createLucideIcon("X", [
 ]);
 // dsh-plugins/copis-creation-web/src/client.tsx
 var import_react3 = require("react");
-
-// src/renderer/components/ui/copis-logo-icon.tsx
-var React = __toESM(require("react"));
 var jsx_runtime = require("react/jsx-runtime");
-var CopisLogoIcon = React.forwardRef(({ size = 16, width, height, className, fill = "currentColor", ...props }, ref) => {
-  const computedWidth = width ?? size;
-  const computedHeight = height ?? size;
-  return /* @__PURE__ */ jsx_runtime.jsxs("svg", {
-    ref,
-    viewBox: "347 347 560 560",
-    width: computedWidth,
-    height: computedHeight,
-    fill,
-    className,
-    "aria-hidden": "true",
-    ...props,
-    children: [
-      /* @__PURE__ */ jsx_runtime.jsx("path", {
-        d: "M 725.5 791.5 L 738.5 790.1 L 754.5 786.2 L 773.5 779.2 L 785.5 773.2 L 800.5 764.2 L 812.5 755.3 L 825.3 743.5 L 835.2 732.5 L 843.3 721.5 L 852.2 706.5 L 859.2 691.5 L 864.2 677.5 L 871.2 644.5 L 872.3 631.5 L 872.3 608.5 L 870.2 589.5 L 867.1 574.5 L 857.2 545.5 L 850.2 531.5 L 842.0 518.5 L 823.5 496.8 L 800.5 478.9 L 788.5 472.0 L 774.5 465.8 L 758.5 460.8 L 742.5 457.8 L 715.5 456.7 L 697.5 458.8 L 681.5 462.8 L 663.5 469.8 L 648.5 478.0 L 633.5 488.7 L 616.7 504.5 L 605.8 517.5 L 597.8 529.5 L 590.7 542.5 L 583.7 558.5 L 578.9 573.5 L 574.9 592.5 L 572.8 616.5 L 572.7 695.5 L 574.5 697.0 L 589.5 687.1 L 601.3 675.5 L 609.2 665.5 L 622.1 643.5 L 637.5 609.0 L 650.5 583.4 L 660.5 568.4 L 675.5 553.5 L 684.3 547.5 L 694.3 542.5 L 702.8 539.5 L 713.5 537.4 L 732.5 537.4 L 740.2 538.5 L 750.6 541.5 L 763.4 547.5 L 774.6 555.5 L 787.5 569.5 L 795.5 583.4 L 800.5 597.4 L 802.6 607.5 L 802.6 634.5 L 800.5 644.6 L 795.5 658.5 L 789.5 669.5 L 782.5 678.7 L 771.5 689.5 L 759.6 697.5 L 746.8 703.5 L 732.8 707.5 L 724.5 708.6 L 703.5 708.6 L 694.5 731.5 L 686.5 746.5 L 675.5 762.6 L 658.1 783.5 L 671.5 788.1 L 687.5 791.2 L 703.5 792.4 L 725.5 791.5 Z"
-      }),
-      /* @__PURE__ */ jsx_runtime.jsx("path", {
-        d: "M 563.5 803.5 L 579.5 801.3 L 597.5 796.2 L 613.5 789.3 L 629.5 780.2 L 640.5 772.2 L 656.2 757.5 L 665.3 746.5 L 675.1 731.5 L 682.3 717.5 L 688.1 702.5 L 695.1 672.5 L 696.3 657.5 L 696.4 573.5 L 695.5 571.7 L 694.5 572.0 L 682.5 582.0 L 665.9 600.5 L 652.8 621.5 L 634.5 660.8 L 625.5 676.5 L 611.9 692.5 L 598.5 703.5 L 587.6 709.5 L 573.7 714.5 L 563.6 716.5 L 549.5 717.0 L 538.2 716.5 L 522.1 712.5 L 509.0 706.5 L 498.5 699.5 L 486.5 687.5 L 479.4 677.5 L 472.5 663.7 L 467.5 646.5 L 466.1 628.5 L 467.5 609.7 L 471.5 595.3 L 478.5 580.5 L 491.6 563.5 L 503.5 553.5 L 517.4 545.5 L 527.3 541.5 L 543.6 537.5 L 555.5 536.4 L 573.5 537.3 L 585.5 516.7 L 599.5 498.5 L 615.5 482.5 L 632.2 469.5 L 631.5 467.8 L 620.5 462.9 L 597.5 455.8 L 572.5 452.0 L 550.5 451.8 L 530.5 453.9 L 515.5 456.9 L 496.5 462.7 L 481.5 468.9 L 466.5 476.8 L 451.5 486.7 L 427.9 507.5 L 415.9 521.5 L 405.7 536.5 L 395.7 555.5 L 389.8 570.5 L 384.9 587.5 L 381.8 604.5 L 380.7 615.5 L 380.7 640.5 L 382.9 658.5 L 386.7 675.5 L 391.7 691.5 L 398.8 708.5 L 406.8 723.5 L 416.8 738.5 L 424.8 748.5 L 441.5 765.3 L 464.5 782.1 L 479.5 790.0 L 497.5 797.0 L 512.5 801.2 L 532.5 804.2 L 563.5 803.5 Z"
-      })
-    ]
-  });
-});
-CopisLogoIcon.displayName = "CopisLogoIcon";
-
-// dsh-plugins/copis-creation-web/src/client.tsx
-var jsx_runtime2 = require("react/jsx-runtime");
 var CREATION_STYLES_ID = "copis-creation-web-styles";
 var SIDEBAR_MENU_ITEMS = [
   { id: "search", label: "搜索", icon: Search, action: "search" },
@@ -338,6 +296,7 @@ var SIDEBAR_MENU_ITEMS = [
   { id: "memory", label: "记忆", icon: Brain, view: "memory" },
   { id: "knowledge", label: "知识库", icon: BookOpen, view: "knowledge" },
   { id: "expert-team", label: "专家团队", icon: UsersRound, view: "expert-team" },
+  { id: "group-chat", label: "群聊协作", icon: UsersRound, view: "group-chat" },
   { id: "agent-skills", label: "技能市场", icon: Puzzle, view: "agent-skills" },
   { id: "fund-stock", label: "我的投资", icon: TrendingUp, view: "fund-stock" }
 ];
@@ -558,9 +517,9 @@ var CREATION_UI_CSS = `
     border-right: none !important;
   }
 
-  body.copis-subview-active .hHd-Xa_root,
-  body.copis-subview-active [class*="_root"],
-  body.copis-subview-active [class*="SidebarRoot"],
+  body.copis-subview-active aside.copis-creation-sidebar,
+  body.copis-subview-active aside.hHd-Xa_root,
+  body.copis-subview-active aside[class*="SidebarRoot"],
   body.copis-subview-active aside {
     width: 100% !important;
     padding: 6px var(--dsh-sidebar-inline-padding, 12px) !important;
@@ -678,9 +637,44 @@ var CREATION_UI_CSS = `
   body.copis-subview-active [class*="regionArea"] {
     display: flex !important;
     flex-direction: column !important;
-    margin-left: 0 !important;
-    margin-right: 0 !important;
-    padding-left: 0 !important;
+    margin-left: -4px !important;
+    margin-right: calc(-1 * var(--dsh-sidebar-inline-padding, 12px)) !important;
+    padding-left: 4px !important;
+  }
+
+  /* 确保侧边栏工作区顶栏未展开搜索时，搜索按钮与操作按钮完整呈现，防止被 flex 压缩或裁剪 */
+  [class*="sectionHeader"] {
+    display: flex !important;
+    align-items: center !important;
+  }
+  [class*="searchSlot"]:not([class*="searchSlotExpanded"]):not([class*="_searchSlotExpanded"]) {
+    display: flex !important;
+    min-width: 28px !important;
+    max-width: 28px !important;
+    flex: 0 0 28px !important;
+    margin-left: auto !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+  }
+  [class*="searchSlot"]:not([class*="searchSlotExpanded"]):not([class*="_searchSlotExpanded"]) [class*="search"] {
+    display: flex !important;
+    width: 28px !important;
+    height: 28px !important;
+  }
+  [class*="searchSlot"]:not([class*="searchSlotExpanded"]):not([class*="_searchSlotExpanded"]) [class*="searchButton"] {
+    display: inline-flex !important;
+    width: 28px !important;
+    height: 28px !important;
+  }
+  [class*="headerActions"]:not([class*="headerActionsHidden"]):not([class*="_headerActionsHidden"]) {
+    display: flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+    min-width: 60px !important;
+    max-width: none !important;
+    flex: 0 0 auto !important;
+    opacity: 1 !important;
+    visibility: visible !important;
   }
 
   body.copis-subview-active .copis-menu-section {
@@ -739,7 +733,19 @@ var CREATION_UI_CSS = `
     transform: scale(0.97);
   }
 
+  /* 隐藏顶部右上角原生的 session-log-download 及任何 Agent 模式切换按钮 */
+  button[class*="sessionLogButton"],
+  button[title*="返回 Agent 模式"],
+  button[title*="返回Agent 模式"],
+  button[aria-label*="返回 Agent 模式"],
+  button[aria-label*="返回Agent 模式"],
+  .copis-header-btn-agent,
+  [data-slot-id="session-log-download"] {
+    display: none !important;
+  }
+
   .copis-header-btn-agent {
+    display: none !important;
     border: 1px solid color-mix(in srgb, var(--ui-primary, #f09a43) 30%, transparent) !important;
     background: var(--ui-primary-background, rgba(240, 161, 90, 0.15)) !important;
     color: var(--ui-primary, #f09a43) !important;
@@ -1239,12 +1245,6 @@ function sendSearchRequest() {
   }
   window.postMessage({ type: "COPIS_OPEN_SEARCH" }, "*");
 }
-function handleSwitchToAgent() {
-  if (window.copisBridge?.switchMode) {
-    window.copisBridge.switchMode("agent");
-  }
-  window.postMessage({ type: "COPIS_SWITCH_MODE", mode: "agent" }, "*");
-}
 function getFileIconColor(name) {
   const ext = (name || "").split(".").pop()?.toLowerCase();
   switch (ext) {
@@ -1351,8 +1351,8 @@ function CreationSidebarNavigation(props) {
       if (calling)
         return;
       const frame2 = document.querySelector("[data-sidebar-collapsed]");
-      const sidebar = rootRef.current?.closest('[class*="_root"], [class*="SidebarRoot"], [class*="_sidebarCol"], [class*="sidebarCol"], aside');
-      const isCollapsed = Boolean(frame2 || props.collapsed === true || props.wide === false || sidebar?.classList.contains("hHd-Xa_collapsed") || sidebar?.matches('[class*="_collapsed"], [class*="collapsed"]'));
+      const sidebar = rootRef.current?.closest('aside.copis-creation-sidebar, aside.hHd-Xa_root, aside[class*="SidebarRoot"], aside');
+      const isCollapsed = Boolean(frame2 || props.collapsed === true || sidebar?.classList.contains("hHd-Xa_collapsed")) && props.wide !== true;
       if (isCollapsed && effectiveCtx?.layout?.toggleSidebar) {
         calling = true;
         try {
@@ -1516,13 +1516,13 @@ function CreationSidebarNavigation(props) {
   };
   const visibleMenuItems = SIDEBAR_MENU_ITEMS.filter((item) => !hiddenMenuIds.includes(item.id));
   if (!wide) {
-    return /* @__PURE__ */ jsx_runtime2.jsx("div", {
+    return /* @__PURE__ */ jsx_runtime.jsx("div", {
       ref: rootRef,
       className: "copis-rail-menu-section",
       "data-copis-placement": "before-workspaces",
       children: visibleMenuItems.map((item) => {
         const Icon2 = item.icon;
-        return /* @__PURE__ */ jsx_runtime2.jsx("button", {
+        return /* @__PURE__ */ jsx_runtime.jsx("button", {
           type: "button",
           className: "copis-rail-menu-item",
           "data-copis-menu-id": item.id,
@@ -1530,7 +1530,7 @@ function CreationSidebarNavigation(props) {
           "aria-label": item.label,
           title: item.label,
           onClick: () => selectItem(item),
-          children: /* @__PURE__ */ jsx_runtime2.jsx(Icon2, {
+          children: /* @__PURE__ */ jsx_runtime.jsx(Icon2, {
             size: 18,
             strokeWidth: 1.8
           })
@@ -1538,27 +1538,27 @@ function CreationSidebarNavigation(props) {
       })
     });
   }
-  return /* @__PURE__ */ jsx_runtime2.jsx("div", {
+  return /* @__PURE__ */ jsx_runtime.jsx("div", {
     ref: rootRef,
     className: "copis-menu-section",
     "data-copis-placement": "before-workspaces",
     children: visibleMenuItems.map((item) => {
       const Icon2 = item.icon;
-      return /* @__PURE__ */ jsx_runtime2.jsxs("button", {
+      return /* @__PURE__ */ jsx_runtime.jsxs("button", {
         type: "button",
         className: "copis-menu-item",
         "data-copis-menu-id": item.id,
         "data-active": item.view === activeView ? "true" : "false",
         onClick: () => selectItem(item),
         children: [
-          /* @__PURE__ */ jsx_runtime2.jsx(Icon2, {
+          /* @__PURE__ */ jsx_runtime.jsx(Icon2, {
             size: 16,
             strokeWidth: 1.8
           }),
-          /* @__PURE__ */ jsx_runtime2.jsx("span", {
+          /* @__PURE__ */ jsx_runtime.jsx("span", {
             children: item.label
           }),
-          /* @__PURE__ */ jsx_runtime2.jsx("button", {
+          /* @__PURE__ */ jsx_runtime.jsx("button", {
             type: "button",
             className: "copis-dsh-menu-hide-btn",
             onClick: (e) => {
@@ -1628,41 +1628,23 @@ function CopisHeaderUtilities(props) {
       setDetailsOpen(!isDrawerOpen);
     }
   };
-  return /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+  return /* @__PURE__ */ jsx_runtime.jsx("div", {
     className: "copis-header-utilities-bar",
-    children: [
-      /* @__PURE__ */ jsx_runtime2.jsxs("button", {
-        type: "button",
-        className: "copis-header-action-btn copis-header-btn-agent",
-        onClick: handleSwitchToAgent,
-        title: "切换回 Agent 模式",
-        "aria-label": "返回 Agent 模式",
-        children: [
-          /* @__PURE__ */ jsx_runtime2.jsx(CopisLogoIcon, {
-            size: 14,
-            style: { color: "var(--ui-primary, #f09a43)", flexShrink: 0 }
-          }),
-          /* @__PURE__ */ jsx_runtime2.jsx("span", {
-            children: "Agent 模式"
-          })
-        ]
-      }),
-      /* @__PURE__ */ jsx_runtime2.jsx("button", {
-        type: "button",
-        className: "copis-header-action-btn copis-header-btn-workspace",
-        "data-active": detailsOpen ? "true" : "false",
-        onClick: handleToggleWorkspaceDetails,
-        title: detailsOpen ? "折叠工作区文件面板" : "展开工作区文件面板",
-        "aria-label": detailsOpen ? "折叠工作区文件面板" : "展开工作区文件面板",
-        children: detailsOpen ? /* @__PURE__ */ jsx_runtime2.jsx(PanelRightClose, {
-          size: 15,
-          strokeWidth: 1.8
-        }) : /* @__PURE__ */ jsx_runtime2.jsx(PanelRight, {
-          size: 15,
-          strokeWidth: 1.8
-        })
+    children: /* @__PURE__ */ jsx_runtime.jsx("button", {
+      type: "button",
+      className: "copis-header-action-btn copis-header-btn-workspace",
+      "data-active": detailsOpen ? "true" : "false",
+      onClick: handleToggleWorkspaceDetails,
+      title: detailsOpen ? "折叠工作区文件面板" : "展开工作区文件面板",
+      "aria-label": detailsOpen ? "折叠工作区文件面板" : "展开工作区文件面板",
+      children: detailsOpen ? /* @__PURE__ */ jsx_runtime.jsx(PanelRightClose, {
+        size: 15,
+        strokeWidth: 1.8
+      }) : /* @__PURE__ */ jsx_runtime.jsx(PanelRight, {
+        size: 15,
+        strokeWidth: 1.8
       })
-    ]
+    })
   });
 }
 function CopisDetailsPanel(props) {
@@ -1828,10 +1810,10 @@ function CopisDetailsPanel(props) {
       const isLoadingChild = isDir && loadingMap.get(item.path);
       const children = isDir ? childrenMap.get(item.path) || [] : [];
       const isSelected = previewingFile?.path === item.path && activeTab === "preview";
-      return /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+      return /* @__PURE__ */ jsx_runtime.jsxs("div", {
         style: { display: "flex", flexDirection: "column" },
         children: [
-          /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+          /* @__PURE__ */ jsx_runtime.jsxs("div", {
             className: "copis-tree-node-row",
             "data-selected": isSelected ? "true" : "false",
             style: { paddingLeft: `${depth * 14 + 6}px` },
@@ -1844,27 +1826,27 @@ function CopisDetailsPanel(props) {
             },
             title: item.path,
             children: [
-              isDir ? /* @__PURE__ */ jsx_runtime2.jsx("span", {
+              isDir ? /* @__PURE__ */ jsx_runtime.jsx("span", {
                 style: { display: "inline-flex", alignItems: "center", width: "12px" },
-                children: isExpanded ? /* @__PURE__ */ jsx_runtime2.jsx(ChevronDown, {
+                children: isExpanded ? /* @__PURE__ */ jsx_runtime.jsx(ChevronDown, {
                   size: 12
-                }) : /* @__PURE__ */ jsx_runtime2.jsx(ChevronRight, {
+                }) : /* @__PURE__ */ jsx_runtime.jsx(ChevronRight, {
                   size: 12
                 })
-              }) : /* @__PURE__ */ jsx_runtime2.jsx("span", {
+              }) : /* @__PURE__ */ jsx_runtime.jsx("span", {
                 style: { width: "12px", flexShrink: 0 }
               }),
-              isDir ? isExpanded ? /* @__PURE__ */ jsx_runtime2.jsx(FolderOpen, {
+              isDir ? isExpanded ? /* @__PURE__ */ jsx_runtime.jsx(FolderOpen, {
                 size: 14,
                 style: { color: "var(--creation-ui-primary, #6c00cc)" }
-              }) : /* @__PURE__ */ jsx_runtime2.jsx(Folder, {
+              }) : /* @__PURE__ */ jsx_runtime.jsx(Folder, {
                 size: 14,
                 style: { color: "var(--creation-ui-primary, #6c00cc)" }
-              }) : /* @__PURE__ */ jsx_runtime2.jsx(FileCode, {
+              }) : /* @__PURE__ */ jsx_runtime.jsx(FileCode, {
                 size: 14,
                 style: { color: getFileIconColor(item.name) }
               }),
-              /* @__PURE__ */ jsx_runtime2.jsx("span", {
+              /* @__PURE__ */ jsx_runtime.jsx("span", {
                 style: {
                   flex: 1,
                   minWidth: 0,
@@ -1875,17 +1857,17 @@ function CopisDetailsPanel(props) {
                 },
                 children: item.name
               }),
-              !isDir && item.size !== undefined && /* @__PURE__ */ jsx_runtime2.jsx("span", {
+              !isDir && item.size !== undefined && /* @__PURE__ */ jsx_runtime.jsx("span", {
                 style: { fontSize: "10px", color: "var(--dsw-alias-label-tertiary, #a1a1aa)", flexShrink: 0 },
                 children: formatSize(item.size)
               })
             ]
           }),
-          isDir && isExpanded && /* @__PURE__ */ jsx_runtime2.jsx("div", {
-            children: isLoadingChild ? /* @__PURE__ */ jsx_runtime2.jsx("div", {
+          isDir && isExpanded && /* @__PURE__ */ jsx_runtime.jsx("div", {
+            children: isLoadingChild ? /* @__PURE__ */ jsx_runtime.jsx("div", {
               style: { padding: "4px 0 4px 28px", fontSize: "11px", color: "var(--dsw-alias-label-tertiary, #a1a1aa)" },
               children: "加载中..."
-            }) : children.length > 0 ? renderTreeNodes(children, depth + 1) : /* @__PURE__ */ jsx_runtime2.jsx("div", {
+            }) : children.length > 0 ? renderTreeNodes(children, depth + 1) : /* @__PURE__ */ jsx_runtime.jsx("div", {
               style: { padding: "4px 0 4px 28px", fontSize: "11px", color: "var(--dsw-alias-label-tertiary, #a1a1aa)" },
               children: "(空目录)"
             })
@@ -1894,23 +1876,23 @@ function CopisDetailsPanel(props) {
       }, item.path);
     });
   };
-  return /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+  return /* @__PURE__ */ jsx_runtime.jsxs("div", {
     className: "copis-details-panel-root",
     children: [
-      /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+      /* @__PURE__ */ jsx_runtime.jsxs("div", {
         className: "copis-details-header-row",
         children: [
-          /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+          /* @__PURE__ */ jsx_runtime.jsxs("div", {
             className: "copis-details-tabs-group",
             children: [
-              /* @__PURE__ */ jsx_runtime2.jsx("button", {
+              /* @__PURE__ */ jsx_runtime.jsx("button", {
                 type: "button",
                 className: "copis-details-tab-button",
                 "data-active": activeTab === "files" || activeTab === "preview" ? "true" : "false",
                 onClick: () => setActiveTab("files"),
                 children: "工作区"
               }),
-              /* @__PURE__ */ jsx_runtime2.jsx("button", {
+              /* @__PURE__ */ jsx_runtime.jsx("button", {
                 type: "button",
                 className: "copis-details-tab-button",
                 "data-active": activeTab === "tool" ? "true" : "false",
@@ -1919,46 +1901,46 @@ function CopisDetailsPanel(props) {
               })
             ]
           }),
-          /* @__PURE__ */ jsx_runtime2.jsx("button", {
+          /* @__PURE__ */ jsx_runtime.jsx("button", {
             type: "button",
             className: "copis-details-close-btn",
             onClick: handleClose,
             "aria-label": "关闭详情面板",
             title: "关闭",
-            children: /* @__PURE__ */ jsx_runtime2.jsx(X, {
+            children: /* @__PURE__ */ jsx_runtime.jsx(X, {
               size: 14
             })
           })
         ]
       }),
-      /* @__PURE__ */ jsx_runtime2.jsx("div", {
+      /* @__PURE__ */ jsx_runtime.jsx("div", {
         className: "copis-details-content-body",
-        children: activeTab === "tool" ? /* @__PURE__ */ jsx_runtime2.jsx("div", {
+        children: activeTab === "tool" ? /* @__PURE__ */ jsx_runtime.jsx("div", {
           style: { flex: 1, minHeight: 0, overflowY: "auto" },
-          children: props.renderSlot ? props.renderSlot("conversation.details.tool", {}) : /* @__PURE__ */ jsx_runtime2.jsx("div", {
+          children: props.renderSlot ? props.renderSlot("conversation.details.tool", {}) : /* @__PURE__ */ jsx_runtime.jsx("div", {
             style: { textAlign: "center", padding: "40px 10px", color: "var(--dsw-alias-label-tertiary, #a1a1aa)", fontSize: "12px" },
             children: "当前无活跃的工具调用信息"
           })
-        }) : activeTab === "preview" && previewingFile ? /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+        }) : activeTab === "preview" && previewingFile ? /* @__PURE__ */ jsx_runtime.jsxs("div", {
           className: "copis-preview-container",
           children: [
-            /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+            /* @__PURE__ */ jsx_runtime.jsxs("div", {
               className: "copis-preview-nav-bar",
               children: [
-                /* @__PURE__ */ jsx_runtime2.jsxs("button", {
+                /* @__PURE__ */ jsx_runtime.jsxs("button", {
                   type: "button",
                   className: "copis-preview-btn",
                   onClick: () => setActiveTab("files"),
                   children: [
-                    /* @__PURE__ */ jsx_runtime2.jsx(ChevronLeft, {
+                    /* @__PURE__ */ jsx_runtime.jsx(ChevronLeft, {
                       size: 13
                     }),
-                    /* @__PURE__ */ jsx_runtime2.jsx("span", {
+                    /* @__PURE__ */ jsx_runtime.jsx("span", {
                       children: "返回"
                     })
                   ]
                 }),
-                /* @__PURE__ */ jsx_runtime2.jsx("span", {
+                /* @__PURE__ */ jsx_runtime.jsx("span", {
                   style: {
                     fontWeight: 600,
                     maxWidth: "180px",
@@ -1969,36 +1951,36 @@ function CopisDetailsPanel(props) {
                   title: previewingFile.path,
                   children: previewingFile.name
                 }),
-                /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+                /* @__PURE__ */ jsx_runtime.jsxs("div", {
                   style: { display: "flex", alignItems: "center", gap: "4px" },
                   children: [
-                    !previewState.isImage && previewState.content && /* @__PURE__ */ jsx_runtime2.jsxs("button", {
+                    !previewState.isImage && previewState.content && /* @__PURE__ */ jsx_runtime.jsxs("button", {
                       type: "button",
                       className: "copis-preview-btn",
                       onClick: handleCopyContent,
                       title: "复制代码内容",
                       children: [
-                        copied ? /* @__PURE__ */ jsx_runtime2.jsx(Check, {
+                        copied ? /* @__PURE__ */ jsx_runtime.jsx(Check, {
                           size: 12,
                           style: { color: "#22c55e" }
-                        }) : /* @__PURE__ */ jsx_runtime2.jsx(Copy, {
+                        }) : /* @__PURE__ */ jsx_runtime.jsx(Copy, {
                           size: 12
                         }),
-                        /* @__PURE__ */ jsx_runtime2.jsx("span", {
+                        /* @__PURE__ */ jsx_runtime.jsx("span", {
                           children: copied ? "已复制" : "复制"
                         })
                       ]
                     }),
-                    /* @__PURE__ */ jsx_runtime2.jsxs("button", {
+                    /* @__PURE__ */ jsx_runtime.jsxs("button", {
                       type: "button",
                       className: "copis-preview-btn",
                       onClick: () => handleLocateFile(previewingFile.path),
                       title: "在系统文件管理器中显示",
                       children: [
-                        /* @__PURE__ */ jsx_runtime2.jsx(ExternalLink, {
+                        /* @__PURE__ */ jsx_runtime.jsx(ExternalLink, {
                           size: 12
                         }),
-                        /* @__PURE__ */ jsx_runtime2.jsx("span", {
+                        /* @__PURE__ */ jsx_runtime.jsx("span", {
                           children: "定位"
                         })
                       ]
@@ -2007,10 +1989,10 @@ function CopisDetailsPanel(props) {
                 })
               ]
             }),
-            previewState.loading ? /* @__PURE__ */ jsx_runtime2.jsx("div", {
+            previewState.loading ? /* @__PURE__ */ jsx_runtime.jsx("div", {
               style: { textAlign: "center", padding: "60px 10px", color: "var(--dsw-alias-label-tertiary, #a1a1aa)", fontSize: "12px" },
               children: "正在读取文件内容..."
-            }) : previewState.error ? /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+            }) : previewState.error ? /* @__PURE__ */ jsx_runtime.jsxs("div", {
               style: {
                 padding: "20px",
                 borderRadius: "8px",
@@ -2020,80 +2002,80 @@ function CopisDetailsPanel(props) {
                 fontSize: "12px"
               },
               children: [
-                /* @__PURE__ */ jsx_runtime2.jsx("div", {
+                /* @__PURE__ */ jsx_runtime.jsx("div", {
                   style: { color: "#ef4444", fontWeight: 600, marginBottom: "6px" },
                   children: "预览失败"
                 }),
-                /* @__PURE__ */ jsx_runtime2.jsx("div", {
+                /* @__PURE__ */ jsx_runtime.jsx("div", {
                   style: { color: "var(--dsw-alias-label-secondary, #71717a)", marginBottom: "12px" },
                   children: previewState.error
                 }),
-                /* @__PURE__ */ jsx_runtime2.jsx("button", {
+                /* @__PURE__ */ jsx_runtime.jsx("button", {
                   type: "button",
                   className: "copis-header-action-btn",
                   onClick: () => openPreview(previewingFile),
                   children: "重试"
                 })
               ]
-            }) : previewState.isImage ? /* @__PURE__ */ jsx_runtime2.jsx("div", {
+            }) : previewState.isImage ? /* @__PURE__ */ jsx_runtime.jsx("div", {
               style: { display: "flex", alignItems: "center", justifyContent: "center", flex: 1, overflow: "auto", padding: "10px" },
-              children: /* @__PURE__ */ jsx_runtime2.jsx("img", {
+              children: /* @__PURE__ */ jsx_runtime.jsx("img", {
                 src: previewState.imageUrl,
                 alt: previewingFile.name,
                 style: { maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: "6px" }
               })
-            }) : /* @__PURE__ */ jsx_runtime2.jsx("div", {
+            }) : /* @__PURE__ */ jsx_runtime.jsx("div", {
               className: "copis-code-view-wrapper",
-              children: /* @__PURE__ */ jsx_runtime2.jsx("code", {
+              children: /* @__PURE__ */ jsx_runtime.jsx("code", {
                 children: previewState.content || "// 空文件"
               })
             })
           ]
-        }) : /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+        }) : /* @__PURE__ */ jsx_runtime.jsxs("div", {
           style: { display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" },
           children: [
-            /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+            /* @__PURE__ */ jsx_runtime.jsxs("div", {
               style: { display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" },
               children: [
-                /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+                /* @__PURE__ */ jsx_runtime.jsxs("div", {
                   className: "copis-workspace-search-bar",
                   style: { flex: 1, marginBottom: 0 },
                   children: [
-                    /* @__PURE__ */ jsx_runtime2.jsx(Search, {
+                    /* @__PURE__ */ jsx_runtime.jsx(Search, {
                       size: 13,
                       style: { color: "var(--dsw-alias-label-tertiary, #a1a1aa)" }
                     }),
-                    /* @__PURE__ */ jsx_runtime2.jsx("input", {
+                    /* @__PURE__ */ jsx_runtime.jsx("input", {
                       type: "text",
                       className: "copis-workspace-search-input",
                       placeholder: "搜索文件...",
                       value: filterText,
                       onChange: (e) => setFilterText(e.target.value)
                     }),
-                    filterText && /* @__PURE__ */ jsx_runtime2.jsx("button", {
+                    filterText && /* @__PURE__ */ jsx_runtime.jsx("button", {
                       type: "button",
                       className: "copis-workspace-refresh-btn",
                       onClick: () => setFilterText(""),
                       title: "清空搜索",
-                      children: /* @__PURE__ */ jsx_runtime2.jsx(X, {
+                      children: /* @__PURE__ */ jsx_runtime.jsx(X, {
                         size: 12
                       })
                     })
                   ]
                 }),
-                /* @__PURE__ */ jsx_runtime2.jsx("button", {
+                /* @__PURE__ */ jsx_runtime.jsx("button", {
                   type: "button",
                   className: "copis-header-action-btn",
                   style: { height: "28px", padding: "0 8px" },
                   onClick: handleRefresh,
                   title: "刷新文件树",
-                  children: /* @__PURE__ */ jsx_runtime2.jsx(RefreshCw, {
+                  children: /* @__PURE__ */ jsx_runtime.jsx(RefreshCw, {
                     size: 12
                   })
                 })
               ]
             }),
-            sessionCwd && /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+            sessionCwd && /* @__PURE__ */ jsx_runtime.jsxs("div", {
               style: {
                 fontSize: "11px",
                 color: "var(--dsw-alias-label-tertiary, #a1a1aa)",
@@ -2106,17 +2088,17 @@ function CopisDetailsPanel(props) {
               title: sessionCwd,
               children: [
                 "根目录: ",
-                /* @__PURE__ */ jsx_runtime2.jsx("span", {
+                /* @__PURE__ */ jsx_runtime.jsx("span", {
                   style: { color: "var(--dsw-alias-label-secondary, #71717a)" },
                   children: sessionCwd.split(/[/\\]/).pop() || sessionCwd
                 })
               ]
             }),
-            /* @__PURE__ */ jsx_runtime2.jsx("div", {
+            /* @__PURE__ */ jsx_runtime.jsx("div", {
               className: "copis-tree-container",
-              children: filterText.trim() ? filteredFiles.length > 0 ? /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+              children: filterText.trim() ? filteredFiles.length > 0 ? /* @__PURE__ */ jsx_runtime.jsxs("div", {
                 children: [
-                  /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+                  /* @__PURE__ */ jsx_runtime.jsxs("div", {
                     style: { fontSize: "11px", color: "var(--dsw-alias-label-tertiary, #a1a1aa)", padding: "4px 6px" },
                     children: [
                       "匹配结果 (",
@@ -2124,39 +2106,39 @@ function CopisDetailsPanel(props) {
                       ")"
                     ]
                   }),
-                  filteredFiles.map((file) => /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+                  filteredFiles.map((file) => /* @__PURE__ */ jsx_runtime.jsxs("div", {
                     className: "copis-tree-node-row",
                     onClick: () => openPreview(file),
                     title: file.path,
                     children: [
-                      /* @__PURE__ */ jsx_runtime2.jsx(FileCode, {
+                      /* @__PURE__ */ jsx_runtime.jsx(FileCode, {
                         size: 14,
                         style: { color: getFileIconColor(file.name) }
                       }),
-                      /* @__PURE__ */ jsx_runtime2.jsx("span", {
+                      /* @__PURE__ */ jsx_runtime.jsx("span", {
                         style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
                         children: file.name
                       }),
-                      file.size !== undefined && /* @__PURE__ */ jsx_runtime2.jsx("span", {
+                      file.size !== undefined && /* @__PURE__ */ jsx_runtime.jsx("span", {
                         style: { fontSize: "10px", color: "var(--dsw-alias-label-tertiary, #a1a1aa)" },
                         children: formatSize(file.size)
                       })
                     ]
                   }, file.path))
                 ]
-              }) : /* @__PURE__ */ jsx_runtime2.jsx("div", {
+              }) : /* @__PURE__ */ jsx_runtime.jsx("div", {
                 style: { textAlign: "center", padding: "40px 10px", color: "var(--dsw-alias-label-tertiary, #a1a1aa)", fontSize: "12px" },
                 children: "未找到匹配的文件"
-              }) : isRootLoading ? /* @__PURE__ */ jsx_runtime2.jsx("div", {
+              }) : isRootLoading ? /* @__PURE__ */ jsx_runtime.jsx("div", {
                 style: { textAlign: "center", padding: "40px 10px", color: "var(--dsw-alias-label-tertiary, #a1a1aa)", fontSize: "12px" },
                 children: "正在加载工作区文件..."
-              }) : rootEntries.length > 0 ? renderTreeNodes(rootEntries, 0) : /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+              }) : rootEntries.length > 0 ? renderTreeNodes(rootEntries, 0) : /* @__PURE__ */ jsx_runtime.jsxs("div", {
                 style: { textAlign: "center", padding: "40px 10px", color: "var(--dsw-alias-label-tertiary, #a1a1aa)", fontSize: "12px" },
                 children: [
-                  /* @__PURE__ */ jsx_runtime2.jsx("p", {
+                  /* @__PURE__ */ jsx_runtime.jsx("p", {
                     children: "工作区为空"
                   }),
-                  /* @__PURE__ */ jsx_runtime2.jsx("p", {
+                  /* @__PURE__ */ jsx_runtime.jsx("p", {
                     style: { fontSize: "11px", marginTop: "4px" },
                     children: sessionCwd ? "当前目录未包含可展示的文件" : "等待会话初始化..."
                   })
@@ -2171,7 +2153,7 @@ function CopisDetailsPanel(props) {
 }
 function HighlightSearchText({ text, query }) {
   if (!query || !query.trim())
-    return /* @__PURE__ */ jsx_runtime2.jsx(jsx_runtime2.Fragment, {
+    return /* @__PURE__ */ jsx_runtime.jsx(jsx_runtime.Fragment, {
       children: text
     });
   const trimmed = query.trim();
@@ -2182,11 +2164,11 @@ function HighlightSearchText({ text, query }) {
   let idx = lowerText.indexOf(lowerQuery);
   while (idx !== -1) {
     if (idx > lastIndex) {
-      parts.push(/* @__PURE__ */ jsx_runtime2.jsx("span", {
+      parts.push(/* @__PURE__ */ jsx_runtime.jsx("span", {
         children: text.slice(lastIndex, idx)
       }, `t-${lastIndex}`));
     }
-    parts.push(/* @__PURE__ */ jsx_runtime2.jsx("mark", {
+    parts.push(/* @__PURE__ */ jsx_runtime.jsx("mark", {
       style: {
         background: "var(--creation-ui-primary-background, rgba(108, 0, 204, 0.2))",
         color: "var(--creation-ui-primary, #6c00cc)",
@@ -2200,11 +2182,11 @@ function HighlightSearchText({ text, query }) {
     idx = lowerText.indexOf(lowerQuery, lastIndex);
   }
   if (lastIndex < text.length) {
-    parts.push(/* @__PURE__ */ jsx_runtime2.jsx("span", {
+    parts.push(/* @__PURE__ */ jsx_runtime.jsx("span", {
       children: text.slice(lastIndex)
     }, `end-${lastIndex}`));
   }
-  return /* @__PURE__ */ jsx_runtime2.jsx(jsx_runtime2.Fragment, {
+  return /* @__PURE__ */ jsx_runtime.jsx(jsx_runtime.Fragment, {
     children: parts
   });
 }
@@ -2363,25 +2345,25 @@ function CopisSearchModal(props) {
   if (!props.open)
     return null;
   const isQueryDirty = query.trim() !== committedQuery;
-  return /* @__PURE__ */ jsx_runtime2.jsx("div", {
+  return /* @__PURE__ */ jsx_runtime.jsx("div", {
     className: "copis-search-modal-backdrop",
     onClick: (e) => {
       if (e.target === e.currentTarget) {
         props.onClose();
       }
     },
-    children: /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+    children: /* @__PURE__ */ jsx_runtime.jsxs("div", {
       className: "copis-search-modal-card",
       onKeyDown: handleKeyDown,
       children: [
-        /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+        /* @__PURE__ */ jsx_runtime.jsxs("div", {
           className: "copis-search-input-row",
           children: [
-            /* @__PURE__ */ jsx_runtime2.jsx(Search, {
+            /* @__PURE__ */ jsx_runtime.jsx(Search, {
               size: 16,
               style: { color: "var(--dsw-alias-label-tertiary, #a1a1aa)", flexShrink: 0 }
             }),
-            /* @__PURE__ */ jsx_runtime2.jsx("input", {
+            /* @__PURE__ */ jsx_runtime.jsx("input", {
               ref: inputRef,
               type: "text",
               className: "copis-search-main-input",
@@ -2395,7 +2377,7 @@ function CopisSearchModal(props) {
                 isComposingRef.current = false;
               }
             }),
-            query && /* @__PURE__ */ jsx_runtime2.jsx("button", {
+            query && /* @__PURE__ */ jsx_runtime.jsx("button", {
               type: "button",
               onClick: () => {
                 setQuery("");
@@ -2416,49 +2398,49 @@ function CopisSearchModal(props) {
                 alignItems: "center"
               },
               title: "清空",
-              children: /* @__PURE__ */ jsx_runtime2.jsx(X, {
+              children: /* @__PURE__ */ jsx_runtime.jsx(X, {
                 size: 14
               })
             }),
-            /* @__PURE__ */ jsx_runtime2.jsxs("button", {
+            /* @__PURE__ */ jsx_runtime.jsxs("button", {
               type: "button",
               className: "copis-search-submit-btn",
               disabled: !query.trim() || loading,
               onClick: () => void runSearch(),
               children: [
-                loading ? /* @__PURE__ */ jsx_runtime2.jsx(LoaderCircle, {
+                loading ? /* @__PURE__ */ jsx_runtime.jsx(LoaderCircle, {
                   size: 13,
                   className: "copis-spin"
-                }) : /* @__PURE__ */ jsx_runtime2.jsx(Search, {
+                }) : /* @__PURE__ */ jsx_runtime.jsx(Search, {
                   size: 13
                 }),
-                /* @__PURE__ */ jsx_runtime2.jsx("span", {
+                /* @__PURE__ */ jsx_runtime.jsx("span", {
                   children: "搜索"
                 })
               ]
             })
           ]
         }),
-        /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+        /* @__PURE__ */ jsx_runtime.jsxs("div", {
           className: "copis-search-results-list",
           children: [
-            !hasSearched && /* @__PURE__ */ jsx_runtime2.jsx("div", {
+            !hasSearched && /* @__PURE__ */ jsx_runtime.jsx("div", {
               style: { padding: "36px 16px", textAlign: "center", fontSize: "13px", color: "var(--dsw-alias-label-tertiary, #a1a1aa)" },
               children: "输入关键词后按 Enter 或点击搜索开始查找"
             }),
-            hasSearched && loading && allResults.length === 0 && /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+            hasSearched && loading && allResults.length === 0 && /* @__PURE__ */ jsx_runtime.jsxs("div", {
               style: { padding: "36px 16px", textAlign: "center", fontSize: "13px", color: "var(--dsw-alias-label-tertiary, #a1a1aa)", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" },
               children: [
-                /* @__PURE__ */ jsx_runtime2.jsx(LoaderCircle, {
+                /* @__PURE__ */ jsx_runtime.jsx(LoaderCircle, {
                   size: 14,
                   className: "copis-spin"
                 }),
-                /* @__PURE__ */ jsx_runtime2.jsx("span", {
+                /* @__PURE__ */ jsx_runtime.jsx("span", {
                   children: "正在搜索..."
                 })
               ]
             }),
-            hasSearched && !loading && allResults.length === 0 && /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+            hasSearched && !loading && allResults.length === 0 && /* @__PURE__ */ jsx_runtime.jsxs("div", {
               style: { padding: "36px 16px", textAlign: "center", fontSize: "13px", color: "var(--dsw-alias-label-tertiary, #a1a1aa)" },
               children: [
                 '未找到与 "',
@@ -2466,9 +2448,9 @@ function CopisSearchModal(props) {
                 '" 匹配的会话内容'
               ]
             }),
-            titleResults.length > 0 && /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+            titleResults.length > 0 && /* @__PURE__ */ jsx_runtime.jsxs("div", {
               children: [
-                /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+                /* @__PURE__ */ jsx_runtime.jsxs("div", {
                   style: { padding: "6px 14px 2px", fontSize: "11px", fontWeight: 600, color: "var(--dsw-alias-label-tertiary, #a1a1aa)", textTransform: "uppercase" },
                   children: [
                     "会话匹配 (",
@@ -2476,23 +2458,23 @@ function CopisSearchModal(props) {
                     ")"
                   ]
                 }),
-                titleResults.map((item, idx) => /* @__PURE__ */ jsx_runtime2.jsxs("button", {
+                titleResults.map((item, idx) => /* @__PURE__ */ jsx_runtime.jsxs("button", {
                   type: "button",
                   className: "copis-search-item-row",
                   "data-selected": selectedIndex === idx ? "true" : "false",
                   onClick: () => navigateToResult(item),
                   onMouseEnter: () => setSelectedIndex(idx),
                   children: [
-                    item.source === "creation" ? /* @__PURE__ */ jsx_runtime2.jsx("span", {
+                    item.source === "creation" ? /* @__PURE__ */ jsx_runtime.jsx("span", {
                       className: "copis-search-badge-creation",
                       children: "创造"
-                    }) : /* @__PURE__ */ jsx_runtime2.jsx("span", {
+                    }) : /* @__PURE__ */ jsx_runtime.jsx("span", {
                       className: "copis-search-badge-agent",
                       children: "Agent"
                     }),
-                    /* @__PURE__ */ jsx_runtime2.jsx("span", {
+                    /* @__PURE__ */ jsx_runtime.jsx("span", {
                       style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "13px", fontWeight: 500 },
-                      children: /* @__PURE__ */ jsx_runtime2.jsx(HighlightSearchText, {
+                      children: /* @__PURE__ */ jsx_runtime.jsx(HighlightSearchText, {
                         text: item.title,
                         query: committedQuery
                       })
@@ -2501,10 +2483,10 @@ function CopisSearchModal(props) {
                 }, `title-${item.id}-${idx}`))
               ]
             }),
-            contentResults.length > 0 && /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+            contentResults.length > 0 && /* @__PURE__ */ jsx_runtime.jsxs("div", {
               style: { borderTop: "0.5px solid var(--dsw-alias-border-l3, rgba(255, 255, 255, 0.08))", marginTop: "4px", paddingTop: "4px" },
               children: [
-                /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+                /* @__PURE__ */ jsx_runtime.jsxs("div", {
                   style: { padding: "6px 14px 2px", fontSize: "11px", fontWeight: 600, color: "var(--dsw-alias-label-tertiary, #a1a1aa)", textTransform: "uppercase" },
                   children: [
                     "消息内容匹配 (",
@@ -2514,7 +2496,7 @@ function CopisSearchModal(props) {
                 }),
                 contentResults.map((item, idx) => {
                   const globalIdx = titleResults.length + idx;
-                  return /* @__PURE__ */ jsx_runtime2.jsxs("button", {
+                  return /* @__PURE__ */ jsx_runtime.jsxs("button", {
                     type: "button",
                     className: "copis-search-item-row",
                     "data-selected": selectedIndex === globalIdx ? "true" : "false",
@@ -2522,22 +2504,22 @@ function CopisSearchModal(props) {
                     onMouseEnter: () => setSelectedIndex(globalIdx),
                     style: { flexDirection: "column", alignItems: "flex-start", gap: "3px" },
                     children: [
-                      /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+                      /* @__PURE__ */ jsx_runtime.jsxs("div", {
                         style: { display: "flex", alignItems: "center", gap: "8px", width: "100%" },
                         children: [
-                          /* @__PURE__ */ jsx_runtime2.jsx("span", {
+                          /* @__PURE__ */ jsx_runtime.jsx("span", {
                             className: "copis-search-badge-agent",
                             children: "Agent"
                           }),
-                          /* @__PURE__ */ jsx_runtime2.jsx("span", {
+                          /* @__PURE__ */ jsx_runtime.jsx("span", {
                             style: { fontSize: "12px", fontWeight: 500, opacity: 0.85, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
                             children: item.title
                           })
                         ]
                       }),
-                      item.snippet && /* @__PURE__ */ jsx_runtime2.jsx("div", {
+                      item.snippet && /* @__PURE__ */ jsx_runtime.jsx("div", {
                         style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary, #71717a)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%", paddingLeft: "4px" },
-                        children: /* @__PURE__ */ jsx_runtime2.jsx(HighlightSearchText, {
+                        children: /* @__PURE__ */ jsx_runtime.jsx(HighlightSearchText, {
                           text: item.snippet,
                           query: committedQuery
                         })
@@ -2549,19 +2531,19 @@ function CopisSearchModal(props) {
             })
           ]
         }),
-        /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+        /* @__PURE__ */ jsx_runtime.jsxs("div", {
           className: "copis-search-footer",
           children: [
-            /* @__PURE__ */ jsx_runtime2.jsxs("span", {
+            /* @__PURE__ */ jsx_runtime.jsxs("span", {
               children: [
                 "↵ ",
                 isQueryDirty || !hasSearched ? "搜索" : "打开"
               ]
             }),
-            /* @__PURE__ */ jsx_runtime2.jsx("span", {
+            /* @__PURE__ */ jsx_runtime.jsx("span", {
               children: "↑↓ 选择"
             }),
-            /* @__PURE__ */ jsx_runtime2.jsx("span", {
+            /* @__PURE__ */ jsx_runtime.jsx("span", {
               children: "Esc 关闭"
             })
           ]
@@ -2629,31 +2611,31 @@ function CopisShellOverlayManager(props) {
     observer.observe(document.body, { attributes: true, childList: true, subtree: true, attributeFilter: ["class"] });
     return () => observer.disconnect();
   }, []);
-  return /* @__PURE__ */ jsx_runtime2.jsxs(jsx_runtime2.Fragment, {
+  return /* @__PURE__ */ jsx_runtime.jsxs(jsx_runtime.Fragment, {
     children: [
-      !hasSessionHeader && !isSubviewActive && /* @__PURE__ */ jsx_runtime2.jsx("div", {
+      !hasSessionHeader && !isSubviewActive && /* @__PURE__ */ jsx_runtime.jsx("div", {
         className: "copis-hero-utilities-overlay",
-        children: /* @__PURE__ */ jsx_runtime2.jsx(CopisHeaderUtilities, {
+        children: /* @__PURE__ */ jsx_runtime.jsx(CopisHeaderUtilities, {
           ctx: props.ctx
         })
       }),
-      drawerOpen && /* @__PURE__ */ jsx_runtime2.jsxs(jsx_runtime2.Fragment, {
+      drawerOpen && /* @__PURE__ */ jsx_runtime.jsxs(jsx_runtime.Fragment, {
         children: [
-          /* @__PURE__ */ jsx_runtime2.jsx("div", {
+          /* @__PURE__ */ jsx_runtime.jsx("div", {
             className: "copis-details-drawer-backdrop",
             onClick: () => setDrawerOpen(false),
             "aria-label": "关闭文件面板"
           }),
-          /* @__PURE__ */ jsx_runtime2.jsx("div", {
+          /* @__PURE__ */ jsx_runtime.jsx("div", {
             className: "copis-details-drawer-root",
-            children: /* @__PURE__ */ jsx_runtime2.jsx(CopisDetailsPanel, {
+            children: /* @__PURE__ */ jsx_runtime.jsx(CopisDetailsPanel, {
               ctx: props.ctx,
               closeDetails: () => setDrawerOpen(false)
             })
           })
         ]
       }),
-      searchOpen && /* @__PURE__ */ jsx_runtime2.jsx(CopisSearchModal, {
+      searchOpen && /* @__PURE__ */ jsx_runtime.jsx(CopisSearchModal, {
         open: searchOpen,
         onClose: () => setSearchOpen(false),
         ctx: props.ctx
@@ -2666,7 +2648,7 @@ function apply(ctx) {
   cachedCordisContext = ctx;
   console.log("[Copis Creation Web] 客户端插件正在激活...", ctx);
   installCreationStyles();
-  ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({ name: "sidebar.footer.action", id: "copis-creation-sidebar", order: -100 }, (props) => /* @__PURE__ */ jsx_runtime2.jsx(CreationSidebarNavigation, {
+  ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({ name: "sidebar.footer.action", id: "copis-creation-sidebar", order: -100 }, (props) => /* @__PURE__ */ jsx_runtime.jsx(CreationSidebarNavigation, {
     ...props,
     ctx
   })));
@@ -2674,7 +2656,7 @@ function apply(ctx) {
     name: "conversation.session.header.utilities",
     id: "copis-session-header-utilities",
     order: 100
-  }, (props) => /* @__PURE__ */ jsx_runtime2.jsx(CopisHeaderUtilities, {
+  }, (props) => /* @__PURE__ */ jsx_runtime.jsx(CopisHeaderUtilities, {
     ...props,
     ctx
   })));
@@ -2682,7 +2664,7 @@ function apply(ctx) {
     name: "shell.overlay",
     id: "copis-shell-overlay-manager",
     order: 100
-  }, () => /* @__PURE__ */ jsx_runtime2.jsx(CopisShellOverlayManager, {
+  }, () => /* @__PURE__ */ jsx_runtime.jsx(CopisShellOverlayManager, {
     ctx
   })));
   console.log("[Copis Creation Web] 客户端插件插槽注入完成");
