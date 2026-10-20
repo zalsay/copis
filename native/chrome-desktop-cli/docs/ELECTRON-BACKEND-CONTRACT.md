@@ -32,7 +32,7 @@ export interface ChromeDesktopBackend {
 export class ChromeDesktopComponentClient implements ChromeDesktopBackend { /* 注入依赖供BDD测试 */ }
 ```
 
-`input` 的 x/y 是 Observe 图片坐标；不接收真实屏幕坐标，不需要 Electron 激活/焦点复查。客户端抛 Error，message 以前缀 `CHROME_<...>:` 标明对外错误：CONNECTION_BUSY/BUSY→CHROME_BUSY；FRAME_UNKNOWN→CHROME_FRAME_STALE；FRAME_GEOMETRY_CHANGED→CHROME_GEOMETRY_CHANGED；WINDOW_UNAVAILABLE→CHROME_WINDOW_UNAVAILABLE；FOCUS_LOST/FOCUS_UNVERIFIED→CHROME_FOCUS_LOST；permission→对应现有 CHROME_SCREEN_PERMISSION_REQUIRED/CHROME_INPUT_PERMISSION_REQUIRED；native timeout→CHROME_ACTION_UNCERTAIN；不存在或不可安装组件→CHROME_HELPER_FAILED（中文提示功能模块设置）。service 不依赖任意一条 renderer 帧。
+`input` 的 x/y 是 Observe 图片坐标；不接收真实屏幕坐标，不需要 Electron 激活/焦点复查。客户端抛 Error，message 以前缀 `CHROME_<...>:` 标明对外错误：CONNECTION_BUSY/BUSY→CHROME_BUSY；FRAME_UNKNOWN→CHROME_FRAME_STALE；FRAME_GEOMETRY_CHANGED→CHROME_GEOMETRY_CHANGED；WINDOW_UNAVAILABLE→CHROME_WINDOW_UNAVAILABLE；FOCUS_LOST/FOCUS_UNVERIFIED/POINTER_OBSCURED/POINTER_UNVERIFIED→CHROME_FOCUS_LOST；permission→对应现有 CHROME_SCREEN_PERMISSION_REQUIRED/CHROME_INPUT_PERMISSION_REQUIRED；native timeout→CHROME_ACTION_UNCERTAIN；不存在或不可安装组件→CHROME_HELPER_FAILED（中文提示功能模块设置）。service 不依赖任意一条 renderer 帧。
 
 组件端查找与按需安装仅通过 functional-module-manager/store：名字 chrome-desktop-cli。归档保留独立包顶层目录，manifest entrypoint 为 `copis-chrome-<version>-darwin-<arch>/copis-chrome`；helper 必须位于入口同目录，协议元数据 module.json 同目录且 version 与 active一致。不要假设每次版本 entrypoint固定，必须校验 basename 为 copis-chrome、helper为同目录。
 

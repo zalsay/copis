@@ -658,3 +658,22 @@ describe('Chrome 组件：保留安全的底层故障定位', () => {
     })
   }
 })
+
+describe('Chrome 组件：真实指针遮挡错误保留归属原因', () => {
+  for (const native of ['POINTER_OBSCURED', 'POINTER_UNVERIFIED']) {
+    test(`Given ${native} When click被拒绝 Then 返回可恢复输入归属错误且不重放`, async () => {
+      const f = await fixture()
+      await f.client.connectWindow(42, 123)
+      await f.configure({ failAction: 'click', code: native, exitCode: 1, stderr: 'private-pointer-token 输入原文' })
+      let message = ''
+      try { await f.client.input('native-frame', { action: 'click', x: 1, y: 1, clickCount: 1 }) }
+      catch (error) { message = (error as Error).message }
+      expect(message).toContain('CHROME_FOCUS_LOST:')
+      expect(message).toContain(native)
+      expect(message).toContain('click')
+      expect(message).not.toContain('private-pointer-token')
+      expect(message).not.toContain('输入原文')
+      expect((await f.events()).filter(e => e.action === 'click')).toHaveLength(1)
+    })
+  }
+})

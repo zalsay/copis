@@ -13,7 +13,7 @@ cd native/chrome-desktop-cli
 ./build.sh
 ```
 
-`dist/copis-chrome-0.1.3-darwin-arm64/`（Intel 为 `x64`）包含两个可执行文件、协议版本元数据、本说明、AGPL-3.0-only 许可证及 `source/` 完整功能包源码；同目录生成 `.tar.gz` 和 SHA256。保持 `copis-chrome` 与 `copis-chrome-helper` 相邻，放到固定的安装目录，再把该目录加入 PATH。`./build.sh debug` 可生成开发版本；仅在本机原生构建，不跨平台混用产物。
+`dist/copis-chrome-0.1.4-darwin-arm64/`（Intel 为 `x64`）包含两个可执行文件、协议版本元数据、本说明、AGPL-3.0-only 许可证及 `source/` 完整功能包源码；同目录生成 `.tar.gz` 和 SHA256。保持 `copis-chrome` 与 `copis-chrome-helper` 相邻，放到固定的安装目录，再把该目录加入 PATH。`./build.sh debug` 可生成开发版本；仅在本机原生构建，不跨平台混用产物。
 
 默认本地 ad-hoc 签名不等于公证分发。公开分发时设置 `COPIS_CHROME_SIGN_IDENTITY` 使用 Developer ID 签名，并在发布流程完成公证。系统权限取决于 macOS 的代码身份和安装路径，移动或重新签名二进制后可能需要重新授予；构建脚本不承诺保留 TCC 授权。
 
@@ -67,6 +67,8 @@ copis-chrome press --connection <connectionId> --frame <frameId> --key 'Enter'
 
 观察不切换前台；输入前自动唤起已连接的窗口，通过 NSWorkspace 前台进程、Chrome 的 AXFrontmost 与精确 AXFocusedWindow ID、CG/AX 几何共同确认后投递系统事件。任一检查失败或无值均拒绝输入。从其他应用或其他 Chrome 窗口恢复到已连接窗口时，屏幕顶部显示原生提示“AI正在操作Chrome窗口...”，3 秒后自动关闭，切到其他应用时立即收起。提示不获取焦点且鼠标可穿透，连续输入不会重复弹出；输入位置与提示重合时会先收起提示，再执行完整遮挡校验。只读观察不显示提示。
 
+输入前同时核对 WindowServer 的实际输入命中窗口与 AX 命中窗口，精确匹配所选窗口 ID/PID；不会仅因鼠标可穿透的调光/系统绘制层排在上面就误报遮挡。真实接收输入的外部浮层、未知归属或查询失败仍拒绝输入，不按应用名或窗口层级设置豁免。
+
 因此鼠标键盘会被占用，不能同时保证与用户桌面输入隔离。`sent: true` 只表示事件已投递，网页业务是否成功由下一次观察确认。最小化、关闭、锁屏、其他 Space 等状态可能使目标不可用，CLI 会返回明确错误。
 
 ## 后台进程与取消
@@ -112,7 +114,7 @@ cargo fmt --check
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
 ./build.sh
-bash tests/native-smoke.sh dist/copis-chrome-0.1.3-darwin-arm64/copis-chrome-helper
+bash tests/native-smoke.sh dist/copis-chrome-0.1.4-darwin-arm64/copis-chrome-helper
 
 # 真实焦点回归（已有系统权限）：显式指定 Chrome 窗口和另一应用 PID。
 # 只切换焦点，不截图、不发送鼠标键盘；不会被默认无副作用 smoke 自动执行。
@@ -123,13 +125,16 @@ bash tests/toast-smoke.sh
 
 # 显式只读采集回退回归：不查看图像、不激活窗口或发送输入。
 bash tests/capture-background-smoke.sh <Chrome窗口ID>
+
+# 显式激活 Chrome 并展示受控浮层，验证鼠标可穿透/拦截差异，随后恢复前台；不点击或截图。
+bash tests/pointer-occlusion-smoke.sh <Chrome窗口ID>
 ```
 
-Rust 进程测试使用假 helper，不会操作本机 Chrome。原生 smoke 只做协议与参数校验，不请求权限、不点击输入。真实截图、窗口激活、点击输入需在用户确认后测试。详细结果见 `docs/VERIFICATION.md`，v0.1.1 焦点修复与真实导航见 `docs/FOCUS-VERIFICATION.md`，v0.1.2 原生操作提示见 `docs/TOAST-VERIFICATION.md`，v0.1.3 Observe 超时与只读回退见 `docs/CAPTURE-VERIFICATION.md`（分发包内位于 `source/docs/`）。
+Rust 进程测试使用假 helper，不会操作本机 Chrome。原生 smoke 只做协议与参数校验，不请求权限、不点击输入。真实截图、窗口激活、点击输入需在用户确认后测试。详细结果见 `docs/VERIFICATION.md`，v0.1.1 焦点修复与真实导航见 `docs/FOCUS-VERIFICATION.md`，v0.1.2 原生操作提示见 `docs/TOAST-VERIFICATION.md`，v0.1.3 Observe 超时与只读回退见 `docs/CAPTURE-VERIFICATION.md`，v0.1.4 指针归属修复见 `docs/POINTER-VERIFICATION.md`（分发包内位于 `source/docs/`）。
 
 ## 原生能力边界
 
-精确关联 AX 窗口与 CGWindowID 沿用现有实现中的 `_AXUIElementGetWindow` 系统符号；它不是 Apple 的公开 API。后续 macOS 更新可能影响该映射，无法确认时工具拒绝输入。当前发布包为本机架构，Intel 需要在 Intel Mac 上构建并验收。
+精确关联 AX 窗口与 CGWindowID 沿用现有实现中的 `_AXUIElementGetWindow` 系统符号；它不是 Apple 的公开 API。后续 macOS 更新可能影响该映射，无法确认时工具拒绝输入。指针归属还动态读取 WindowServer 的 `SLSFindWindowAndOwner` / `SLSConnectionGetPID`，同样不是公开 API；符号缺失时回到原有保守 CG 遮挡检查，查询失败或身份不匹配时拒绝输入，不退化为仅信 AX。当前发布包为本机架构，Intel 需要在 Intel Mac 上构建并验收。
 
 ## Copis 组件更新
 
@@ -152,7 +157,7 @@ bun run prepare:chrome-desktop-cli-module
 ./deploy.sh --chrome-cli --skip-publish
 
 # 显式提供已有归档时校验后发布；版本参数必须与统一版本锁一致
-./deploy.sh --chrome-cli --chrome-cli-archive /path/to/chrome.tar.gz --chrome-cli-version 0.1.3
+./deploy.sh --chrome-cli --chrome-cli-archive /path/to/chrome.tar.gz --chrome-cli-version 0.1.4
 ```
 
 `--chrome-desktop-cli` 及对应 archive/version 长参数继续兼容。同一次命令提供短、长参数时只能同值；不同值会在构建前拒绝，CLI显式值可以覆盖环境配置。单独部署Chrome默认跳过JS依赖安装，需要时用 `--install` 开启。未指定archive时始终从源码构建，不复用resources中可能过时的归档。

@@ -32,6 +32,7 @@ func axWindowID(_ element: AXUIElement, _ identifier: UnsafeMutablePointer<CGWin
 final class ChromeDesktop {
     private let bundleID = "com.google.Chrome"
     private let operationToast = ChromeControlToast()
+    private lazy var eventHitReader = WindowEventHitReader()
 
     func permissions(request: Bool) -> [String: Any] {
         if request {
@@ -249,20 +250,16 @@ final class ChromeDesktop {
     func verifyPointer(_ point: CGPoint, target: TargetWindow, expected: WindowBounds) throws {
         guard expected.contains(point) else { throw HelperFailure.invalidArgument }
         onMain { operationToast.dismissIfCovering(point) }
-        // CG 按由前至后的顺序检查遮挡，连同非普通窗口/其他应用的浮层一起处理。
-        var foundTarget = false
-        for info in windowList() {
-            guard let raw = info[kCGWindowBounds as String] as? [String: Any],
-                  let rect = CGRect(dictionaryRepresentation: raw as CFDictionary), rect.contains(point),
-                  (info[kCGWindowAlpha as String] as? Double ?? 1) > 0 else { continue }
-            guard (info[kCGWindowNumber as String] as? UInt32) == target.windowId,
-                  (info[kCGWindowOwnerPID as String] as? Int32) == target.pid else {
-                throw HelperFailure(code: "POINTER_OBSCURED", message: "鼠标目标点被其他窗口覆盖，未发送输入")
-            }
-            foundTarget = true
-            break
-        }
-        guard foundTarget else { throw HelperFailure(code: "POINTER_UNVERIFIED", message: "鼠标目标点没有可确认的窗口区域") }
+        try verifyPointerOwnership(target: target, eventTarget: {
+            if self.eventHitReader.isAvailable { return try self.eventHitReader.target(at: point) }
+            // 较旧系统缺少只读命中 SPI 时仍使用原保守检查，不能忽略未知绘制窗口。
+            return try conservativePointerTarget(at: point, windows: self.windowList())
+        }, accessibilityTarget: {
+            try self.accessibilityPointerTarget(at: point)
+        })
+    }
+
+    private func accessibilityPointerTarget(at point: CGPoint) throws -> TargetWindow {
         let system = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(system, 0.35)
         var hit: AXUIElement?
@@ -270,8 +267,8 @@ final class ChromeDesktop {
               let hit else { throw HelperFailure(code: "POINTER_UNVERIFIED", message: "无法确认鼠标目标点所属窗口") }
         var pid: pid_t = 0
         let hitWindow = elementAttribute(hit, kAXWindowAttribute) ?? hit
-        guard AXUIElementGetPid(hit, &pid) == .success, pid == target.pid, identifier(hitWindow) == target.windowId else {
-            throw HelperFailure(code: "POINTER_OBSCURED", message: "鼠标目标点不属于指定 Chrome 窗口，未发送输入")
-        }
+        guard AXUIElementGetPid(hit, &pid) == .success, pid > 0,
+              let id = identifier(hitWindow) else { throw pointerUnverified() }
+        return TargetWindow(windowId: id, pid: pid)
     }
 }
