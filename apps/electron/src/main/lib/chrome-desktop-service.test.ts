@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { chromeFixture } from './chrome-desktop-test-fixture'
 const fixtures: ReturnType<typeof chromeFixture>[] = []
 function fixture() { const value = chromeFixture(); fixtures.push(value); return value }
+function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done }); return { promise, resolve } }
 afterEach(() => { for (const f of fixtures.splice(0)) f.service.releaseCurrentControl() })
 
 describe('Chrome 桌面工具组件服务 BDD', () => {
@@ -31,6 +32,83 @@ describe('Chrome 桌面工具组件服务 BDD', () => {
     await f.call('ChromeDesktopClick', 'click', { controlId, frameId: image.frame.frameId, x: 800, y: 600, clickCount: 2 })
     expect(f.component.inputCalls).toEqual([{ frameId: image.frame.frameId, action: { action: 'click', x: 800, y: 600, clickCount: 2 } }])
     expect(f.service.getSessionState()?.mode).toBe('control')
+  })
+
+  test('Given 已授权 Chrome 主窗口文件选择框 When 选择绝对路径 Then 不依赖frame并要求Observe确认', async () => {
+    const f = fixture(); const { controlId, confirm } = await f.begin(); await confirm()
+    const frame = await f.observe(controlId)
+    const path = '/Users/test/Downloads/report.pdf'
+    const response = await f.call('ChromeDesktopSelectFile', 'select-file-1', { controlId, path })
+    expect(response).toMatchObject({ kind: 'json', value: { selected: true, dialogClosed: true, uploadConfirmed: false, requiresObserve: true } })
+    expect(f.component.fileSelections).toEqual([path])
+    expect(f.component.observeCalls).toBe(1)
+    expect(f.service.getSessionState()?.mode).toBe('control')
+    await f.call('ChromeDesktopPress', 'reusable-frame', { controlId, frameId: frame.frame.frameId, key: 'Enter' })
+    expect(f.component.inputCalls.at(-1)).toEqual({ frameId: frame.frame.frameId, action: { action: 'press', key: 'Enter' } })
+  })
+
+  test('Given 另一session或token When 选择文件 Then 不调用原生组件', async () => {
+    const f = fixture(); const { controlId, confirm } = await f.begin(); await confirm()
+    await expect(f.call('ChromeDesktopSelectFile', 'foreign-session', { controlId, path: '/tmp/a.pdf' }, 'B', 'token-A')).rejects.toThrow('CHROME_CAPABILITY_STALE')
+    await expect(f.call('ChromeDesktopSelectFile', 'foreign-token', { controlId, path: '/tmp/a.pdf' }, 'A', 'wrong-token')).rejects.toThrow('CHROME_CAPABILITY_STALE')
+    expect(f.component.fileSelections).toHaveLength(0)
+  })
+
+  test('Given 非绝对或含控制字符的路径 When 选择文件 Then 原生CLI不被调用且不回显路径', async () => {
+    const f = fixture(); const { controlId, confirm } = await f.begin(); await confirm()
+    for (const path of ['relative.pdf', 'file:///tmp/a.pdf', '/tmp/a\u0000.pdf', '/tmp/a\n.pdf', '/tmp/../secret.pdf', '/tmp/./secret.pdf', '/tmp/file/', `/${'界'.repeat(1366)}`]) {
+      await expect(f.call('ChromeDesktopSelectFile', `bad-${f.component.fileSelections.length}-${path.length}`, { controlId, path })).rejects.toThrow('CHROME_FILE_PATH_INVALID')
+    }
+    expect(f.component.fileSelections).toHaveLength(0)
+  })
+
+  test('Given 旧CLI不认识select-file When 失败后再次Start、Observe和旧帧输入 Then 复用原授权连接', async () => {
+    const f = fixture(); const { controlId, confirm } = await f.begin(); await confirm()
+    const frame = await f.observe(controlId)
+    f.component.onSelectFile = async () => { throw new Error('CHROME_COMPONENT_VERSION_UNSUPPORTED: update required') }
+    await expect(f.call('ChromeDesktopSelectFile', 'legacy-select', { controlId, path: '/tmp/a.pdf' })).rejects.toThrow('CHROME_COMPONENT_VERSION_UNSUPPORTED')
+    expect(f.component.cancels).toBe(0)
+    f.component.onSelectFile = async () => {}
+    expect(await f.call('ChromeDesktopStart', 'resume-after-legacy')).toMatchObject({ kind: 'json', value: { status: 'active', controlId } })
+    expect(f.component.connectCalls).toBe(1)
+    await f.call('ChromeDesktopPress', 'input-after-legacy', { controlId, frameId: frame.frame.frameId, key: 'Enter' })
+    expect(f.component.inputCalls.at(-1)).toEqual({ frameId: frame.frame.frameId, action: { action: 'press', key: 'Enter' } })
+    const observed = await f.observe(controlId, 'observe-after-legacy')
+    expect(observed.kind).toBe('image')
+    expect(f.component.cancels).toBe(0)
+  })
+
+  test('Given SelectFile已在途 When 再次执行输入或SelectFile Then 共用串行门禁', async () => {
+    const f = fixture(); const { controlId, confirm } = await f.begin(); await confirm(); const frame = await f.observe(controlId)
+    const gate = deferred<void>(); const started = deferred<void>()
+    f.component.onSelectFile = () => { started.resolve(); return gate.promise }
+    const first = f.call('ChromeDesktopSelectFile', 'select-first', { controlId, path: '/tmp/a.pdf' })
+    await started.promise
+    await expect(f.call('ChromeDesktopSelectFile', 'select-second', { controlId, path: '/tmp/b.pdf' })).rejects.toThrow('CHROME_BUSY')
+    await expect(f.call('ChromeDesktopPress', 'press-during-select', { controlId, frameId: frame.frame.frameId, key: 'Enter' })).rejects.toThrow('CHROME_BUSY')
+    gate.resolve(); await first
+    expect(f.component.fileSelections).toHaveLength(1)
+  })
+
+  test('Given 同一成功toolCallId重试或碰撞路径 When SelectFile Then 成功只执行一次且碰撞拒绝', async () => {
+    const f = fixture(); const { controlId, confirm } = await f.begin(); await confirm()
+    const input = { controlId, path: '/tmp/a.pdf' }
+    const first = await f.call('ChromeDesktopSelectFile', 'same-select', input)
+    expect(await f.call('ChromeDesktopSelectFile', 'same-select', input)).toEqual(first)
+    await expect(f.call('ChromeDesktopSelectFile', 'same-select', { ...input, path: '/tmp/b.pdf' })).rejects.toThrow('CHROME_TOOL_CALL_COLLISION')
+    expect(f.component.fileSelections).toEqual(['/tmp/a.pdf'])
+  })
+
+  test('Given 文件选择器错误暂停但保留授权 When 修复现场后再次选择 Then 自动恢复不重新connect', async () => {
+    const f = fixture(); const { controlId, confirm } = await f.begin(); await confirm()
+    f.component.onSelectFile = async () => { throw new Error('CHROME_FILE_DIALOG_NOT_FOUND: private path hidden') }
+    await expect(f.call('ChromeDesktopSelectFile', 'select-failed', { controlId, path: '/tmp/a.pdf' })).rejects.toThrow('CHROME_FILE_DIALOG_NOT_FOUND')
+    expect(f.service.getSessionState()?.state).toBe('paused')
+    expect(f.component.cancels).toBe(0)
+    f.component.onSelectFile = async () => {}
+    await f.call('ChromeDesktopSelectFile', 'select-retry', { controlId, path: '/tmp/a.pdf' })
+    expect(f.component.connectCalls).toBe(1)
+    expect(f.component.cancels).toBe(0)
   })
   test('Given 全局停止快捷键被占用 When confirm Then 不连接组件', async () => {
     const f = fixture(); f.setRegister(false); const { confirm } = await f.begin()

@@ -2,7 +2,7 @@ use crate::protocol::{fields, integer, random_id, string, Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub trait Native: Send {
     fn request(&mut self, request: Value) -> Result<Value>;
@@ -76,6 +76,7 @@ impl<N: Native> Service<N> {
             "scroll" => &["action", "connectionId", "frameId", "x", "y", "deltaY"],
             "type" => &["action", "connectionId", "frameId", "text"],
             "press" => &["action", "connectionId", "frameId", "key"],
+            "select-file" => &["action", "connectionId", "path"],
             _ => return Err(Error::invalid("不支持的命令")),
         };
         fields(&request, allowed)?;
@@ -99,6 +100,7 @@ impl<N: Native> Service<N> {
                         Ok(json!({"connected":false}))
                     }
                     "observe" => self.observe(),
+                    "select-file" => self.select_file(&request),
                     _ => self.input(&request),
                 }
             }
@@ -196,6 +198,31 @@ impl<N: Native> Service<N> {
         }
         Ok(window)
     }
+    fn select_file(&mut self, request: &Value) -> Result<Value> {
+        let path = selectable_file_path(string(request, "path")?)?;
+        let window = self.current_window()?;
+        let receipt = self
+            .native
+            .request(json!({
+                "action":"select-file",
+                "windowId":window.window_id,
+                "pid":window.pid,
+                "path":path,
+            }))
+            .map_err(sanitize_file_selection_error)?;
+        if receipt["selected"] != true || receipt["dialogClosed"] != true {
+            return Err(Error::new(
+                "HELPER_PROTOCOL",
+                "原生文件选择未返回有效完成回执",
+            ));
+        }
+        Ok(json!({
+            "selected":true,
+            "dialogClosed":true,
+            "connectionId":self.connection.as_ref().expect("已校验连接").id,
+        }))
+    }
+
     fn observe(&mut self) -> Result<Value> {
         let window = self.current_window()?;
         let id = random_id()?;
@@ -344,6 +371,91 @@ impl<N: Native> Drop for Service<N> {
         self.clear();
     }
 }
+fn selectable_file_path(value: &str) -> Result<PathBuf> {
+    if value.len() > 4096
+        || value.chars().any(char::is_control)
+        || !Path::new(value).is_absolute()
+        || value
+            .split('/')
+            .any(|segment| segment == "." || segment == "..")
+    {
+        return Err(Error::invalid(
+            "path 必须是绝对普通文件路径，不超过 4096 UTF-8 字节且不含控制字符或点分段",
+        ));
+    }
+
+    let canonical = Path::new(value)
+        .canonicalize()
+        .map_err(|_| file_not_readable())?;
+    let canonical_text = canonical
+        .to_str()
+        .filter(|path| is_valid_canonical_file_path(path))
+        .ok_or_else(file_not_readable)?;
+    if !std::fs::metadata(canonical_text).is_ok_and(|metadata| metadata.is_file()) {
+        return Err(file_not_readable());
+    }
+    std::fs::File::open(canonical_text).map_err(|_| file_not_readable())?;
+    Ok(canonical)
+}
+
+fn is_valid_canonical_file_path(path: &str) -> bool {
+    path.len() <= 4096
+        && !path.chars().any(char::is_control)
+        && !path
+            .split('/')
+            .any(|segment| segment == "." || segment == "..")
+}
+
+fn file_not_readable() -> Error {
+    Error::new("FILE_NOT_READABLE", "指定路径不是可读取的普通文件")
+}
+
+fn sanitize_file_selection_error(error: Error) -> Error {
+    let (code, message) = match error.code.as_str() {
+        "FILE_NOT_READABLE" => ("FILE_NOT_READABLE", "指定路径不是可读取的普通文件"),
+        "FILE_DIALOG_NOT_FOUND" => ("FILE_DIALOG_NOT_FOUND", "未找到 Chrome 文件选择对话框"),
+        "UNSUPPORTED" | "FILE_DIALOG_UNSUPPORTED" => (
+            "FILE_DIALOG_UNSUPPORTED",
+            "当前 Chrome 文件选择操作不受支持",
+        ),
+        "UNVERIFIED" | "FILE_DIALOG_UNVERIFIED" | "FOCUS_UNVERIFIED" => {
+            ("FILE_DIALOG_UNVERIFIED", "无法验证 Chrome 文件选择结果")
+        }
+        "TIMEOUT" | "FILE_DIALOG_TIMEOUT" => ("FILE_DIALOG_TIMEOUT", "Chrome 文件选择操作超时"),
+        "INPUT_FAILED" | "FILE_SELECTION_FAILED" => {
+            ("FILE_SELECTION_FAILED", "Chrome 文件选择失败")
+        }
+        "ACCESSIBILITY_PERMISSION_REQUIRED" => (
+            "ACCESSIBILITY_PERMISSION_REQUIRED",
+            "需要授予 Chrome 桌面自动化辅助功能权限",
+        ),
+        "CANCELLED" => ("CANCELLED", "文件选择已取消"),
+        "FOCUS_LOST" => (
+            "FOCUS_LOST",
+            "目标 Chrome 文件选择框已失去焦点，请确认后重试",
+        ),
+        "ACTIVATION_FAILED" => (
+            "FILE_DIALOG_UNVERIFIED",
+            "无法确认目标 Chrome 文件选择框状态",
+        ),
+        "HELPER_TIMEOUT" => (
+            "HELPER_TIMEOUT",
+            "原生 helper 请求超时；当前连接已失效，请重新连接",
+        ),
+        "HELPER_EOF" => ("HELPER_EOF", "原生 helper 已停止"),
+        "HELPER_PROTOCOL" => ("HELPER_PROTOCOL", "原生 helper 响应无效"),
+        "WINDOW_UNAVAILABLE" | "CHROME_WINDOW_UNAVAILABLE" => {
+            ("WINDOW_UNAVAILABLE", "授权 Chrome 窗口不可用，请重新连接")
+        }
+        "IMAGE_GEOMETRY_CHANGED" | "FRAME_GEOMETRY_CHANGED" => (
+            "FRAME_GEOMETRY_CHANGED",
+            "授权 Chrome 窗口几何已变化，请重新确认",
+        ),
+        _ => return Error::new("FILE_SELECTION_FAILED", "Chrome 文件选择失败"),
+    };
+    Error::new(code, message)
+}
+
 fn decode<T: serde::de::DeserializeOwned>(value: Value) -> Result<T> {
     serde_json::from_value(value).map_err(|_| Error::new("HELPER_PROTOCOL", "原生响应字段无效"))
 }
@@ -377,3 +489,381 @@ pub const KEYS: &[&str] = &[
     "Alt+ArrowLeft",
     "Alt+ArrowRight",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+
+    #[derive(Default)]
+    struct FakeNative {
+        requests: Vec<Value>,
+        replies: VecDeque<Result<Value>>,
+    }
+
+    impl Native for FakeNative {
+        fn request(&mut self, request: Value) -> Result<Value> {
+            self.requests.push(request);
+            self.replies.pop_front().expect("测试应预置原生响应")
+        }
+    }
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new() -> Self {
+            let unique = crate::protocol::random_id().unwrap();
+            let path = std::env::temp_dir().join(format!("copis-select-file-{unique}"));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn window() -> Value {
+        json!({
+            "windowId": 7,
+            "pid": 42,
+            "title": "Chrome",
+            "bounds": {"x": 10.0, "y": 20.0, "width": 900.0, "height": 700.0}
+        })
+    }
+
+    fn connected_service(selection_reply: Result<Value>) -> (Service<FakeNative>, String) {
+        let native = FakeNative {
+            requests: Vec::new(),
+            replies: VecDeque::from([
+                Ok(json!({"screenRecording": true})),
+                Ok(json!({"windows": [window()]})),
+                Ok(json!({
+                    "window": {
+                        "windowId":7,
+                        "pid":42,
+                        "title":"Chrome",
+                        "bounds":{"x":14.0,"y":24.0,"width":880.0,"height":680.0}
+                    }
+                })),
+                selection_reply,
+            ]),
+        };
+        let mut service = Service::new(native, std::env::temp_dir());
+        let connected = service
+            .execute(json!({"action":"connect","windowId":7}))
+            .unwrap();
+        (
+            service,
+            connected["connectionId"].as_str().unwrap().to_owned(),
+        )
+    }
+
+    fn select_request(connection_id: &str, path: &str) -> Value {
+        json!({"action":"select-file","connectionId":connection_id,"path":path})
+    }
+
+    #[test]
+    fn given_no_authorized_connection_when_selecting_file_then_reject_without_native_request() {
+        let native = FakeNative::default();
+        let mut service = Service::new(native, std::env::temp_dir());
+        let error = service
+            .execute(select_request("unknown", "/tmp/file"))
+            .unwrap_err();
+        assert_eq!(error.code, "CONNECTION_INVALID");
+        assert!(service.native.requests.is_empty());
+    }
+
+    #[test]
+    fn given_file_and_authorized_connection_when_selecting_then_refresh_identity_without_frame_or_bounds_constraint(
+    ) {
+        let dir = TestDir::new();
+        let path = dir.0.join("空 格.txt");
+        fs::write(&path, "content").unwrap();
+        let path = path.canonicalize().unwrap().to_str().unwrap().to_owned();
+        let (mut service, connection_id) = connected_service(Ok(json!({
+            "selected": true,
+            "dialogClosed": true
+        })));
+
+        let result = service
+            .execute(select_request(&connection_id, &path))
+            .unwrap();
+
+        assert_eq!(
+            result,
+            json!({
+                "selected": true,
+                "dialogClosed": true,
+                "connectionId": connection_id
+            })
+        );
+        assert_eq!(
+            service.native.requests[2],
+            json!({
+                "action":"window",
+                "windowId":7,
+                "pid":42
+            })
+        );
+        assert_eq!(
+            service.native.requests[3],
+            json!({
+                "action":"select-file",
+                "windowId":7,
+                "pid":42,
+                "path":path
+            })
+        );
+    }
+
+    #[test]
+    fn given_unknown_request_field_when_selecting_then_reject_before_native_dialog_action() {
+        let dir = TestDir::new();
+        let path = dir.0.join("file.txt");
+        fs::write(&path, "content").unwrap();
+        let (mut service, connection_id) = connected_service(Ok(json!({
+            "selected": true,
+            "dialogClosed": true
+        })));
+
+        let mut request = select_request(&connection_id, path.to_str().unwrap());
+        request["frameId"] = json!("must-not-be-accepted");
+        let error = service.execute(request).unwrap_err();
+
+        assert_eq!(error.code, "INVALID_ARGUMENT");
+        assert_eq!(service.native.requests.len(), 2);
+    }
+
+    #[test]
+    fn given_invalid_or_unreadable_path_when_selecting_then_reject_without_closing_connection() {
+        let dir = TestDir::new();
+        let directory = dir.0.to_str().unwrap().to_owned();
+        let missing = dir.0.join("missing.txt").to_str().unwrap().to_owned();
+        let mut traversal = directory.clone();
+        traversal.push_str("/../secret");
+        let mut dot_segment = directory.clone();
+        dot_segment.push_str("/./file");
+        let mut control = directory.clone();
+        control.push('\n');
+        let mut too_long = String::from("/");
+        too_long.push_str(&"a".repeat(4096));
+
+        for path in [
+            "relative.txt".to_owned(),
+            "file:///tmp/file.txt".to_owned(),
+            traversal,
+            dot_segment,
+            control,
+            too_long,
+            format!("/{}", "文".repeat(1366)),
+        ] {
+            let (mut service, connection_id) = connected_service(Ok(json!({
+                "selected": true,
+                "dialogClosed": true
+            })));
+            let error = service
+                .execute(select_request(&connection_id, &path))
+                .unwrap_err();
+            assert_eq!(
+                error.code, "INVALID_ARGUMENT",
+                "malformed path must be rejected"
+            );
+            assert!(!error.to_string().contains(&path));
+            assert_eq!(
+                service.execute(json!({"action":"status"})).unwrap()["connected"],
+                true
+            );
+            assert_eq!(
+                service.native.requests.len(),
+                2,
+                "invalid path must not open native dialog"
+            );
+        }
+        for path in [
+            missing,
+            directory,
+            format!("/{}", "a".repeat(4095)), // 4096 UTF-8 字节仍通过路径语法检查。
+        ] {
+            let (mut service, connection_id) = connected_service(Ok(json!({
+                "selected": true,
+                "dialogClosed": true
+            })));
+            let error = service
+                .execute(select_request(&connection_id, &path))
+                .unwrap_err();
+            assert_eq!(error.code, "FILE_NOT_READABLE");
+            assert!(!error.to_string().contains(&path));
+            assert_eq!(
+                service.execute(json!({"action":"status"})).unwrap()["connected"],
+                true
+            );
+            assert_eq!(
+                service.native.requests.len(),
+                2,
+                "unreadable path must not open native dialog"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn given_symlink_to_regular_file_when_selecting_then_send_canonical_target_path() {
+        let dir = TestDir::new();
+        let target = dir.0.join("目标 file.txt");
+        let link = dir.0.join("alias.txt");
+        fs::write(&target, "content").unwrap();
+        symlink(&target, &link).unwrap();
+        let canonical_target = target.canonicalize().unwrap().to_str().unwrap().to_owned();
+        let (mut service, connection_id) = connected_service(Ok(json!({
+            "selected": true,
+            "dialogClosed": true
+        })));
+
+        service
+            .execute(select_request(&connection_id, link.to_str().unwrap()))
+            .unwrap();
+
+        assert_eq!(service.native.requests[3]["path"], canonical_target);
+    }
+
+    #[test]
+    fn given_native_receipt_without_both_true_flags_when_selecting_then_reject_as_protocol_error() {
+        let dir = TestDir::new();
+        let path = dir.0.join("file.txt");
+        fs::write(&path, "content").unwrap();
+        for receipt in [
+            json!({"selected":false,"dialogClosed":true}),
+            json!({"selected":true,"dialogClosed":false}),
+            json!({"selected":true}),
+            json!({"dialogClosed":true}),
+        ] {
+            let (mut service, connection_id) = connected_service(Ok(receipt));
+            let error = service
+                .execute(select_request(&connection_id, path.to_str().unwrap()))
+                .unwrap_err();
+            assert_eq!(error.code, "HELPER_PROTOCOL");
+        }
+    }
+
+    #[test]
+    fn given_recoverable_native_file_selection_error_when_selecting_then_keep_connection_and_hide_path(
+    ) {
+        let dir = TestDir::new();
+        let path = dir.0.join("secret file.txt");
+        fs::write(&path, "content").unwrap();
+        let path = path.to_str().unwrap().to_owned();
+        for (native_code, public_code) in [
+            ("FILE_DIALOG_NOT_FOUND", "FILE_DIALOG_NOT_FOUND"),
+            ("UNSUPPORTED", "FILE_DIALOG_UNSUPPORTED"),
+            ("FILE_DIALOG_UNSUPPORTED", "FILE_DIALOG_UNSUPPORTED"),
+            ("UNVERIFIED", "FILE_DIALOG_UNVERIFIED"),
+            ("FILE_DIALOG_UNVERIFIED", "FILE_DIALOG_UNVERIFIED"),
+            ("FOCUS_UNVERIFIED", "FILE_DIALOG_UNVERIFIED"),
+            ("TIMEOUT", "FILE_DIALOG_TIMEOUT"),
+            ("FILE_DIALOG_TIMEOUT", "FILE_DIALOG_TIMEOUT"),
+            ("INPUT_FAILED", "FILE_SELECTION_FAILED"),
+            ("FILE_SELECTION_FAILED", "FILE_SELECTION_FAILED"),
+            (
+                "ACCESSIBILITY_PERMISSION_REQUIRED",
+                "ACCESSIBILITY_PERMISSION_REQUIRED",
+            ),
+            ("CANCELLED", "CANCELLED"),
+            ("FOCUS_LOST", "FOCUS_LOST"),
+            ("ACTIVATION_FAILED", "FILE_DIALOG_UNVERIFIED"),
+        ] {
+            let (mut service, connection_id) = connected_service(Err(Error::new(
+                native_code,
+                &format!("native failure for {path}"),
+            )));
+            let error = service
+                .execute(select_request(&connection_id, &path))
+                .unwrap_err();
+            assert_eq!(error.code, public_code);
+            assert!(!error.to_string().contains(&path));
+            assert!(!error.message.contains("native failure"));
+            assert_eq!(
+                service.execute(json!({"action":"status"})).unwrap()["connected"],
+                true
+            );
+        }
+
+        let (mut service, connection_id) = connected_service(Err(Error::new(
+            "UNRECOGNIZED_NATIVE_ERROR",
+            &format!("private path {path} leaked by native helper"),
+        )));
+        let error = service
+            .execute(select_request(&connection_id, &path))
+            .unwrap_err();
+        assert_eq!(error.code, "FILE_SELECTION_FAILED");
+        assert!(!error.to_string().contains(&path));
+        assert!(!error.to_string().contains("UNRECOGNIZED_NATIVE_ERROR"));
+        assert_eq!(
+            service.execute(json!({"action":"status"})).unwrap()["connected"],
+            true
+        );
+    }
+
+    #[test]
+    fn given_canonical_file_path_contains_control_or_exceeds_limit_then_reject_as_invalid_file() {
+        assert!(!is_valid_canonical_file_path(&format!(
+            "/{}",
+            "a".repeat(4096)
+        )));
+        assert!(!is_valid_canonical_file_path("/tmp/private\nfile"));
+        assert!(is_valid_canonical_file_path(&format!(
+            "/{}",
+            "a".repeat(4095)
+        )));
+
+        #[cfg(unix)]
+        {
+            let dir = TestDir::new();
+            let target = dir.0.join("private\nfile.txt");
+            let link = dir.0.join("alias.txt");
+            fs::write(&target, "content").unwrap();
+            symlink(&target, &link).unwrap();
+            let (mut service, connection_id) = connected_service(Ok(json!({
+                "selected":true,
+                "dialogClosed":true
+            })));
+            let error = service
+                .execute(select_request(&connection_id, link.to_str().unwrap()))
+                .unwrap_err();
+            assert_eq!(error.code, "FILE_NOT_READABLE");
+            assert!(!error.to_string().contains("private"));
+            assert_eq!(service.native.requests.len(), 2);
+            assert_eq!(
+                service.execute(json!({"action":"status"})).unwrap()["connected"],
+                true
+            );
+        }
+    }
+
+    #[test]
+    fn given_native_reports_authorized_window_gone_during_selection_then_invalidate_connection() {
+        let dir = TestDir::new();
+        let path = dir.0.join("file.txt");
+        fs::write(&path, "content").unwrap();
+        let (mut service, connection_id) = connected_service(Err(Error::new(
+            "WINDOW_UNAVAILABLE",
+            "window disappeared while selecting a file",
+        )));
+
+        let error = service
+            .execute(select_request(&connection_id, path.to_str().unwrap()))
+            .unwrap_err();
+
+        assert_eq!(error.code, "WINDOW_UNAVAILABLE");
+        assert!(!error.to_string().contains(path.to_str().unwrap()));
+        assert_eq!(
+            service.execute(json!({"action":"status"})).unwrap()["connected"],
+            false
+        );
+    }
+}

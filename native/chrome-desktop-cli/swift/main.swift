@@ -15,6 +15,7 @@ _ = NSApplication.shared.setActivationPolicy(.accessory)
 let desktop = ChromeDesktop()
 let capture = ChromeCapture(desktop: desktop, cancellation: cancellation)
 let input = ChromeInput(desktop: desktop, cancellation: cancellation)
+let fileSelector = ChromeFileSelector(desktop: desktop, cancellation: cancellation)
 let actionQueue = DispatchQueue(label: "com.copis.chrome-cli.native-actions", qos: .userInitiated)
 let maxLineBytes = 65_536
 
@@ -50,6 +51,7 @@ func handleLine(_ line: Data, oversized: Bool) {
                     case "observe":
                         guard let target = request.target else { throw HelperFailure.invalidArgument }
                         result = try capture.observe(target, imagePath: request.imagePath, generation: generation)
+                    case "select-file": result = try fileSelector.select(request, generation: generation)
                     case "click", "scroll", "type", "press": result = try input.send(request, generation: generation)
                     default: throw HelperFailure(code: "UNKNOWN_ACTION", message: "不支持该原生动作")
                     }

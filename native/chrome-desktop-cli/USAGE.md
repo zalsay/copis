@@ -13,7 +13,7 @@ cd native/chrome-desktop-cli
 ./build.sh
 ```
 
-`dist/copis-chrome-0.1.4-darwin-arm64/`（Intel 为 `x64`）包含两个可执行文件、协议版本元数据、本说明、AGPL-3.0-only 许可证及 `source/` 完整功能包源码；同目录生成 `.tar.gz` 和 SHA256。保持 `copis-chrome` 与 `copis-chrome-helper` 相邻，放到固定的安装目录，再把该目录加入 PATH。`./build.sh debug` 可生成开发版本；仅在本机原生构建，不跨平台混用产物。
+`dist/copis-chrome-0.1.5-darwin-arm64/`（Intel 为 `x64`）包含两个可执行文件、协议版本元数据、本说明、AGPL-3.0-only 许可证及 `source/` 完整功能包源码；同目录生成 `.tar.gz` 和 SHA256。保持 `copis-chrome` 与 `copis-chrome-helper` 相邻，放到固定的安装目录，再把该目录加入 PATH。`./build.sh debug` 可生成开发版本；仅在本机原生构建，不跨平台混用产物。
 
 默认本地 ad-hoc 签名不等于公证分发。公开分发时设置 `COPIS_CHROME_SIGN_IDENTITY` 使用 Developer ID 签名，并在发布流程完成公证。系统权限取决于 macOS 的代码身份和安装路径，移动或重新签名二进制后可能需要重新授予；构建脚本不承诺保留 TCC 授权。
 
@@ -105,7 +105,20 @@ copis-chrome daemon stop
 
 daemon 使用 0600 Unix socket，不开放 TCP；同一 macOS 用户是信任边界，不提供对恶意同用户进程的沙箱隔离。`connectionId` 是持有者凭据；不要写入公共日志。Rust 不记录输入文本，原生 helper 仅向 stderr 输出诊断，不输出完整请求。
 
-内部 socket 信封是 `{"protocolVersion":1,"request":{"action":"status"}}` 加换行；一般 Agent 直接调用 CLI 即可。该功能包已接入 Copis 功能模块下载/发布链，模块名为 `chrome-desktop-cli`。Electron 保留原来的七个 ChromeDesktop 工具名，但原生截图和输入改为调用已激活的组件；视频流只用于可选预览。组件未安装时按需准备，也可以在设置的“关于/更新 → 本地能力 → Chrome 桌面自动化”中安装、检查更新和升级。Windows/Linux 不展示或安装本模块。
+内部 socket 信封是 `{"protocolVersion":1,"request":{"action":"status"}}` 加换行；一般 Agent 直接调用 CLI 即可。该功能包已接入 Copis 功能模块下载/发布链，模块名为 `chrome-desktop-cli`。Electron 提供八个 ChromeDesktop 工具（包含原生文件选择工具 `ChromeDesktopSelectFile`），但原生截图和输入改为调用已激活的组件；视频流只用于可选预览。组件未安装时按需准备，也可以在设置的“关于/更新 → 本地能力 → Chrome 桌面自动化”中安装、检查更新和升级。Windows/Linux 不展示或安装本模块。
+
+## 原生文件选择框
+
+v0.1.5 增加专用 `select-file` 命令。网页上传按钮唤出的 macOS“打开”窗口通常是 Chrome 附属的原生 sheet，不能用网页截图坐标及普通网页输入工具操作它。
+
+```bash
+# 先用网页点击工具打开上传/选择文件对话框，再复用当前连接：
+copis-chrome select-file --connection <connectionId> --path '/绝对路径/视频.mp4'
+```
+
+成功 JSON 响应包含 `connectionId`、`selected: true`、`dialogClosed: true`。命令不需要 `frameId`，不会请求第二次窗口授权；只接受存在且可读的普通文件，支持空格、中文及指向普通文件的符号链接。它确认已授权主窗口的原生 `open-panel` 和“前往文件夹”sheet 归属，写入路径、确认选择并等待原对话框关闭。未打开对话框、Save 面板、其他窗口或结构不明的系统对话框会返回具体错误，不能借此操作 Finder 或其他应用。
+
+内置 Agent 调用 `ChromeDesktopSelectFile({ controlId, path })`，成功后再 Observe 检查页面。该回执只表示文件选择流程完成；上传进度、服务端接收或发布成功应由页面状态另行确认。旧连接固定旧组件版本，更新后需停止该连接再开始；内置 Agent 的新增工具还需要包含该工具定义的主程序/Worker 构建。
 
 ## 开发验证
 
@@ -114,7 +127,7 @@ cargo fmt --check
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
 ./build.sh
-bash tests/native-smoke.sh dist/copis-chrome-0.1.4-darwin-arm64/copis-chrome-helper
+bash tests/native-smoke.sh dist/copis-chrome-0.1.5-darwin-arm64/copis-chrome-helper
 
 # 真实焦点回归（已有系统权限）：显式指定 Chrome 窗口和另一应用 PID。
 # 只切换焦点，不截图、不发送鼠标键盘；不会被默认无副作用 smoke 自动执行。
@@ -126,11 +139,14 @@ bash tests/toast-smoke.sh
 # 显式只读采集回退回归：不查看图像、不激活窗口或发送输入。
 bash tests/capture-background-smoke.sh <Chrome窗口ID>
 
+# 显式原生文件选择：独立 Chrome profile、本机测试页/文本文件，无上传、无截图分析。
+bash tests/file-dialog-smoke.sh "$(pwd)/dist/copis-chrome-0.1.5-darwin-arm64/copis-chrome"
+
 # 显式激活 Chrome 并展示受控浮层，验证鼠标可穿透/拦截差异，随后恢复前台；不点击或截图。
 bash tests/pointer-occlusion-smoke.sh <Chrome窗口ID>
 ```
 
-Rust 进程测试使用假 helper，不会操作本机 Chrome。原生 smoke 只做协议与参数校验，不请求权限、不点击输入。真实截图、窗口激活、点击输入需在用户确认后测试。详细结果见 `docs/VERIFICATION.md`，v0.1.1 焦点修复与真实导航见 `docs/FOCUS-VERIFICATION.md`，v0.1.2 原生操作提示见 `docs/TOAST-VERIFICATION.md`，v0.1.3 Observe 超时与只读回退见 `docs/CAPTURE-VERIFICATION.md`，v0.1.4 指针归属修复见 `docs/POINTER-VERIFICATION.md`（分发包内位于 `source/docs/`）。
+Rust 进程测试使用假 helper，不会操作本机 Chrome。原生 smoke 只做协议与参数校验，不请求权限、不点击输入。真实截图、窗口激活、点击输入需在用户确认后测试。详细结果见 `docs/VERIFICATION.md`，v0.1.1 焦点修复与真实导航见 `docs/FOCUS-VERIFICATION.md`，v0.1.2 原生操作提示见 `docs/TOAST-VERIFICATION.md`，v0.1.3 Observe 超时与只读回退见 `docs/CAPTURE-VERIFICATION.md`，v0.1.4 指针归属修复见 `docs/POINTER-VERIFICATION.md`，v0.1.5 原生文件选择见 `docs/FILE-DIALOG-VERIFICATION.md`（分发包内位于 `source/docs/`）。
 
 ## 原生能力边界
 
@@ -157,7 +173,7 @@ bun run prepare:chrome-desktop-cli-module
 ./deploy.sh --chrome-cli --skip-publish
 
 # 显式提供已有归档时校验后发布；版本参数必须与统一版本锁一致
-./deploy.sh --chrome-cli --chrome-cli-archive /path/to/chrome.tar.gz --chrome-cli-version 0.1.4
+./deploy.sh --chrome-cli --chrome-cli-archive /path/to/chrome.tar.gz --chrome-cli-version 0.1.5
 ```
 
 `--chrome-desktop-cli` 及对应 archive/version 长参数继续兼容。同一次命令提供短、长参数时只能同值；不同值会在构建前拒绝，CLI显式值可以覆盖环境配置。单独部署Chrome默认跳过JS依赖安装，需要时用 `--install` 开启。未指定archive时始终从源码构建，不复用resources中可能过时的归档。

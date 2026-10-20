@@ -37,6 +37,9 @@ swiftc -O -target "${arch}-apple-macosx14.0" "${library_sources[@]}" \
   "$root/tests/cancellation/main.swift" -o "$scratch/cancellation-tests"
 swiftc -O -target "${arch}-apple-macosx14.0" "${library_sources[@]}" \
   "$root/tests/focus-validation/main.swift" -o "$scratch/focus-validation-tests"
+swiftc -O -target "${arch}-apple-macosx14.0" "${library_sources[@]}" \
+  "$root/tests/file-dialog/main.swift" -o "$scratch/file-dialog-tests"
+"$scratch/file-dialog-tests"
 "$scratch/focus-validation-tests"
 swiftc -O -target "${arch}-apple-macosx14.0" "${library_sources[@]}" \
   "$root/tests/toast-layout/main.swift" -o "$scratch/toast-layout-tests"
@@ -105,6 +108,9 @@ for key in ["", "Cmd+Q", "enter", "禁止回显的按键", 13]:
     invalid("非法按键", dict(input_base, action="press", key=key))
 for path in ["", "relative.jpg", "/tmp/../invalid.jpg", "/tmp/bad\x00.jpg", "/tmp/"]:
     invalid("非法截图路径", dict(base, action="observe", imagePath=path, maxEdge=1600))
+for path in ["", "relative.txt", "file:///tmp/a", "/tmp/../a", "/tmp/./a", "/tmp/a\n", "/tmp/", "/" + "字" * 1400]:
+    invalid("非法文件路径", dict(base, action="select-file", path=path))
+invalid("文件不存在先于任何桌面副作用", dict(base, action="select-file", path="/copis-nonexistent-file-8e2566"), "FILE_NOT_READABLE")
 for edge in [0, 1601, True, "1600", 1599]:
     invalid("截图最长边", dict(base, action="observe", imagePath="/tmp/no-capture.jpg", maxEdge=edge))
 invalid("缺少动作", {}, "INVALID_REQUEST")

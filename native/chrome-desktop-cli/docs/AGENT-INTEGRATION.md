@@ -1,6 +1,6 @@
 # 其他 Agent 接入 Copis Chrome CLI
 
-本文面向能够执行本机命令的 Agent，以及为 Agent 编写工具适配器的开发者。命令与响应按 `copis-chrome v0.1.4`、JSON 协议 `1` 核对。快速交给 Agent 使用时，提供 CLI 绝对路径并复制第 9 节的调用约定；程序化集成可参考第 7 节。
+本文面向能够执行本机命令的 Agent，以及为 Agent 编写工具适配器的开发者。命令与响应按 `copis-chrome v0.1.5`、JSON 协议 `1` 核对。快速交给 Agent 使用时，提供 CLI 绝对路径并复制第 9 节的调用约定；程序化集成可参考第 7 节。
 
 接入方式是 **执行 CLI → 解析 JSON → 读取本地截图 → 决策 → 执行动作 → 观察确认**。CLI 提供原生窗口截图、鼠标和键盘输入；页面理解、操作决策和任务结果判断由调用方完成。它没有 DOM、CSS selector、按网页文字定位按钮或执行页面 JavaScript 的接口。
 
@@ -16,7 +16,7 @@
 将对应架构的归档解压到稳定位置。ARM Mac 使用 `darwin-arm64`，Intel Mac 使用 `darwin-x64`。保持这三个文件相邻：
 
 ```text
-copis-chrome-0.1.4-darwin-arm64/
+copis-chrome-0.1.5-darwin-arm64/
 ├── copis-chrome
 ├── copis-chrome-helper
 └── module.json
@@ -25,7 +25,7 @@ copis-chrome-0.1.4-darwin-arm64/
 配置调用方使用的绝对路径，然后检查版本：
 
 ```bash
-export COPIS_CHROME_CLI='/绝对路径/copis-chrome-0.1.4-darwin-arm64/copis-chrome'
+export COPIS_CHROME_CLI='/绝对路径/copis-chrome-0.1.5-darwin-arm64/copis-chrome'
 "$COPIS_CHROME_CLI" --version
 "$COPIS_CHROME_CLI" --help
 ```
@@ -347,4 +347,19 @@ CONNECTION_BUSY 时不抢占别人的连接，不自动 daemon stop。
 | `ChromeDesktopScroll` | `scroll --connection ... --frame ... --x ... --y ... --delta-y ...` |
 | `ChromeDesktopType` | `type --connection ... --frame ... --text ...` |
 | `ChromeDesktopPress` | `press --connection ... --frame ... --key ...` |
+| `ChromeDesktopSelectFile` | `select-file --connection ... --path /absolute/file`；不需要 frame |
 | `ChromeDesktopStop` | 正常释放使用 `disconnect`；停止本任务整个 runtime 使用 `daemon stop` |
+
+## 原生上传文件选择（v0.1.5）
+
+遇到网页上传按钮唤出 macOS“打开”文件选择框时，改用专用命令：
+
+```bash
+"$COPIS_CHROME_CLI" select-file --connection "$connection_id" --path '/绝对路径/视频.mp4'
+```
+
+使用当前有效连接，参数是单个现有、可读普通文件的绝对路径（非 URL、目录或相对路径）。该操作不依赖截图帧，也不需要重复 connect 或授权。工具只跟随原授权 Chrome 窗口的原生 `open-panel` sheet；普通网页的 Type/Press/Click 仍保留精确网页窗口焦点和指针检查。不要绕过错误直接用裸 `CGEventPost`，也不要把操作失败推断为系统屏蔽了所有合成输入。
+
+成功回执为 `{connectionId, selected: true, dialogClosed: true}`。随后 Observe 页面确认选中文件和上传状态；不要把对话框关闭回执描述为上传完成或发布成功。没有打开对话框返回 `FILE_DIALOG_NOT_FOUND`；无法确认归属、结构不支持、处理超时或文件不可读各自返回 `FILE_DIALOG_UNVERIFIED`、`FILE_DIALOG_UNSUPPORTED`、`FILE_DIALOG_TIMEOUT`、`FILE_NOT_READABLE`。这些失败保留连接，可检查状态后继续；取消和紧急停止保持原有约定。
+
+单次动作总等待有界，不会无限发送回车。路径和文件内容不写入 CLI 运行日志；Agent 自身会话是否保存工具参数由调用方管理。内置工具名为 `ChromeDesktopSelectFile`，参数 `{controlId, path}`；在工具列表中没有它时应更新主程序/Worker，新组件本身不会增加旧 Worker 的工具定义。

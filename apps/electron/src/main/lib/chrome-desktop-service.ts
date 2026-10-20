@@ -11,6 +11,7 @@ import type {
 } from '@copis/shared'
 import { CHROME_DESKTOP_ALLOWED_KEYS, CHROME_DESKTOP_DEFAULT_SHORTCUT, isRecoverableChromeDesktopPauseReason } from '@copis/shared'
 import { ChromeDesktopComponentClient, type ChromeDesktopBackend, type ChromeDesktopComponentAction } from './chrome-desktop-component-client'
+import { isValidChromeDesktopFilePath } from './chrome-desktop-file-path'
 
 export const MAX_ACTION_HISTORY_SIZE = 50
 export const ACTION_HISTORY_TTL_MS = 5 * 60 * 1000
@@ -159,8 +160,49 @@ export class ChromeDesktopService {
       if (cached.toolName !== request.toolName || cached.inputHash !== hash) throw new Error('CHROME_TOOL_CALL_COLLISION: 同一 toolCallId 提交了不同输入')
       return cached.response
     }
+    if (request.toolName === 'ChromeDesktopSelectFile') return this.handleSelectFile(record, request)
     return this.handleInput(record, request)
   }
+
+  private async handleSelectFile(record: ActiveControlRecord, request: ChromeDesktopToolRequest): Promise<ChromeDesktopToolResponse> {
+    if (record.inFlightAction) throw new Error('CHROME_BUSY: 已有动作正在执行')
+    const input = request.toolInput
+    const path = input.path
+    if (Object.keys(input).some(key => key !== 'controlId' && key !== 'path')
+      || !isValidChromeDesktopFilePath(path)) {
+      throw new Error('CHROME_FILE_PATH_INVALID: 必须提供绝对本地文件路径')
+    }
+
+    record.inFlightAction = true
+    // 与普通输入一致，仅释放Observe重试缓存；已授权帧仍可按既有策略复用。
+    record.latestObservedFrame = undefined
+    try {
+      await this.backend.selectFile(path)
+      this.assertCurrentRecord(record)
+      record.mode = 'control'
+      this.broadcastState()
+      const response: ChromeDesktopToolResponse = {
+        kind: 'json',
+        value: {
+          ok: true,
+          selected: true,
+          dialogClosed: true,
+          uploadConfirmed: false,
+          requiresObserve: true,
+          targetWindowId: record.targetWindow?.windowId,
+        },
+      }
+      this.cache(record, request, response)
+      return response
+    } catch (error) {
+      if (this.activeControl === record && record.state === 'active') {
+        const code = errorCode(error, 'CHROME_FILE_SELECTION_FAILED')
+        if (code !== 'CHROME_BUSY') this.transitionToPaused(record, code, errorMessage(error))
+      }
+      throw error
+    } finally { record.inFlightAction = false }
+  }
+
   private async handleStart(request: ChromeDesktopToolRequest): Promise<ChromeDesktopToolResponse> {
     if (this.pendingRelease) {
       try { await this.pendingRelease.operation } catch {
@@ -384,7 +426,8 @@ export class ChromeDesktopService {
   }
   private transitionToPaused(record: ActiveControlRecord, reason: ChromeDesktopErrorCode, message: string): void {
     if (this.activeControl !== record) return
-    this.clearControlFrames(record)
+    // 旧 CLI 在参数解析阶段拒绝新命令时，连接与既有授权帧仍有效。
+    if (reason !== 'CHROME_COMPONENT_VERSION_UNSUPPORTED') this.clearControlFrames(record)
     record.state = 'paused'
     record.pauseReason = reason
     record.errorMessage = message

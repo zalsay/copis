@@ -309,6 +309,7 @@ const CHROME_DESKTOP_TOOL_NAME_SET = new Set<string>([
   'ChromeDesktopScroll',
   'ChromeDesktopType',
   'ChromeDesktopPress',
+  'ChromeDesktopSelectFile',
   'ChromeDesktopStop',
 ])
 

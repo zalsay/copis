@@ -8,9 +8,9 @@ import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const REQUIRED_CHROME_TOOLS = [
+export const REQUIRED_CHROME_TOOLS = [
   'ChromeDesktopStart', 'ChromeDesktopObserve', 'ChromeDesktopClick',
-  'ChromeDesktopScroll', 'ChromeDesktopType', 'ChromeDesktopPress', 'ChromeDesktopStop',
+  'ChromeDesktopScroll', 'ChromeDesktopType', 'ChromeDesktopPress', 'ChromeDesktopSelectFile', 'ChromeDesktopStop',
 ]
 
 export async function verifyCompiledPiWorker(

@@ -4,6 +4,7 @@ import {
   CHROME_DESKTOP_DEFAULT_SHORTCUT,
   CHROME_DESKTOP_ENDPOINT,
   CHROME_DESKTOP_IPC_CHANNELS,
+  isRecoverableChromeDesktopPauseReason,
   type ChromeDesktopErrorCode,
   type ChromeDesktopState,
   type ChromeDesktopToolName,
@@ -39,5 +40,17 @@ describe('chrome-desktop shared types and constants', () => {
     expect(state).toBe('active')
     expect(err).toBe('CHROME_BUSY')
     expect(tool).toBe('ChromeDesktopObserve')
+  })
+
+  it('includes the dedicated file-selection tool and recoverable dialog errors', () => {
+    const tool: ChromeDesktopToolName = 'ChromeDesktopSelectFile'
+    const recoverableErrors: ChromeDesktopErrorCode[] = [
+      'CHROME_FILE_DIALOG_NOT_FOUND', 'CHROME_FILE_DIALOG_UNSUPPORTED', 'CHROME_FILE_DIALOG_UNVERIFIED',
+      'CHROME_FILE_DIALOG_TIMEOUT', 'CHROME_FILE_NOT_READABLE', 'CHROME_FILE_SELECTION_FAILED',
+      'CHROME_COMPONENT_VERSION_UNSUPPORTED',
+    ]
+    expect(tool).toBe('ChromeDesktopSelectFile')
+    for (const error of recoverableErrors) expect(isRecoverableChromeDesktopPauseReason(error)).toBe(true)
+    expect(isRecoverableChromeDesktopPauseReason('CHROME_FILE_PATH_INVALID')).toBe(false)
   })
 })

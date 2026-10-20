@@ -5,6 +5,7 @@ import {
   MAX_COMPONENT_OUTPUT_BYTES, readComponentImage, resolveComponentInstallation,
   type ChromeDesktopComponentClientOptions, type ComponentRuntime,
 } from './chrome-desktop-component-client-runtime'
+import { isValidChromeDesktopFilePath } from './chrome-desktop-file-path'
 
 export interface ChromeDesktopComponentFrame {
   frameId: string
@@ -26,6 +27,7 @@ export interface ChromeDesktopBackend {
   connectWindow(windowId: number, pid: number): Promise<ChromeDesktopWindowInfo>
   observe(): Promise<ChromeDesktopComponentFrame>
   input(frameId: string, action: ChromeDesktopComponentAction): Promise<void>
+  selectFile(path: string): Promise<void>
   disconnect(): Promise<void>
   cancel(): Promise<void>
   stop(): void
@@ -41,6 +43,9 @@ const nativeErrors: Record<string, ChromeDesktopErrorCode> = {
   FRAME_UNKNOWN: 'CHROME_FRAME_STALE', FRAME_GEOMETRY_CHANGED: 'CHROME_GEOMETRY_CHANGED', IMAGE_GEOMETRY_CHANGED: 'CHROME_GEOMETRY_CHANGED',
   FOCUS_LOST: 'CHROME_FOCUS_LOST', FOCUS_UNVERIFIED: 'CHROME_FOCUS_LOST',
   POINTER_OBSCURED: 'CHROME_FOCUS_LOST', POINTER_UNVERIFIED: 'CHROME_FOCUS_LOST',
+  FILE_DIALOG_NOT_FOUND: 'CHROME_FILE_DIALOG_NOT_FOUND', FILE_DIALOG_UNSUPPORTED: 'CHROME_FILE_DIALOG_UNSUPPORTED',
+  FILE_DIALOG_UNVERIFIED: 'CHROME_FILE_DIALOG_UNVERIFIED', FILE_DIALOG_TIMEOUT: 'CHROME_FILE_DIALOG_TIMEOUT',
+  FILE_NOT_READABLE: 'CHROME_FILE_NOT_READABLE', FILE_SELECTION_FAILED: 'CHROME_FILE_SELECTION_FAILED',
   SCREEN_PERMISSION_REQUIRED: 'CHROME_SCREEN_PERMISSION_REQUIRED', SCREEN_RECORDING_REQUIRED: 'CHROME_SCREEN_PERMISSION_REQUIRED',
   ACCESSIBILITY_PERMISSION_REQUIRED: 'CHROME_INPUT_PERMISSION_REQUIRED', ACCESSIBILITY_REQUIRED: 'CHROME_INPUT_PERMISSION_REQUIRED',
   CAPTURE_FAILED: 'CHROME_CAPTURE_FAILED', CAPTURE_FALLBACK_FAILED: 'CHROME_CAPTURE_FAILED', IMAGE_TOO_LARGE: 'CHROME_CAPTURE_FAILED',
@@ -58,6 +63,13 @@ const nativeFailureReasons: Record<string, string> = {
   CAPTURE_FALLBACK_FAILED: '系统抓图与单窗口截图回退均未成功，请检查系统截图服务',
   POINTER_OBSCURED: '鼠标目标点实际属于其他可接收输入的窗口，已阻止后续输入，请重新观察',
   POINTER_UNVERIFIED: '无法确认鼠标目标点的实际输入归属，已阻止后续输入，请重新观察',
+  FILE_DIALOG_NOT_FOUND: '没有找到授权 Chrome 窗口的原生文件选择框',
+  FILE_DIALOG_UNSUPPORTED: '该 Chrome 文件选择框类型不支持此操作',
+  FILE_DIALOG_UNVERIFIED: '无法确认文件选择框属于已授权的 Chrome 窗口',
+  FILE_DIALOG_TIMEOUT: '文件选择响应超时，结果可能不确定；请先观察页面状态',
+  FILE_NOT_READABLE: '指定文件不可读取，请检查文件权限或选择其他文件',
+  FILE_SELECTION_FAILED: '文件选择未能完成；请观察页面和对话框状态后再决定下一步',
+  INVALID_ARGUMENT: '当前 Chrome 组件版本不支持文件选择，请更新本地 Chrome 桌面组件',
   HELPER_TIMEOUT: '原生 Helper 响应超时；如正在输入，结果需重新观察确认',
   HELPER_EOF: '原生 Helper 已退出；如正在输入，结果需重新观察确认',
   DAEMON_UNAVAILABLE: '无法连接组件后台进程，请确认原任务状态后重新连接',
@@ -141,6 +153,15 @@ export class ChromeDesktopComponentClient implements ChromeDesktopBackend {
     const result = await this.invoke(connection.runtime, args)
     this.assertConnection(connection)
     if (result.sent !== true || result.connectionId !== connection.id || result.frameId !== frameId) throw helperFailure()
+  }
+
+  async selectFile(path: string): Promise<void> {
+    const connection = this.requireConnection()
+    if (!isValidChromeDesktopFilePath(path)) throw componentError('CHROME_FILE_PATH_INVALID', '必须提供绝对本地文件路径')
+    const args = ['select-file', '--connection', connection.id, '--path', path]
+    const result = await this.invoke(connection.runtime, args)
+    this.assertConnection(connection)
+    if (result.connectionId !== connection.id || result.selected !== true || result.dialogClosed !== true) throw helperFailure()
   }
 
   disconnect(): Promise<void> { return this.cancel() }
@@ -236,8 +257,14 @@ export class ChromeDesktopComponentClient implements ChromeDesktopBackend {
     } catch { throw helperFailure() }
     if (result.ok === false) {
       const error = parseObject(result.error)
-      const nativeCode = typeof error.code === 'string' && Object.hasOwn(nativeErrors, error.code) ? error.code : undefined
+      const isLegacySelectFileCommand = args[0] === 'select-file' && error.code === 'INVALID_ARGUMENT'
+      const nativeCode = isLegacySelectFileCommand
+        ? 'INVALID_ARGUMENT'
+        : typeof error.code === 'string' && Object.hasOwn(nativeErrors, error.code) ? error.code : undefined
       if (!nativeCode) throw helperFailure()
+      if (nativeCode === 'INVALID_ARGUMENT') {
+        throw componentError('CHROME_COMPONENT_VERSION_UNSUPPORTED', `Chrome ${args[0]} 失败（${nativeCode}）：${nativeFailureReasons[nativeCode]}`)
+      }
       const reason = nativeFailureReasons[nativeCode] ?? '请按错误类型检查权限、窗口或重新观察'
       throw componentError(nativeErrors[nativeCode]!, `Chrome ${args[0]} 失败（${nativeCode}）：${reason}`)
     }

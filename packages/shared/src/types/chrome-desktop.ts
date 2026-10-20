@@ -44,6 +44,14 @@ export type ChromeDesktopErrorCode =
   | 'CHROME_GEOMETRY_CHANGED'
   | 'CHROME_FRAME_STALE'
   | 'CHROME_CAPTURE_FAILED'
+  | 'CHROME_FILE_PATH_INVALID'
+  | 'CHROME_FILE_DIALOG_NOT_FOUND'
+  | 'CHROME_FILE_DIALOG_UNSUPPORTED'
+  | 'CHROME_FILE_DIALOG_UNVERIFIED'
+  | 'CHROME_FILE_DIALOG_TIMEOUT'
+  | 'CHROME_FILE_NOT_READABLE'
+  | 'CHROME_FILE_SELECTION_FAILED'
+  | 'CHROME_COMPONENT_VERSION_UNSUPPORTED'
   | 'CHROME_HELPER_FAILED'
   | 'CHROME_ACTION_UNCERTAIN'
   | 'CHROME_CANCELLED'
@@ -53,7 +61,15 @@ export type ChromeDesktopErrorCode =
 export function isRecoverableChromeDesktopPauseReason(
   reason?: ChromeDesktopErrorCode,
 ): boolean {
-  return reason === 'CHROME_FOCUS_LOST' || reason === 'CHROME_GEOMETRY_CHANGED'
+  return reason === 'CHROME_FOCUS_LOST'
+    || reason === 'CHROME_GEOMETRY_CHANGED'
+    || reason === 'CHROME_FILE_DIALOG_NOT_FOUND'
+    || reason === 'CHROME_FILE_DIALOG_UNSUPPORTED'
+    || reason === 'CHROME_FILE_DIALOG_UNVERIFIED'
+    || reason === 'CHROME_FILE_DIALOG_TIMEOUT'
+    || reason === 'CHROME_FILE_NOT_READABLE'
+    || reason === 'CHROME_FILE_SELECTION_FAILED'
+    || reason === 'CHROME_COMPONENT_VERSION_UNSUPPORTED'
 }
 
 export type ChromeDesktopMode = 'observe' | 'control'
@@ -75,6 +91,7 @@ export type ChromeDesktopToolName =
   | 'ChromeDesktopScroll'
   | 'ChromeDesktopType'
   | 'ChromeDesktopPress'
+  | 'ChromeDesktopSelectFile'
   | 'ChromeDesktopStop'
 
 export interface ChromeDesktopBounds {

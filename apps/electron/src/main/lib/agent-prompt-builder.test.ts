@@ -64,6 +64,8 @@ describe('项目与会话工作台提示词', () => {
     expect(prompt).toContain('同一 frameId 可重复使用')
     expect(prompt).toContain('同一会话已有有效 control 时直接复用')
     expect(prompt).toContain('普通任务完成后保留控制权')
+    expect(prompt).toContain('根据当前任务上下文确定所需文件的绝对路径')
+    expect(prompt).not.toContain('使用用户指定的绝对路径')
     expect(prompt).not.toContain('每次输入动作前必须调用')
     expect(prompt).not.toContain('一个 frameId 只能被一个动作消费')
     expect(prompt).not.toContain('严格遵循“观察 → 一个动作 → 再观察”')

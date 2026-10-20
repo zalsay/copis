@@ -20,7 +20,7 @@ import { copyFileSync, existsSync, mkdirSync, rmSync, statSync, unlinkSync } fro
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createCompiledRuntimeArgs, resolveCompiledRuntimeAssets } from './compiled-runtime-build'
-import { verifyCompiledPiWorker } from './pi-worker-build-smoke'
+import { REQUIRED_CHROME_TOOLS, verifyCompiledPiWorker } from './pi-worker-build-smoke'
 import {
   resolveCompiledRuntimeBinaryName,
   resolveCompiledRuntimeDirectoryName,
@@ -129,7 +129,7 @@ try {
     fail(`编译产物无法执行 --help: ${smoke.error?.message ?? `exit ${smoke.status ?? 'unknown'}`}`)
   }
   await verifyCompiledPiWorker(outFile)
-  console.log('[build:cli] 自包含 Pi Worker 工具注册检查通过（7 个 Chrome Desktop 工具）')
+  console.log(`[build:cli] 自包含 Pi Worker 工具注册检查通过（${REQUIRED_CHROME_TOOLS.length} 个 Chrome Desktop 工具）`)
   for (const asset of resolveCompiledRuntimeAssets({ photonWasmSource, outDir: targetDir })) {
     copyFileSync(asset.source, asset.destination)
   }

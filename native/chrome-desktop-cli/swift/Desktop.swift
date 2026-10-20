@@ -108,13 +108,13 @@ final class ChromeDesktop {
         }
     }
 
-    private func axApplication(_ pid: pid_t) -> AXUIElement {
+    func axApplication(_ pid: pid_t) -> AXUIElement {
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, 0.35)
         return app
     }
 
-    private func elementAttribute(_ element: AXUIElement, _ name: String) -> AXUIElement? {
+    func elementAttribute(_ element: AXUIElement, _ name: String) -> AXUIElement? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success,
               let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
@@ -123,13 +123,13 @@ final class ChromeDesktop {
         return result
     }
 
-    private func identifier(_ window: AXUIElement) -> CGWindowID? {
+    func identifier(_ window: AXUIElement) -> CGWindowID? {
         AXUIElementSetMessagingTimeout(window, 0.35)
         var value: CGWindowID = 0
         return axWindowID(window, &value) == .success && value > 0 ? value : nil
     }
 
-    private func targetAXWindow(_ target: TargetWindow, app: AXUIElement) throws -> AXUIElement {
+    func targetAXWindow(_ target: TargetWindow, app: AXUIElement) throws -> AXUIElement {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
               let windows = value as? [AXUIElement],
@@ -163,7 +163,7 @@ final class ChromeDesktop {
         }
     }
 
-    private func focusedWindow(_ target: TargetWindow, app: AXUIElement) throws -> AXUIElement {
+    func frontmostAXWindow(_ target: TargetWindow, app: AXUIElement) throws -> AXUIElement {
         let frontPID = onMain { NSWorkspace.shared.frontmostApplication?.processIdentifier }
         guard frontPID == target.pid else {
             throw HelperFailure(code: "FOCUS_LOST", message: "目标 Chrome 窗口未持有真实焦点，未发送输入")
@@ -179,8 +179,16 @@ final class ChromeDesktop {
         guard CFBooleanGetValue(axFrontmost) else {
             throw HelperFailure(code: "FOCUS_LOST", message: "Chrome 已失去辅助功能前台状态，未发送输入")
         }
-        // 最后读取精确窗口，不能把同一 Chrome 中另一个窗口的焦点当成目标焦点。
-        guard let focused = elementAttribute(app, kAXFocusedWindowAttribute), identifier(focused) == target.windowId else {
+        guard let focused = elementAttribute(app, kAXFocusedWindowAttribute) else {
+            throw HelperFailure(code: "FOCUS_UNVERIFIED", message: "无法读取 Chrome 当前焦点窗口")
+        }
+        return focused
+    }
+
+    private func focusedWindow(_ target: TargetWindow, app: AXUIElement) throws -> AXUIElement {
+        let focused = try frontmostAXWindow(target, app: app)
+        // 通用网页输入仍只接受精确主窗口；原生 sheet 由专用文件选择命令处理。
+        guard identifier(focused) == target.windowId else {
             throw HelperFailure(code: "FOCUS_LOST", message: "目标 Chrome 窗口未持有真实焦点，未发送输入")
         }
         return focused
@@ -207,14 +215,7 @@ final class ChromeDesktop {
         let window = try targetAXWindow(target, app: app)
         let restoringFocus = (try? focusedWindow(target, app: app)) == nil
         try cancellation.check(generation)
-        let activated = try onMain {
-            let targetApplication = application(pid: target.pid)
-            // 必须先进入主线程再取提交锁，不能持锁等待 DispatchQueue.main.sync。
-            return try cancellation.effect(generation: generation) {
-                targetApplication?.activate(options: []) ?? false
-            }
-        }
-        guard activated else { throw HelperFailure(code: "ACTIVATION_FAILED", message: "系统未允许激活目标 Chrome 窗口") }
+        try activateApplication(target, cancellation: cancellation, generation: generation)
         // 每个 AX 副作用独立提交，沿用每次 AX 调用 0.35 秒超时，不把整条链捆成一个临界区。
         _ = try cancellation.effect(generation: generation) {
             AXUIElementSetAttributeValue(app, kAXFocusedWindowAttribute as CFString, window)
@@ -233,9 +234,7 @@ final class ChromeDesktop {
             do {
                 try verifyFocus(target, expected: expected)
                 if restoringFocus {
-                    try onMain {
-                        try operationToast.show(over: expected, targetPID: target.pid, cancellation: cancellation, generation: generation)
-                    }
+                    try showOperationToast(target, bounds: expected, cancellation: cancellation, generation: generation)
                 }
                 return
             }
@@ -245,6 +244,21 @@ final class ChromeDesktop {
             Thread.sleep(forTimeInterval: 0.025)
         } while ProcessInfo.processInfo.systemUptime < deadline
         throw HelperFailure(code: "FOCUS_UNVERIFIED", message: "激活后仍无法确认目标窗口焦点：\(lastFailure?.message ?? "未取得焦点状态")")
+    }
+
+    func activateApplication(_ target: TargetWindow, cancellation: InputCancellation, generation: UInt64) throws {
+        let activated = try onMain {
+            let targetApplication = application(pid: target.pid)
+            // 先进入主线程再取提交锁，不能持锁等待主线程。
+            return try cancellation.effect(generation: generation) {
+                targetApplication?.activate(options: []) ?? false
+            }
+        }
+        guard activated else { throw HelperFailure(code: "ACTIVATION_FAILED", message: "系统未允许激活目标 Chrome 窗口") }
+    }
+
+    func showOperationToast(_ target: TargetWindow, bounds: WindowBounds, cancellation: InputCancellation, generation: UInt64) throws {
+        try onMain { try operationToast.show(over: bounds, targetPID: target.pid, cancellation: cancellation, generation: generation) }
     }
 
     func verifyPointer(_ point: CGPoint, target: TargetWindow, expected: WindowBounds) throws {

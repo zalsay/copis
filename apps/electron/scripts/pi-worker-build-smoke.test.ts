@@ -27,9 +27,10 @@ createInterface({ input: process.stdin }).once('line', async line => {
   }
   const names = [
     'ChromeDesktopStart', 'ChromeDesktopObserve', 'ChromeDesktopClick',
-    'ChromeDesktopScroll', 'ChromeDesktopType', 'ChromeDesktopPress', 'ChromeDesktopStop',
+    'ChromeDesktopScroll', 'ChromeDesktopType', 'ChromeDesktopPress', 'ChromeDesktopSelectFile', 'ChromeDesktopStop',
   ]
   if (mode === 'missing-tool') names.splice(names.indexOf('ChromeDesktopClick'), 1)
+  if (mode === 'missing-select-file') names.splice(names.indexOf('ChromeDesktopSelectFile'), 1)
   await fetch(config.query.baseUrl + '/chat/completions', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ tools: names.map(name => ({ type: 'function', function: { name } })) }),
@@ -42,13 +43,18 @@ createInterface({ input: process.stdin }).once('line', async line => {
 afterEach(() => rmSync(fixtureRoot, { recursive: true, force: true }))
 
 describe('自包含 Pi Worker 构建 smoke', () => {
-  test('Given Worker 仅通过 run 配置接收 capability When 模型请求包含 7 个 Chrome 工具 Then smoke 通过且不提前关闭 stdin', async () => {
+  test('Given Worker 仅通过 run 配置接收 capability When 模型请求包含 8 个 Chrome 工具 Then smoke 通过且不提前关闭 stdin', async () => {
     await verifyCompiledPiWorker(process.execPath, [workerFile, 'complete'])
   })
 
   test('Given Worker 能启动但未注册 Click When 模型请求到达 Then 构建失败并列出缺失工具', async () => {
     await expect(verifyCompiledPiWorker(process.execPath, [workerFile, 'missing-tool']))
       .rejects.toThrow('ChromeDesktopClick')
+  })
+
+  test('Given Worker缺少原生文件选择工具 When 模型请求到达 Then 拒绝缺失SelectFile的构建产物', async () => {
+    await expect(verifyCompiledPiWorker(process.execPath, [workerFile, 'missing-select-file']))
+      .rejects.toThrow('ChromeDesktopSelectFile')
   })
 
   test('Given Worker 超时且忽略终止信号 When smoke 失败 Then 强制终止并等待退出后清理临时目录', async () => {

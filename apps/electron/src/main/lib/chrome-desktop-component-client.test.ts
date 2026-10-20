@@ -74,6 +74,9 @@ const reply = value => console.log(JSON.stringify({protocolVersion: 1, ok: true,
    } else fs.writeFileSync(image, config.frameMode === 'large' ? Buffer.alloc(1024 * 1024 + 1) : config.frameMode === 'not-jpeg' ? Buffer.from('not jpeg') : bytes);
    reply({connectionId: 'native-connection', frameId: 'native-frame', imagePath: image, width: 2, height: 1,
      capturedAtMs: 1234, bounds: win.bounds, ...(config.frame || {})});
+ } else if (action === 'select-file') {
+   if (get('--connection') !== 'native-connection' || !get('--path') || args.includes('--frame')) throw Error('错误 select-file 参数');
+   reply(config.selectFileResponse || {connectionId: 'native-connection', selected: true, dialogClosed: true});
  } else {
    if (get('--connection') !== 'native-connection' || get('--frame') !== 'native-frame') throw Error('帧或连接被改写');
    if (config.permissions && !config.permissions.accessibility) {
@@ -313,6 +316,66 @@ describeUnixIntegration('Chrome 组件：连接、原生帧和取消 BDD', () =>
       ['type', '--connection', 'native-connection', '--frame', 'native-frame', '--text', '你好 "$()`\n'],
       ['press', '--connection', 'native-connection', '--frame', 'native-frame', '--key', 'Cmd+L'],
     ])
+  })
+
+  test('Given 已连接并打开文件选择框 When selectFile Then 使用专用CLI参数和receipt，不需要frame', async () => {
+    const f = await fixture()
+    await f.client.connectWindow(42, 123)
+    await expect(f.client.selectFile('/Users/test/Downloads/report.pdf')).resolves.toBeUndefined()
+    const event = (await f.events()).at(-1)!
+    expect(event.args.filter(a => a !== '--json')).toEqual([
+      'select-file', '--connection', 'native-connection', '--path', '/Users/test/Downloads/report.pdf',
+    ])
+    expect((await f.events()).filter(e => e.action === 'observe')).toHaveLength(0)
+  })
+
+  test('Given 非绝对或控制字符路径 When selectFile Then 在启动CLI前拒绝且不回显路径', async () => {
+    const f = await fixture()
+    await f.client.connectWindow(42, 123)
+    for (const path of ['relative.pdf', 'file:///tmp/a.pdf', '/tmp/a\u0000.pdf', '/tmp/a\n.pdf', '/tmp/../secret.pdf', '/tmp/./secret.pdf', '/tmp/file/', `/${'界'.repeat(1366)}`]) {
+      await expect(f.client.selectFile(path)).rejects.toThrow('CHROME_FILE_PATH_INVALID')
+    }
+    expect((await f.events()).filter(e => e.action === 'select-file')).toHaveLength(0)
+  })
+
+  test('Given native 文件对话框错误 When selectFile Then 保留白名单错误码但不泄露stderr或路径', async () => {
+    const f = await fixture()
+    await f.client.connectWindow(42, 123)
+    for (const [native, expected] of [
+      ['FILE_DIALOG_NOT_FOUND', 'CHROME_FILE_DIALOG_NOT_FOUND'],
+      ['FILE_DIALOG_UNSUPPORTED', 'CHROME_FILE_DIALOG_UNSUPPORTED'],
+      ['FILE_DIALOG_UNVERIFIED', 'CHROME_FILE_DIALOG_UNVERIFIED'],
+      ['FILE_DIALOG_TIMEOUT', 'CHROME_FILE_DIALOG_TIMEOUT'],
+      ['FILE_NOT_READABLE', 'CHROME_FILE_NOT_READABLE'],
+      ['FILE_SELECTION_FAILED', 'CHROME_FILE_SELECTION_FAILED'],
+    ]) {
+      await f.configure({ failAction: 'select-file', code: native, exitCode: 1, stderr: '/Users/private/secret.pdf token-private' })
+      let message = ''
+      try { await f.client.selectFile('/Users/private/secret.pdf') } catch (error) { message = (error as Error).message }
+      expect(message).toContain(`${expected}:`)
+      expect(message).toContain('select-file')
+      expect(message).not.toContain('/Users/private/secret.pdf')
+      expect(message).not.toContain('token-private')
+    }
+    expect((await f.events()).filter(e => e.action === 'select-file')).toHaveLength(6)
+  })
+
+  test('Given 旧CLI不认识select-file When native parser返回INVALID_ARGUMENT Then 提示更新组件且不泄露参数', async () => {
+    const f = await fixture()
+    await f.client.connectWindow(42, 123)
+    await f.configure({ failAction: 'select-file', code: 'INVALID_ARGUMENT', exitCode: 1, stderr: '未知命令 /Users/private/a.pdf' })
+    let message = ''
+    try { await f.client.selectFile('/Users/private/a.pdf') } catch (error) { message = (error as Error).message }
+    expect(message).toContain('CHROME_COMPONENT_VERSION_UNSUPPORTED:')
+    expect(message).toContain('更新')
+    expect(message).not.toContain('/Users/private/a.pdf')
+  })
+
+  test('Given receipt未确认dialogClosed When selectFile Then 拒绝成功回执', async () => {
+    const f = await fixture()
+    await f.client.connectWindow(42, 123)
+    await f.configure({ selectFileResponse: { connectionId: 'native-connection', selected: true, dialogClosed: false } })
+    await expect(f.client.selectFile('/tmp/a.pdf')).rejects.toThrow('CHROME_HELPER_FAILED')
   })
 
   for (const [native, code] of Object.entries({ CONNECTION_BUSY: 'CHROME_BUSY', BUSY: 'CHROME_BUSY', FRAME_UNKNOWN: 'CHROME_FRAME_STALE', FRAME_GEOMETRY_CHANGED: 'CHROME_GEOMETRY_CHANGED', WINDOW_UNAVAILABLE: 'CHROME_WINDOW_UNAVAILABLE', FOCUS_LOST: 'CHROME_FOCUS_LOST', FOCUS_UNVERIFIED: 'CHROME_FOCUS_LOST', SCREEN_PERMISSION_REQUIRED: 'CHROME_SCREEN_PERMISSION_REQUIRED', ACCESSIBILITY_PERMISSION_REQUIRED: 'CHROME_INPUT_PERMISSION_REQUIRED', HELPER_TIMEOUT: 'CHROME_ACTION_UNCERTAIN', HELPER_EOF: 'CHROME_ACTION_UNCERTAIN', CAPTURE_TIMEOUT: 'CHROME_ACTION_UNCERTAIN', CAPTURE_FAILED: 'CHROME_CAPTURE_FAILED', IMAGE_TOO_LARGE: 'CHROME_CAPTURE_FAILED' })) {

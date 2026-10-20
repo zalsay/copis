@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   parseBrowserAgentToolRequest,
+  parseChromeDesktopToolRequest,
   parseAgentSseData,
   parseWorkerCommand,
   parseWorkerFrame,
@@ -174,6 +175,15 @@ describe('Agent RPC 协议', () => {
       toolInput: {},
       browserPageControl: { endpoint: '/api/internal/agent/browser-tool', token: 'leak' },
     })).toBeUndefined()
+  })
+
+  test('Given Chrome SelectFile tool request When parsed Then accepts the high-level allowlisted tool only', () => {
+    const request = {
+      sessionId: 'session-1', capabilityToken: 'token-1', toolCallId: 'file-1',
+      toolName: 'ChromeDesktopSelectFile', toolInput: { controlId: 'control-1', path: '/Users/test/report.pdf' },
+    } as const
+    expect(parseChromeDesktopToolRequest(request)).toEqual(request)
+    expect(parseChromeDesktopToolRequest({ ...request, toolName: 'ChromeDesktopArbitrary' })).toBeUndefined()
   })
 
   test('Given worker JSONL When parsed Then accepts event and complete frames only as objects', () => {

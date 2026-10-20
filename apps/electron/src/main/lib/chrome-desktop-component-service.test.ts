@@ -14,11 +14,15 @@ class Backend implements ChromeDesktopBackend {
   connection = async () => target
   inputGate: Promise<void> | null = null
   inputError: Error | null = null
+  files: string[] = []
+  fileGate: Promise<void> | null = null
+  fileError: Error | null = null
   async checkPermissions() { return { accessibility: true, screenRecording: true, helperPath: '/managed/helper', componentVersion: '0.1.0' } }
   async listWindows() { return [target] }
   async connectWindow() { return this.connection() }
   async observe() { return this.capture() }
   async input(frameId: string, action: ChromeDesktopComponentAction) { this.inputs.push({ frameId, action }); if (this.inputGate) await this.inputGate; if (this.inputError) throw this.inputError }
+  async selectFile(path: string) { this.files.push(path); if (this.fileGate) await this.fileGate; if (this.fileError) throw this.fileError }
   async disconnect() {}
   async cancel() { this.cancels++ }
   stop() {}

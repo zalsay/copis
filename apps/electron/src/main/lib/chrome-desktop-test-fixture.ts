@@ -8,6 +8,7 @@ export class TestChromeComponent implements ChromeDesktopBackend {
   bounds: ChromeDesktopBounds = { x: 100, y: 100, width: 800, height: 600 }
   target: ChromeDesktopWindowInfo = { windowId: 101, pid: 2001, title: '测试窗口', bounds: this.bounds }
   inputCalls: Array<{ frameId: string; action: ChromeDesktopComponentAction }> = []
+  fileSelections: string[] = []
   cancels = 0
   connectCalls = 0
   observeCalls = 0
@@ -15,11 +16,13 @@ export class TestChromeComponent implements ChromeDesktopBackend {
   onConnect = async (): Promise<ChromeDesktopWindowInfo> => ({ ...this.target, bounds: { ...this.bounds } })
   onObserve = async (): Promise<ChromeDesktopComponentFrame> => ({ frameId: `native-frame-${this.observeCalls}`, width: 1600, height: 1200, capturedAt: Date.now(), bounds: { ...this.bounds }, data: '/9j/AA==' })
   onInput = async (_frameId: string, _action: ChromeDesktopComponentAction): Promise<void> => {}
+  onSelectFile = async (_path: string): Promise<void> => {}
   async checkPermissions() { return this.permissions }
   async listWindows() { return [this.target] }
   async connectWindow(_windowId: number, _pid: number) { this.connectCalls++; return this.onConnect() }
   async observe() { this.observeCalls++; return this.onObserve() }
   async input(frameId: string, action: ChromeDesktopComponentAction) { this.inputCalls.push({ frameId, action }); await this.onInput(frameId, action) }
+  async selectFile(path: string) { this.fileSelections.push(path); await this.onSelectFile(path) }
   async disconnect() {}
   async cancel() { this.cancels++ }
   stop() {}

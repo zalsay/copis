@@ -1,13 +1,14 @@
 /**
  * Pi Worker Chrome 桌面视觉自动化工具适配器
  *
- * 封装 7 个视觉操作工具：
+ * 封装 Chrome 视觉与原生文件选择工具：
  * - ChromeDesktopStart (支持最多 120 秒轮询等待用户授权)
  * - ChromeDesktopObserve (返回标准 Pi 图片 content 与不可信数据标记)
  * - ChromeDesktopClick
  * - ChromeDesktopScroll
  * - ChromeDesktopType
  * - ChromeDesktopPress
+ * - ChromeDesktopSelectFile
  * - ChromeDesktopStop
  */
 
@@ -274,6 +275,17 @@ const CHROME_DESKTOP_TOOL_DEFINITIONS: ChromeDesktopToolDefinition[] = [
         description: '允许的按键名称',
         enum: [...CHROME_DESKTOP_ALLOWED_KEYS],
       }),
+    }),
+  },
+  {
+    name: 'ChromeDesktopSelectFile',
+    label: '选择 Chrome 上传文件',
+    description:
+      '仅当当前任务要求在已授权的 Chrome 页面选择本地文件、且 Chrome 原生文件选择框已经打开时使用。可根据当前任务上下文中的文件产出位置确定绝对路径，无需用户重复手写路径；若无法确定具体文件则先澄清。不需要 frameId，不会浏览或读取文件内容。成功只表示文件已交给 Chrome 文件选择框且对话框已关闭，不代表网页已上传或任务完成；随后必须调用 ChromeDesktopObserve 检查页面结果。路径属于敏感本地信息，不要在其他说明或日志中复述。',
+    promptSnippet: 'ChromeDesktopSelectFile: 为当前任务选择所需的本地文件，可根据任务上下文确定路径，无需用户手写精确路径；不表示上传成功，随后必须 Observe。',
+    parameters: Type.Object({
+      controlId: Type.String({ description: '当前有效的 controlId' }),
+      path: Type.String({ minLength: 1, maxLength: 4096, description: '绝对本地文件路径；不会读取文件内容' }),
     }),
   },
   {

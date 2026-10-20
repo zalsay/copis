@@ -59,6 +59,7 @@ struct NativeRequest {
     var text = ""
     var key = ""
     var imagePath = ""
+    var filePath = ""
     var requestPermissions = false
 
     static func decode(_ json: [String: Any]) throws -> NativeRequest {
@@ -74,6 +75,7 @@ struct NativeRequest {
             "scroll": ["windowId", "pid", "expectedBounds", "screenX", "screenY", "deltaY"],
             "type": ["windowId", "pid", "expectedBounds", "text"],
             "press": ["windowId", "pid", "expectedBounds", "key"],
+            "select-file": ["windowId", "pid", "path"],
         ]
         guard let allowed = fields[action] else {
             throw HelperFailure(code: "UNKNOWN_ACTION", message: "不支持该原生动作")
@@ -117,6 +119,13 @@ struct NativeRequest {
         case "press":
             guard let key = json["key"] as? String, allowedKeys[key] != nil else { throw HelperFailure.invalidArgument }
             request.key = key
+        case "select-file":
+            guard let path = json["path"] as? String, path.hasPrefix("/"), !path.hasSuffix("/"),
+                  path.utf8.count <= 4096, !path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
+                  !path.split(separator: "/").contains(where: { $0 == ".." || $0 == "." }) else {
+                throw HelperFailure.invalidArgument
+            }
+            request.filePath = path
         case "observe":
             guard let path = json["imagePath"] as? String, path.hasPrefix("/"), !path.hasSuffix("/"),
                   path.utf8.count <= 4096, !path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
