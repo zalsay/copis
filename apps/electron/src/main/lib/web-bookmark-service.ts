@@ -76,7 +76,7 @@ function readGroups(value: unknown): WebBookmarkGroup[] {
   })
 }
 
-function resolveDefaultFaviconUrl(rawUrl?: string | null): string | null {
+export function resolveDefaultFaviconUrl(rawUrl?: string | null): string | null {
   if (!rawUrl) return null
   try {
     const parsed = new URL(rawUrl)
@@ -87,10 +87,15 @@ function resolveDefaultFaviconUrl(rawUrl?: string | null): string | null {
   return null
 }
 
+export const MAX_BOOKMARK_FAVICON_URL_LENGTH = 65536
+
 function readFaviconUrl(value: unknown, url?: string): string | null {
   if (typeof value === 'string') {
     const normalized = value.trim()
-    if (/^https?:\/\//i.test(normalized) || /^data:image\//i.test(normalized)) {
+    if (
+      (/^https?:\/\//i.test(normalized) || /^data:image\//i.test(normalized))
+      && normalized.length <= MAX_BOOKMARK_FAVICON_URL_LENGTH
+    ) {
       return normalized
     }
   }
@@ -144,7 +149,15 @@ function readSnapshot(): WebBookmarksSnapshot {
     if (!isRecord(raw)) return emptySnapshot()
 
     const groups = readGroups(raw.groups)
-    return { groups, bookmarks: readBookmarks(raw.bookmarks, groups) }
+    const bookmarks = readBookmarks(raw.bookmarks, groups)
+    const snapshot = { groups, bookmarks }
+    const hasOversizedFavicon = Array.isArray(raw.bookmarks) && raw.bookmarks.some(
+      (item) => isRecord(item) && typeof item.faviconUrl === 'string' && item.faviconUrl.length > MAX_BOOKMARK_FAVICON_URL_LENGTH,
+    )
+    if (hasOversizedFavicon) {
+      writeSnapshot(snapshot, false)
+    }
+    return snapshot
   } catch (error) {
     console.error('[网页收藏夹] 读取失败:', error)
     return emptySnapshot()
@@ -179,12 +192,18 @@ function validateUrl(url: string): string {
   }
 }
 
-function validateFaviconUrl(faviconUrl: SaveWebBookmarkInput['faviconUrl']): string | null | undefined {
+function validateFaviconUrl(
+  faviconUrl: SaveWebBookmarkInput['faviconUrl'],
+  url?: string,
+): string | null | undefined {
   if (faviconUrl === undefined || faviconUrl === null) return faviconUrl
 
   const normalized = faviconUrl.trim()
   if (!/^https?:\/\//i.test(normalized) && !/^data:image\//i.test(normalized)) {
     throw new Error('网页图标地址无效')
+  }
+  if (normalized.length > MAX_BOOKMARK_FAVICON_URL_LENGTH) {
+    return resolveDefaultFaviconUrl(url)
   }
   return normalized
 }
@@ -238,7 +257,7 @@ export function saveWebBookmark(input: SaveWebBookmarkInput): WebBookmarksSnapsh
   const url = validateUrl(input.url)
   const title = input.title.trim() || url
   const fallbackFavicon = resolveDefaultFaviconUrl(url)
-  const validatedFavicon = validateFaviconUrl(input.faviconUrl)
+  const validatedFavicon = validateFaviconUrl(input.faviconUrl, url)
   const faviconUrl = validatedFavicon === undefined ? undefined : (validatedFavicon ?? fallbackFavicon)
   const current = readSnapshot()
   const existing = current.bookmarks.find((bookmark) => bookmark.url === url)

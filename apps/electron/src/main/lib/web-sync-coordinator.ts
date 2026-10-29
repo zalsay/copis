@@ -18,6 +18,7 @@ import {
   applyRemoteBookmarkChanges,
   getWebBookmarksRaw,
   purgeExpiredBookmarkTombstones,
+  resolveDefaultFaviconUrl,
 } from './web-bookmark-service'
 import {
   addPageProfileChangeListener,
@@ -87,6 +88,39 @@ function assertWritableStatePath(path: string): void {
   if (!stats.isFile()) throw new Error('WebSync 状态文件路径不是普通文件')
 }
 
+const MAX_SYNC_FAVICON_URL_LENGTH = 65536
+const MAX_SYNC_SAFE_INTEGER = 9007199254740991
+
+function isValidSyncHttpUrl(value: string): boolean {
+  if (typeof value !== 'string' || value.length > 16384) return false
+  try {
+    const parsed = new URL(value)
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && Boolean(parsed.hostname)
+  } catch {
+    return false
+  }
+}
+
+function sanitizeSyncMeta<T extends { id: string; createdAt: number; updatedAt?: number; version?: number; isDeleted?: boolean; deletedAt?: number }>(
+  meta: T,
+): { id: string; createdAt: number; updatedAt: number; version: number; isDeleted: boolean; deletedAt?: number } {
+  const rawId = typeof meta.id === 'string' ? meta.id.trim() : ''
+  const id = rawId.slice(0, 128)
+  const createdAt = Math.min(MAX_SYNC_SAFE_INTEGER, Math.max(0, Number.isFinite(meta.createdAt) ? meta.createdAt : 0))
+  const updatedAt = Math.min(MAX_SYNC_SAFE_INTEGER, Math.max(createdAt, Number.isFinite(meta.updatedAt) ? meta.updatedAt! : createdAt))
+  const version = Math.min(MAX_SYNC_SAFE_INTEGER, Math.max(1, Number.isFinite(meta.version) ? meta.version! : 1))
+  const isDeleted = Boolean(meta.isDeleted)
+  const deletedAt = isDeleted ? Math.min(MAX_SYNC_SAFE_INTEGER, Math.max(0, Number.isFinite(meta.deletedAt) ? meta.deletedAt! : updatedAt)) : undefined
+  return {
+    id,
+    createdAt,
+    updatedAt,
+    version,
+    isDeleted,
+    ...(deletedAt !== undefined ? { deletedAt } : {}),
+  }
+}
+
 function buildLocalEntitySnapshot(acknowledged: Record<string, string>): LocalEntitySnapshot {
   const all = new Map<string, LocalEntity>()
   const add = (
@@ -101,45 +135,47 @@ function buildLocalEntitySnapshot(acknowledged: Record<string, string>): LocalEn
 
   const rawBookmarks = getWebBookmarksRaw()
   for (const group of rawBookmarks.groups) {
-    add('group', group.id, {
-      id: group.id,
-      name: group.name,
-      createdAt: group.createdAt,
-      updatedAt: group.updatedAt ?? group.createdAt,
-      version: group.version ?? 1,
-      isDeleted: Boolean(group.isDeleted),
-      deletedAt: group.deletedAt,
+    const meta = sanitizeSyncMeta(group)
+    const name = (group.name?.trim() || '未命名分组').slice(0, 1024)
+    add('group', meta.id, {
+      ...meta,
+      name,
     })
   }
   for (const bookmark of rawBookmarks.bookmarks) {
-    add('bookmark', bookmark.id, {
-      id: bookmark.id,
-      title: bookmark.title,
+    if (!isValidSyncHttpUrl(bookmark.url)) continue
+    const meta = sanitizeSyncMeta(bookmark)
+    const title = (bookmark.title?.trim() || bookmark.url).slice(0, 16384)
+    const faviconUrl = typeof bookmark.faviconUrl === 'string' && bookmark.faviconUrl.length <= MAX_SYNC_FAVICON_URL_LENGTH
+      ? bookmark.faviconUrl
+      : resolveDefaultFaviconUrl(bookmark.url)
+    const groupId = typeof bookmark.groupId === 'string' && bookmark.groupId.trim() && bookmark.groupId.trim().length <= 128
+      ? bookmark.groupId.trim()
+      : null
+    add('bookmark', meta.id, {
+      ...meta,
+      title,
       url: bookmark.url,
-      faviconUrl: bookmark.faviconUrl,
-      groupId: bookmark.groupId,
-      createdAt: bookmark.createdAt,
-      updatedAt: bookmark.updatedAt ?? bookmark.createdAt,
-      version: bookmark.version ?? 1,
-      isDeleted: Boolean(bookmark.isDeleted),
-      deletedAt: bookmark.deletedAt,
+      faviconUrl,
+      groupId,
     })
   }
 
   const rawProfiles = getWebPageProfilesRaw()
   for (const profile of rawProfiles.profiles) {
-    add('pageProfile', profile.id, {
-      id: profile.id,
+    if (!isValidSyncHttpUrl(profile.url)) continue
+    const meta = sanitizeSyncMeta(profile)
+    const domain = (profile.domain?.trim() || '').slice(0, 1024) || 'unknown'
+    const workspaceId = typeof profile.workspaceId === 'string' && profile.workspaceId.trim()
+      ? profile.workspaceId.trim().slice(0, 512)
+      : null
+    add('pageProfile', meta.id, {
+      ...meta,
       url: profile.url,
-      domain: profile.domain,
-      workspaceId: profile.workspaceId,
-      preferences: profile.preferences,
-      aiContext: profile.aiContext,
-      createdAt: profile.createdAt,
-      updatedAt: profile.updatedAt,
-      version: profile.version,
-      isDeleted: Boolean(profile.isDeleted),
-      deletedAt: profile.deletedAt,
+      domain,
+      workspaceId,
+      preferences: isRecord(profile.preferences) ? profile.preferences : {},
+      aiContext: isRecord(profile.aiContext) ? profile.aiContext : {},
     })
   }
 

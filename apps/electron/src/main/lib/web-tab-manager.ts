@@ -69,6 +69,7 @@ const DEFAULT_URL = 'about:blank'
 const DEFAULT_TITLE = '新标签页'
 const SEARCH_URL = 'https://www.google.com/search?q='
 const MAX_WEB_TAB_FAVICON_BYTES = 512 * 1024
+const MAX_FAVICON_DATA_URL_LENGTH = 65536
 const FAVICON_ACCEPT_HEADER = 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
 
 let hostWindow: BrowserWindow | null = null
@@ -131,6 +132,7 @@ type WebTabFaviconFetch = (url: string, init: RequestInit) => Promise<WebTabFavi
 
 function normalizeDataImageUrl(value: string): string | null {
   const normalized = value.trim()
+  if (normalized.length > MAX_FAVICON_DATA_URL_LENGTH) return null
   const separatorIndex = normalized.indexOf(',')
   if (separatorIndex <= 5) return null
 
@@ -186,7 +188,9 @@ export async function resolveWebTabFaviconDataUrl(
 
       const icon = Buffer.from(await response.arrayBuffer())
       if (icon.byteLength === 0 || icon.byteLength > MAX_WEB_TAB_FAVICON_BYTES) continue
-      return `data:${mimeType};base64,${icon.toString('base64')}`
+      const dataUrl = `data:${mimeType};base64,${icon.toString('base64')}`
+      if (dataUrl.length > MAX_FAVICON_DATA_URL_LENGTH) continue
+      return dataUrl
     } catch {
       // 单个候选图标失败后继续尝试页面提供的其他候选。
     }

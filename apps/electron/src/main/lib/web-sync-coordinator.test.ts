@@ -1,6 +1,6 @@
 import { describe, expect, test, beforeEach, afterEach, mock } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { BrowserSyncRequest, BrowserSyncResponse } from '@copis/shared'
 
@@ -296,5 +296,55 @@ describe('WebSyncCoordinator 增量同步调度', () => {
     expect(requests[2]!.clientCursor).toBe(31)
     expect(requests[2]!.changes.bookmarks).toHaveLength(0)
     verifyCoordinator.destroy()
+  })
+
+  test('Given 本地存在超过 65536 长度的超大 favicon 图标或异常时间戳 When 执行增量同步 Then 自动净化为有效载荷确保满足云端契约', async () => {
+    accountStorage.setWebSyncAccountContext(accountStorage.createWebSyncAccountContext(true, { id: 'user-1' }, 'https://working.example'))
+    const accountBookmarksPath = accountStorage.getWebBookmarksStoragePath()
+    mkdirSync(dirname(accountBookmarksPath), { recursive: true })
+    const hugeFavicon = `data:image/png;base64,${'B'.repeat(70000)}`
+    writeFileSync(accountBookmarksPath, JSON.stringify({
+      groups: [{ id: 'group-1', name: '超大分组', createdAt: 200, updatedAt: 100, version: 0, isDeleted: false }],
+      bookmarks: [{
+        id: 'bm-huge',
+        title: '超大图标收藏',
+        url: 'https://huge-icon.example.com/item',
+        faviconUrl: hugeFavicon,
+        groupId: 'group-1',
+        createdAt: 200,
+        updatedAt: 100,
+        version: 0,
+        isDeleted: false,
+      }],
+    }))
+
+    let capturedRequest: BrowserSyncRequest | null = null
+    const client = {
+      baseUrl: 'https://working.example',
+      getAuthState: async () => ({ authenticated: true, user: { id: 'user-1' } }),
+      syncBrowserData: async (request: BrowserSyncRequest) => {
+        capturedRequest = request
+        return { serverCursor: 1, serverChanges: { groups: [], bookmarks: [], pageProfiles: [] } }
+      },
+    } as any
+
+    const coordinator = new WebSyncCoordinator({ apiClient: client, autoStartInterval: false })
+    const state = await coordinator.syncNow()
+    expect(state.status).toBe('synced')
+    expect(capturedRequest).not.toBeNull()
+
+    const syncedBookmark = capturedRequest!.changes.bookmarks.find((b) => b.id === 'bm-huge')
+    expect(syncedBookmark).toBeDefined()
+    expect(syncedBookmark!.faviconUrl).toBe('https://huge-icon.example.com/favicon.ico')
+    expect(syncedBookmark!.faviconUrl!.length).toBeLessThanOrEqual(65536)
+    expect(syncedBookmark!.updatedAt).toBeGreaterThanOrEqual(syncedBookmark!.createdAt)
+    expect(syncedBookmark!.version).toBeGreaterThanOrEqual(1)
+
+    const syncedGroup = capturedRequest!.changes.groups.find((g) => g.id === 'group-1')
+    expect(syncedGroup).toBeDefined()
+    expect(syncedGroup!.updatedAt).toBeGreaterThanOrEqual(syncedGroup!.createdAt)
+    expect(syncedGroup!.version).toBeGreaterThanOrEqual(1)
+
+    coordinator.destroy()
   })
 })

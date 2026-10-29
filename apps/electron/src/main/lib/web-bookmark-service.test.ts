@@ -6,21 +6,37 @@ import { tmpdir } from 'node:os'
 const testDir = join(tmpdir(), `copis-web-bookmark-test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`)
 const bookmarksPath = join(testDir, 'bookmarks.json')
 
+mock.module('electron', () => ({
+  app: {
+    isPackaged: false,
+    getPath: () => testDir,
+  },
+  safeStorage: {
+    isEncryptionAvailable: () => false,
+    encryptString: (value: string) => Buffer.from(value),
+    decryptString: (value: Buffer) => value.toString('utf-8'),
+  },
+}))
+
 const actualConfigPaths = await import('./config-paths')
 mock.module('./config-paths', () => ({
   ...actualConfigPaths,
+  getConfigDir: () => testDir,
   getWebBookmarksPath: () => bookmarksPath,
 }))
-mock.module('./web-sync-account-storage', () => ({ getWebBookmarksStoragePath: () => bookmarksPath }))
+
 
 const service = await import('./web-bookmark-service')
+const { resetWebSyncAccountContextForTests } = await import('./web-sync-account-storage')
 
 describe('网页收藏夹存储', () => {
   beforeEach(() => {
+    resetWebSyncAccountContextForTests()
     mkdirSync(testDir, { recursive: true })
   })
 
   afterEach(() => {
+    resetWebSyncAccountContextForTests()
     rmSync(testDir, { recursive: true, force: true })
   })
 
@@ -171,5 +187,38 @@ describe('网页收藏夹存储', () => {
 
     const raw = service.getWebBookmarksRaw()
     expect(raw.bookmarks.some((b) => b.id === id)).toBe(false)
+  })
+
+  test('Given 网页图标超过 65536 长度限制 When 保存或读取收藏 Then 自动回退为站点根 favicon 并自愈持久化文件', () => {
+    const hugeFavicon = `data:image/png;base64,${'A'.repeat(70000)}`
+    const saved = service.saveWebBookmark({
+      url: 'https://huge-icon.example.com/page',
+      title: '超大图标页面',
+      faviconUrl: hugeFavicon,
+    })
+
+    expect(saved.bookmarks[0]!.faviconUrl).toBe('https://huge-icon.example.com/favicon.ico')
+
+    // 模拟磁盘上已存在超长 favicon 的历史脏数据
+    writeFileSync(bookmarksPath, JSON.stringify({
+      groups: [],
+      bookmarks: [{
+        id: 'corrupt-1',
+        title: '已损坏的超长图标',
+        url: 'https://corrupt.example.com/home',
+        faviconUrl: hugeFavicon,
+        createdAt: 1000,
+        updatedAt: 1000,
+        version: 1,
+        isDeleted: false,
+      }],
+    }))
+
+    const loaded = service.getWebBookmarks()
+    expect(loaded.bookmarks[0]!.faviconUrl).toBe('https://corrupt.example.com/favicon.ico')
+
+    // 校验自愈写入：磁盘文件内容也已净化为有效长度
+    const rawOnDisk = JSON.parse(readFileSync(bookmarksPath, 'utf-8'))
+    expect(rawOnDisk.bookmarks[0].faviconUrl).toBe('https://corrupt.example.com/favicon.ico')
   })
 })

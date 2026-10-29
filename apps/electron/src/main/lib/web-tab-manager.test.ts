@@ -166,6 +166,11 @@ mock.module('electron', () => ({
   dialog: { showMessageBox: mock(async () => ({ response: 0 })) },
   shell: {},
   WebContentsView: FakeWebContentsView,
+  safeStorage: {
+    isEncryptionAvailable: () => false,
+    encryptString: (value: string) => Buffer.from(value),
+    decryptString: (value: Buffer) => value.toString('utf-8'),
+  },
 }))
 
 mock.module('./web-tab-session-service', () => ({
