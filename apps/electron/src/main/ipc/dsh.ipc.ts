@@ -76,6 +76,14 @@ export function registerDshIpcHandlers(): void {
     }
   )
 
+  ipcMain.handle(
+    DSH_CORDIS_IPC_CHANNELS.GET_ACTIVE_WORKSPACE_PATH,
+    async (_event, cwd?: string): Promise<string> => {
+      const { getActiveDshWorkspacePath } = await import('../lib/dsh-file-service')
+      return getActiveDshWorkspacePath(cwd)
+    }
+  )
+
   ipcMain.on(
     DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT,
     (_event, clientEvent: DshClientEvent) => {

@@ -57,6 +57,7 @@ export const DSH_CORDIS_IPC_CHANNELS = {
   READ_FILE: 'dsh-cordis:read-file',
   SHOW_ITEM_IN_FOLDER: 'dsh-cordis:show-item-in-folder',
   LIST_DIRECTORY: 'dsh-cordis:list-directory',
+  GET_ACTIVE_WORKSPACE_PATH: 'dsh-cordis:get-active-workspace-path',
 } as const
 
 export type DshCordisIpcChannel = (typeof DSH_CORDIS_IPC_CHANNELS)[keyof typeof DSH_CORDIS_IPC_CHANNELS]

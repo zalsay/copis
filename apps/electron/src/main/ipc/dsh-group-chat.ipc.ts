@@ -14,6 +14,7 @@ import {
   type DshUpdateTaskInput,
   type DshDecomposeTaskInput,
   type DshGroupChatAgent,
+  type DshUpdateAgentModelInput,
 } from '@copis/shared'
 import { DshGroupChatService } from '../lib/dsh-group-chat/dsh-group-chat-service'
 
@@ -81,6 +82,17 @@ export function registerDshGroupChatIpcHandlers(): void {
       return service.updateAgentResponsibility(groupId, agentId, responsibility)
     }
   )
+
+  ipcMain.handle(
+    DSH_GROUP_CHAT_IPC_CHANNELS.UPDATE_AGENT_MODEL,
+    (_event, input: DshUpdateAgentModelInput) => {
+      return service.updateAgentModel(input)
+    }
+  )
+
+  ipcMain.handle(DSH_GROUP_CHAT_IPC_CHANNELS.GET_AVAILABLE_MODELS, () => {
+    return service.getAvailableModels()
+  })
 
   // 2. 消息流收发与已读标记
   ipcMain.handle(

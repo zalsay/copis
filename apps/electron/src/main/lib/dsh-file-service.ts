@@ -37,6 +37,76 @@ export const IMAGE_EXTENSIONS: Record<string, string> = {
 }
 
 /**
+ * 获取当前有效的 DSH 工作区目录。
+ * 优先级解析：
+ * 1. 显式传入的 cwd（若非空、解析后且目录真实存在）；
+ * 2. DSH 本地创造模式已记录的工作区（~/.copis/dsh/storages/workspace.json 等）；
+ * 3. Copis 自身的 Agent 活跃/默认工作区；
+ * 4. 当前 Node 进程工作目录 process.cwd()。
+ */
+export function getActiveDshWorkspacePath(cwd?: string): string {
+  if (cwd && typeof cwd === 'string' && cwd.trim()) {
+    const trimmed = cwd.trim()
+    const resolved = resolveDshFilePath(trimmed)
+    try {
+      if (existsSync(resolved) && statSync(resolved).isDirectory()) {
+        return resolved
+      }
+    } catch {
+      // 路径检查失败，继续回退
+    }
+  }
+
+  // 1. 优先尝试从 DSH 本地创造模式工作区读取
+  try {
+    const { getDshHomeDir } = require('./config-paths')
+    const candidatePaths = [
+      join(getDshHomeDir(), 'storages', 'workspace.json'),
+      join(homedir(), '.copis-dev', 'dsh', 'storages', 'workspace.json'),
+      join(homedir(), '.copis', 'dsh', 'storages', 'workspace.json'),
+    ]
+    for (const p of candidatePaths) {
+      if (existsSync(p)) {
+        const raw = readFileSync(p, 'utf8')
+        const data = JSON.parse(raw)
+        const workspaces = data?.tables?.workspaces || {}
+        for (const ws of Object.values<any>(workspaces)) {
+          if (ws?.path && typeof ws.path === 'string' && existsSync(ws.path)) {
+            const wsStat = statSync(ws.path)
+            if (wsStat.isDirectory()) {
+              return resolve(ws.path)
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // 忽略异常，继续 fallback
+  }
+
+  // 2. 尝试从 Copis Agent 工作区读取
+  try {
+    const { listAgentWorkspaces, getAgentWorkspaceSourceRoot } = require('./agent-workspace-manager')
+    const workspaces = listAgentWorkspaces()
+    if (Array.isArray(workspaces) && workspaces.length > 0) {
+      for (const ws of workspaces) {
+        const root = getAgentWorkspaceSourceRoot(ws)
+        if (root && existsSync(root) && statSync(root).isDirectory()) {
+          return resolve(root)
+        }
+        if (ws.projectRootPath && existsSync(ws.projectRootPath) && statSync(ws.projectRootPath).isDirectory()) {
+          return resolve(ws.projectRootPath)
+        }
+      }
+    }
+  } catch {
+    // 忽略异常，继续 fallback
+  }
+
+  return process.cwd()
+}
+
+/**
  * 解析并规格化目标路径。
  * 支持绝对路径、用户主目录缩写（~/）以及基于会话工作区的相对路径。
  */
@@ -67,7 +137,8 @@ export function readDshFile(filePath: string, cwd?: string): DshReadFileResult {
   }
 
   try {
-    const targetPath = resolveDshFilePath(filePath.trim(), cwd)
+    const effectiveCwd = getActiveDshWorkspacePath(cwd)
+    const targetPath = resolveDshFilePath(filePath.trim(), effectiveCwd)
     if (!existsSync(targetPath)) {
       return { success: false, error: `文件不存在: ${filePath}`, path: targetPath }
     }
@@ -145,7 +216,8 @@ export function readDshFile(filePath: string, cwd?: string): DshReadFileResult {
 export async function showDshItemInFolder(filePath: string, cwd?: string): Promise<boolean> {
   if (!filePath || typeof filePath !== 'string' || !filePath.trim()) return false
   try {
-    const targetPath = resolveDshFilePath(filePath.trim(), cwd)
+    const effectiveCwd = getActiveDshWorkspacePath(cwd)
+    const targetPath = resolveDshFilePath(filePath.trim(), effectiveCwd)
     if (!existsSync(targetPath)) {
       console.warn('[DSH] 路径不存在，无法在文件管理器中定位:', targetPath)
       return false
@@ -165,8 +237,9 @@ export async function showDshItemInFolder(filePath: string, cwd?: string): Promi
  */
 export function listDshDirectory(dirPath?: string, cwd?: string): DshFileEntry[] {
   try {
-    const rawPath = dirPath && dirPath.trim() ? dirPath.trim() : (cwd || '.')
-    const targetPath = resolveDshFilePath(rawPath, cwd)
+    const effectiveCwd = getActiveDshWorkspacePath(cwd)
+    const rawPath = dirPath && dirPath.trim() ? dirPath.trim() : effectiveCwd
+    const targetPath = resolveDshFilePath(rawPath, effectiveCwd)
     if (!existsSync(targetPath)) return []
 
     const stat = statSync(targetPath)

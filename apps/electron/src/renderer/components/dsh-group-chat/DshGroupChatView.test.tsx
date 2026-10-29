@@ -54,4 +54,10 @@ describe('DshGroupChatView 契约与零交叉测试', () => {
     expect(workspaceContent).toContain('onCompositionStart')
     expect(workspaceContent).toContain('onCompositionEnd')
   })
+
+  it('Given 群聊 Composer 输入区 When 检查顶部装饰 Then 移除多余的伴侣机器人图标保持界面干净', () => {
+    const workspaceContent = readFileSync(join(dir, 'DshGroupChatWorkspace.tsx'), 'utf-8')
+    expect(workspaceContent).not.toContain('WorkBuddy 3D 萌系机器人伴侣吉祥物')
+    expect(workspaceContent).not.toContain('bg-emerald-400 ring-2 ring-[#0c0d10]')
+  })
 })

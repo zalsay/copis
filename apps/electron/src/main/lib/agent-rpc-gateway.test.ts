@@ -60,7 +60,7 @@ describe('AgentRpcGateway', () => {
     expect(complete).toEqual(['session-1:success'])
   })
 
-  test('Given chatroom headless invocation When opening Worker RPC Then signal and opaque trusted run id reach the native request', async () => {
+  test('Given headless invocation When opening Worker RPC Then signal and opaque trusted run id reach the native request', async () => {
     let request: RequestInit | undefined
     const gateway = new AgentRpcGateway({
       baseUrl: 'http://127.0.0.1:51730',
@@ -162,17 +162,4 @@ describe('AgentRpcGateway', () => {
     expect(requests[2]?.init?.body).toBe(JSON.stringify({ sessionId: 'session-1', permissionMode: 'plan' }))
   })
 
-  test('Given chatroom invocation 持有 trusted run owner When stop Then gateway 将同一 owner 交给 Native 而非仅按 session 停止', async () => {
-    let request: { url: string; init?: RequestInit } | undefined
-    const gateway = new AgentRpcGateway({
-      baseUrl: 'http://127.0.0.1:51730',
-      fetchImpl: async (url, init) => { request = { url: String(url), init }; return new Response(null, { status: 204 }) },
-    })
-
-    await gateway.stop('session-1', 'trusted-main-run-a')
-
-    expect(request?.url).toBe('http://127.0.0.1:51730/api/agent/sessions/session-1/stop')
-    expect(request?.init?.body).toBe(JSON.stringify({ _copisTrustedRunId: 'trusted-main-run-a' }))
-    expect(request?.init?.headers).toMatchObject({ 'Content-Type': 'application/json' })
-  })
 })

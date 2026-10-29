@@ -67,6 +67,48 @@ describe('DshGroupChatStore', () => {
     expect(list[1]?.id).toBe('grp_1')
   })
 
+  it('should update agent model configuration and persist to group detail', () => {
+    const group: DshGroupChatDetail = {
+      id: 'grp_agent_model',
+      name: 'Agent模型群',
+      conversationKind: 'group',
+      ownerUserId: 'user_1',
+      status: 'active',
+      role: 'owner',
+      lastMessageSeq: 0,
+      lastReadSeq: 0,
+      taskRevision: 1,
+      members: [],
+      agents: [
+        {
+          agentId: 'ws_agent_1',
+          name: '基金研究员',
+          responsibility: '分析宏观与资产配置',
+          addedAt: new Date().toISOString(),
+        },
+      ],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+    store.saveGroup(group)
+
+    const updated = store.updateAgentModel('grp_agent_model', 'ws_agent_1', {
+      channelId: 'copis-working-deepseek',
+      modelId: 'deepseek-v4-pro',
+      modelName: 'DeepSeek V4 Pro',
+    })
+
+    expect(updated).not.toBeNull()
+    expect(updated?.agents[0]?.modelId).toBe('deepseek-v4-pro')
+    expect(updated?.agents[0]?.channelId).toBe('copis-working-deepseek')
+    expect(updated?.agents[0]?.modelName).toBe('DeepSeek V4 Pro')
+
+    // 从磁盘重新读取验证持久化
+    const reloaded = store.getGroup('grp_agent_model')
+    expect(reloaded?.agents[0]?.modelId).toBe('deepseek-v4-pro')
+    expect(reloaded?.agents[0]?.modelName).toBe('DeepSeek V4 Pro')
+  })
+
   it('should append messages with sequential seq and persist to jsonl', () => {
     const group: DshGroupChatDetail = {
       id: 'grp_msg',

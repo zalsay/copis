@@ -82,7 +82,7 @@ describe('CopisModeSwitcher', () => {
     expect(html).toContain('创造模式')
   })
 
-  test('Given 模式切换器 When 渲染 Agent 模式与创造模式 Then 分别使用 ui-primary 与 creation-ui-primary 强调色', () => {
+  test('Given 模式切换器 When 渲染 Agent 模式与创造模式 Then Agent 模式使用品牌标识，创造模式使用 WorkBuddy 极简浅灰风格', () => {
     const store = createStore()
     store.set(appModeAtom, 'agent')
 
@@ -96,11 +96,12 @@ describe('CopisModeSwitcher', () => {
 
     // Agent 模式 icon 使用 ui-primary
     expect(html).toContain('text-[var(--ui-primary)]')
-    // 创造模式 icon 使用 creation-ui-primary
-    expect(html).toContain('text-[var(--creation-ui-primary)]')
+    // 创造模式采用 WorkBuddy 极简中性高光质感，不强行注入紫色
+    expect(html).toContain('创造模式')
+    expect(html).not.toContain('text-[var(--creation-ui-primary)]')
   })
 
-  test('Given 创造模式激活 When 展开渲染 Then 创造模式处于激活状态并具有 creation-ui-primary 文字强调色', () => {
+  test('Given 创造模式激活 When 展开渲染 Then 创造模式处于激活状态并采用 WorkBuddy 浅灰卡片样式', () => {
     const store = createStore()
     store.set(appModeAtom, 'creation')
 
@@ -112,10 +113,12 @@ describe('CopisModeSwitcher', () => {
       </Provider>
     )
 
-    expect(html).toContain('text-[var(--creation-ui-primary)]')
+    expect(html).toContain('aria-checked="true"')
+    expect(html).toContain('bg-card text-foreground')
+    expect(html).not.toContain('text-[var(--creation-ui-primary)]')
   })
 
-  test('Given 折叠状态 When 分别处于 Agent 模式与创造模式 Then 状态指示器使用对应主题强调色', () => {
+  test('Given 折叠状态 When 分别处于 Agent 模式与创造模式 Then 状态指示器与图标展示对应模式状态', () => {
     const agentStore = createStore()
     agentStore.set(appModeAtom, 'agent')
     const agentHtml = renderToStaticMarkup(
@@ -136,8 +139,8 @@ describe('CopisModeSwitcher', () => {
         </TooltipProvider>
       </Provider>
     )
-    expect(creationHtml).toContain('bg-[var(--creation-ui-primary)]')
-    expect(creationHtml).toContain('text-[var(--creation-ui-primary)]')
+    expect(creationHtml).toContain('bg-card text-foreground')
+    expect(creationHtml).not.toContain('text-[var(--creation-ui-primary)]')
   })
 
   test('Given 展开状态 When 渲染模式切换器 Then tab 按钮与文本具有 whitespace-nowrap 且图标具备 shrink-0 确保文字绝不换行', () => {

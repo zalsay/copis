@@ -489,7 +489,7 @@ export function useGlobalAgentListeners(): void {
         const eventSession = event.session
         const activationSessions = eventSession ? [eventSession] : sessions
         const activation = buildExternalAgentRunActivation({
-          tabs: store.get(tabsAtom).filter((tab) => tab.type !== 'chatroom'),
+          tabs: store.get(tabsAtom),
           sessions: activationSessions,
           sessionId: event.sessionId,
           title: event.title,

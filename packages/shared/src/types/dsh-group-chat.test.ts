@@ -7,7 +7,6 @@ import {
   type DshGroupChatTask,
   type DshGroupInvocation,
 } from './dsh-group-chat'
-import { CHATROOM_IPC_CHANNELS } from './chatroom'
 
 describe('dsh-group-chat types and IPC channels', () => {
   it('should define isolated IPC channels starting with dsh-group-chat:', () => {
@@ -15,14 +14,6 @@ describe('dsh-group-chat types and IPC channels', () => {
     expect(channels.length).toBeGreaterThan(10)
     for (const channel of channels) {
       expect(channel).toStartWith('dsh-group-chat:')
-    }
-  })
-
-  it('should have ZERO intersection with CHATROOM_IPC_CHANNELS (Zero-Intersection Principle)', () => {
-    const dshChannels = new Set<string>(Object.values(DSH_GROUP_CHAT_IPC_CHANNELS))
-    const chatroomChannels = Object.values(CHATROOM_IPC_CHANNELS)
-    for (const ch of chatroomChannels) {
-      expect(dshChannels.has(ch)).toBeFalse()
     }
   })
 
@@ -52,6 +43,9 @@ describe('dsh-group-chat types and IPC channels', () => {
           name: 'COAgent Leader',
           isLeader: true,
           responsibility: '负责拆解子任务与调度协调',
+          channelId: 'copis-working-deepseek',
+          modelId: 'deepseek-v4-pro',
+          modelName: 'DeepSeek V4 Pro',
           addedAt: new Date().toISOString(),
         },
       ],
@@ -63,6 +57,8 @@ describe('dsh-group-chat types and IPC channels', () => {
     const parsed = JSON.parse(json) as DshGroupChatDetail
     expect(parsed.id).toBe('grp_001')
     expect(parsed.agents[0]?.isLeader).toBeTrue()
+    expect(parsed.agents[0]?.modelId).toBe('deepseek-v4-pro')
+    expect(parsed.agents[0]?.modelName).toBe('DeepSeek V4 Pro')
     expect(parsed.conversationKind).toBe('group')
   })
 

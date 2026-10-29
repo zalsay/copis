@@ -192,6 +192,28 @@ export class DshGroupChatStore {
     return true
   }
 
+  public updateAgentModel(
+    groupId: string,
+    agentId: string,
+    modelConfig: { channelId?: string; modelId: string; modelName?: string },
+  ): DshGroupChatDetail | null {
+    const group = this.getGroup(groupId)
+    if (!group) return null
+
+    const agentIndex = group.agents.findIndex((a) => a.agentId === agentId)
+    if (agentIndex === -1) return null
+
+    group.agents[agentIndex] = {
+      ...group.agents[agentIndex]!,
+      channelId: modelConfig.channelId,
+      modelId: modelConfig.modelId,
+      modelName: modelConfig.modelName,
+    }
+    group.updatedAt = new Date().toISOString()
+    this.saveGroup(group)
+    return group
+  }
+
   // ======================== 消息流追加与分页读取 ========================
 
   public getMessages(groupId: string, limit = 50, beforeSeq?: number): DshGroupChatMessage[] {

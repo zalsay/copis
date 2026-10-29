@@ -14,7 +14,6 @@ import {
 import { attachAgentRunDuration } from './lib/agent-rpc-duration'
 import { createMemoryMaintenanceRunner, MemoryMaintenanceService } from './lib/adapters/pi-memory-maintenance'
 import { receiveActiveWorkerQueue } from './lib/pi-worker-queue-receiver'
-import { createChatroomCanUseTool } from './lib/pi-worker-permission'
 
 interface ActiveWorkerRun {
   sessionId: string
@@ -155,14 +154,11 @@ async function runWorker(config: PiWorkerRunConfig): Promise<void> {
 
   let resultSubtype: string | undefined
   let resultErrors: string[] | undefined
-  const canUseChatroomTool = createChatroomCanUseTool(config)
-
   const query: PiAgentQueryOptions = {
     ...config.query,
     ...(browserPageControl ? { browserPageControl } : {}),
     ...(automationControl ? { automationControl } : {}),
     agentRuntime: isCodexRuntime ? 'codex' : 'pi',
-    canUseTool: canUseChatroomTool,
     onSessionId: (sdkSessionId, sessionFile) => {
       void writeFrame({
         type: 'meta',

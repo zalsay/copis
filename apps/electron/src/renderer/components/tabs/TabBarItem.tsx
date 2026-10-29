@@ -20,7 +20,7 @@ import { TabPreviewPanel } from './TabPreviewPanel'
 
 export interface TabBarItemProps {
   id: string
-  type: TabType | 'chatroom'
+  type: TabType
   title: string
   workspaceName?: string
   isActive: boolean

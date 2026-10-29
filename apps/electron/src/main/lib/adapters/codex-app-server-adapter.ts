@@ -206,7 +206,6 @@ export class CodexAppServerAdapter implements AgentProviderAdapter {
     const startedAt = options.retryRunStartedAt ?? Date.now()
 
     const imageToolsEnabled = options.imageGenerationEnabled === true
-      && options.capabilityProfile !== 'chatroom'
       && options.permissionMode !== 'plan'
     const toolCalls = new Set<string>()
     let imageBridge: Awaited<ReturnType<typeof startCodexImageToolsMcp>> | undefined

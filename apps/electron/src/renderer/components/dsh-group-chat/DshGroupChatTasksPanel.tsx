@@ -105,7 +105,7 @@ export function DshGroupChatTasksPanel(): React.ReactElement {
       {/* 抽屉 Header */}
       <div className="h-13 border-b border-border/60 px-3 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
-          <Kanban className="w-4 h-4 text-primary" />
+          <Kanban className="w-4 h-4 text-zinc-300" />
           <span className="text-xs font-semibold text-foreground">群任务看板</span>
           {board && (
             <span className="text-[10px] px-1.5 py-0.2 rounded bg-muted text-muted-foreground font-mono">
@@ -137,7 +137,7 @@ export function DshGroupChatTasksPanel(): React.ReactElement {
             type="submit"
             size="sm"
             disabled={!newTaskTitle.trim() || creating}
-            className="h-7 px-2.5 text-xs shrink-0"
+            className="h-7 px-2.5 text-xs shrink-0 bg-white/[0.12] hover:bg-white/[0.18] text-white border border-white/[0.1] shadow-xs cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5 mr-1" />
             添加
@@ -170,7 +170,7 @@ export function DshGroupChatTasksPanel(): React.ReactElement {
                   {colTasks.map((task) => (
                     <div
                       key={task.id}
-                      className="p-2.5 rounded-xl border border-border/70 bg-card hover:border-primary/40 transition-all text-xs shadow-xs space-y-1.5"
+                      className="p-2.5 rounded-xl border border-border/70 bg-card hover:border-white/[0.18] transition-all text-xs shadow-xs space-y-1.5"
                     >
                       <div className="flex items-start justify-between gap-1">
                         <span className="font-medium text-foreground leading-snug">{task.title}</span>
@@ -189,7 +189,7 @@ export function DshGroupChatTasksPanel(): React.ReactElement {
                       <div className="flex items-center justify-between pt-1 border-t border-border/40 text-[10px]">
                         <button
                           onClick={() => handleDecompose(task.id, task.title)}
-                          className="flex items-center gap-1 text-primary hover:underline cursor-pointer"
+                          className="flex items-center gap-1 text-zinc-300 hover:text-white cursor-pointer transition-colors"
                           title="原子分解子任务"
                         >
                           <GitFork className="w-3 h-3" />
@@ -200,7 +200,7 @@ export function DshGroupChatTasksPanel(): React.ReactElement {
                           {task.status !== 'in_progress' && (
                             <button
                               onClick={() => handleUpdateStatus(task.id, 'in_progress')}
-                              className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 hover:bg-blue-500/20 font-medium cursor-pointer"
+                              className="px-1.5 py-0.5 rounded bg-white/[0.08] text-zinc-300 hover:bg-white/[0.14] hover:text-white border border-white/[0.08] font-medium cursor-pointer transition-colors"
                             >
                               开始
                             </button>
@@ -208,7 +208,7 @@ export function DshGroupChatTasksPanel(): React.ReactElement {
                           {task.status !== 'done' && (
                             <button
                               onClick={() => handleUpdateStatus(task.id, 'done')}
-                              className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 font-medium cursor-pointer"
+                              className="px-1.5 py-0.5 rounded bg-white/[0.1] text-zinc-200 hover:bg-white/[0.18] hover:text-white border border-white/[0.1] font-medium cursor-pointer transition-colors"
                             >
                               完成
                             </button>

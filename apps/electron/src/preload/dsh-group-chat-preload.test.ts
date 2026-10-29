@@ -41,6 +41,8 @@ test('Given preload 初始化 When 暴露 dshGroupChat Then 具备完整的类�
     'addAgent',
     'removeAgent',
     'updateAgentResponsibility',
+    'updateAgentModel',
+    'getAvailableModels',
     'getMessages',
     'postMessage',
     'markRead',

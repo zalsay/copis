@@ -28,8 +28,8 @@ const prepareAlipayBotScript = readFileSync(join(repoRoot, 'scripts/prepare-alip
 const prepareAgentlyCliScript = readFileSync(join(repoRoot, 'scripts/prepare-agently-cli-module.ts'), 'utf8')
 
 describe('功能模块发布边界', () => {
-  test('Electron runtime 持有聊天室 COS SDK，长期发布能力仍属于仓库级脚本', () => {
-    expect(electronPackage.dependencies?.['cos-nodejs-sdk-v5']).toBe('3.0.0')
+  test('移除旧聊天室后 COS SDK 仅保留在仓库发布工具中', () => {
+    expect(electronPackage.dependencies?.['cos-nodejs-sdk-v5']).toBeUndefined()
     expect(electronPackage.devDependencies?.['cos-nodejs-sdk-v5']).toBeUndefined()
     expect(electronPackage.scripts?.['publish:functional-modules']).toBeUndefined()
     expect(rootPackage.devDependencies?.['cos-nodejs-sdk-v5']).toBe('3.0.0')

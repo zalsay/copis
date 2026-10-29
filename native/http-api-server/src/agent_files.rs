@@ -88,7 +88,6 @@ struct FileAccessPolicy {
     permission_mode: String,
     advanced_authorization: bool,
     worker_token: String,
-    chatroom_profile: bool,
 }
 
 #[derive(Default)]
@@ -146,9 +145,8 @@ impl AgentFilePolicyStore {
         if !use_rust_file_api {
             return Err("Rust 文件权限策略未启用 Rust 文件 API".to_string());
         }
-        let mut policy =
-            FileAccessPolicy::from_value(&value, query.get("cwd"), query.get("capabilityProfile"))
-                .map_err(|error| error.message)?;
+        let mut policy = FileAccessPolicy::from_value(&value, query.get("cwd"))
+            .map_err(|error| error.message)?;
         let worker_token = generate_worker_token()?;
         policy.worker_token = worker_token.clone();
         let mut policies = self.policies.lock().unwrap();
@@ -236,25 +234,6 @@ impl AgentFilePolicyStore {
         worker_token: &str,
         body: &[u8],
     ) -> Result<Value, AgentFileError> {
-        self.handle_shell_with_worker_token_internal(worker_token, body, None)
-    }
-
-    #[cfg(test)]
-    fn handle_shell_with_worker_token_and_process(
-        &self,
-        worker_token: &str,
-        body: &[u8],
-        process: Command,
-    ) -> Result<Value, AgentFileError> {
-        self.handle_shell_with_worker_token_internal(worker_token, body, Some(process))
-    }
-
-    fn handle_shell_with_worker_token_internal(
-        &self,
-        worker_token: &str,
-        body: &[u8],
-        process: Option<Command>,
-    ) -> Result<Value, AgentFileError> {
         let request: ShellRequest = serde_json::from_slice(body)
             .map_err(|_| AgentFileError::bad_request("命令请求体不是有效的 JSON"))?;
         if request.session_id.trim().is_empty()
@@ -275,13 +254,7 @@ impl AgentFilePolicyStore {
             .ok_or_else(|| {
                 AgentFileError::forbidden("agent_policy_not_found", "Agent 文件权限策略不存在")
             })?;
-        if policy.chatroom_profile {
-            return Err(AgentFileError::forbidden(
-                "chatroom_shell_not_allowed",
-                "聊天室 Agent 暂不支持项目 Shell 命令",
-            ));
-        }
-        policy.execute_project_command(&request, process)
+        policy.execute_project_command(&request)
     }
 
     fn ensure_worker_token(
@@ -310,26 +283,6 @@ impl AgentFilePolicyStore {
         worker_token: &str,
     ) -> Result<(), AgentFileError> {
         self.ensure_worker_token(session_id, worker_token)
-    }
-
-    pub fn validate_chatroom_worker_token(
-        &self,
-        session_id: &str,
-        worker_token: &str,
-    ) -> Result<(), AgentFileError> {
-        self.ensure_worker_token(session_id, worker_token)?;
-        let policies = self.policies.lock().unwrap();
-        if policies
-            .get(session_id)
-            .is_some_and(|policy| policy.chatroom_profile)
-        {
-            Ok(())
-        } else {
-            Err(AgentFileError::forbidden(
-                "chatroom_profile_required",
-                "聊天室权限能力不可用",
-            ))
-        }
     }
 
     pub fn handle(
@@ -487,27 +440,11 @@ impl AgentFilePolicyStore {
 }
 
 impl FileAccessPolicy {
-    fn execute_project_command(
-        &self,
-        request: &ShellRequest,
-        process_override: Option<Command>,
-    ) -> Result<Value, AgentFileError> {
-        if self.chatroom_profile {
-            return Err(AgentFileError::forbidden(
-                "chatroom_shell_not_allowed",
-                "聊天室 Agent 暂不支持项目 Shell 命令",
-            ));
-        }
+    fn execute_project_command(&self, request: &ShellRequest) -> Result<Value, AgentFileError> {
         if self.permission_mode == "plan" {
             return Err(AgentFileError::forbidden(
                 "plan_command_not_allowed",
                 "计划模式下不能执行项目命令",
-            ));
-        }
-        if self.chatroom_profile {
-            return Err(AgentFileError::forbidden(
-                "chatroom_shell_not_allowed",
-                "聊天室 Agent 暂不支持项目 Shell 命令",
             ));
         }
         if !self.advanced_authorization && requires_advanced_authorization(&request.command) {
@@ -542,7 +479,7 @@ impl FileAccessPolicy {
                 "命令 timeoutMs 必须在 1 到 600000 之间",
             ));
         }
-        let mut process = process_override.unwrap_or_else(|| {
+        let mut process = {
             if cfg!(windows) {
                 let mut process = Command::new("cmd");
                 process.args(["/C", &request.command]);
@@ -552,7 +489,7 @@ impl FileAccessPolicy {
                 process.args(["-c", &request.command]);
                 process
             }
-        });
+        };
         process
             .current_dir(&cwd)
             .stdin(Stdio::null())
@@ -603,11 +540,7 @@ impl FileAccessPolicy {
         self.ensure_read(&target)
     }
 
-    fn from_value(
-        value: &Value,
-        cwd: Option<&Value>,
-        capability_profile: Option<&Value>,
-    ) -> Result<Self, AgentFileError> {
+    fn from_value(value: &Value, cwd: Option<&Value>) -> Result<Self, AgentFileError> {
         let object = value
             .as_object()
             .ok_or_else(|| AgentFileError::bad_request("fileAccessPolicy 必须是对象"))?;
@@ -615,9 +548,7 @@ impl FileAccessPolicy {
             .get("permissionMode")
             .and_then(Value::as_str)
             .ok_or_else(|| AgentFileError::bad_request("fileAccessPolicy.permissionMode 不正确"))?;
-        let chatroom_default = permission_mode == "default"
-            && capability_profile.and_then(Value::as_str) == Some("chatroom");
-        if !is_supported_permission_mode(permission_mode) && !chatroom_default {
+        if !is_supported_permission_mode(permission_mode) {
             return Err(AgentFileError::bad_request(
                 "fileAccessPolicy.permissionMode 不正确",
             ));
@@ -644,7 +575,6 @@ impl FileAccessPolicy {
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
             worker_token: String::new(),
-            chatroom_profile: chatroom_default,
         })
     }
 

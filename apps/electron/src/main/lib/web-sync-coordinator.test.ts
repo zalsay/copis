@@ -45,7 +45,6 @@ const profileService = await import('./web-page-profile-service')
 describe('WebSyncCoordinator 增量同步调度', () => {
   beforeEach(() => {
     mkdirSync(testDir, { recursive: true })
-    mkdirSync(join(testDir, 'agent-workspaces', 'chatrooms'), { recursive: true })
   })
 
   afterEach(() => {
@@ -68,7 +67,7 @@ describe('WebSyncCoordinator 增量同步调度', () => {
     coordinator.destroy()
   })
 
-  test('WebSync 与聊天室共享同一个稳定客户端设备 ID', () => {
+  test('WebSync 使用稳定的 Copis 客户端设备 ID', () => {
     const coordinator = new WebSyncCoordinator({ autoStartInterval: false })
 
     expect(coordinator.getState().deviceId).toBe(getOrCreateClientDeviceId())

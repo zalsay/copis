@@ -1,8 +1,5 @@
 /**
- * Copis 客户端稳定设备标识与聊天室本地路径。
- *
- * 设备标识是本机 WebSync 和聊天室共用的唯一来源；聊天室路径只接受
- * 受限组件，避免把用户输入直接交给 path.join 造成目录穿越。
+ * Copis 客户端稳定设备标识，供本机 WebSync 使用。
  */
 
 import { randomUUID } from 'node:crypto'
@@ -27,19 +24,7 @@ import { resolve as resolvePath } from 'node:path'
 import { getClientDevicePath, getWebSyncStatePath } from './config-paths'
 import { writeJsonFileAtomic } from './safe-file'
 
-export {
-  getClientDevicePath,
-  getChatRoomsRootPath,
-  getChatRoomPath,
-  getChatRoomConfigPath,
-  getChatRoomAgentPath,
-  getChatRoomAgentSessionDir,
-  getChatRoomAgentSessionMetaPath,
-  getChatRoomAgentSessionMessagesPath,
-  getChatRoomAgentProjectPath,
-  getChatRoomAgentInboxPath,
-  getChatRoomAgentSkillsSnapshotPath,
-} from './config-paths'
+export { getClientDevicePath } from './config-paths'
 
 interface ClientDeviceFile {
   version: 1

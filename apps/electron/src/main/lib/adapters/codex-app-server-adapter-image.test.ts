@@ -232,10 +232,9 @@ describe('CodexAppServerAdapter image MCP', () => {
     await mockServer.close()
   })
 
-  test('Given 计划模式或 chatroom 会话 When 恢复已加载 thread Then 不启动图片桥接并在 fork 配置中明确关闭 MCP', async () => {
+  test('Given 计划模式 When 恢复已加载 thread Then 不启动图片桥接并在 fork 配置中明确关闭 MCP', async () => {
     for (const scenario of [
-      { sessionId: 'session-image-plan', permissionMode: 'plan' as const, capabilityProfile: 'default' as const },
-      { sessionId: 'session-image-chatroom', permissionMode: 'bypassPermissions' as const, capabilityProfile: 'chatroom' as const },
+      { sessionId: 'session-image-plan', permissionMode: 'plan' as const },
     ]) {
       const mockServer = await createMockCodexAppServer((ws, message) => {
         if (message.method === 'initialize') sendResponse(ws, message, {})

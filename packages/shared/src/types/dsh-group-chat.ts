@@ -2,7 +2,7 @@
  * DSH（DeepSeek Harness / 创造模式）专属多智能体群聊协作类型定义与 IPC 通道常量。
  * 
  * 严格遵循“零交叉物理隔离原则（Zero-Intersection Principle）”：
- * 本模块与 Copis 原生的远程讨论室（chatroom）完全隔离，仅服务于 DSH 内部的本地多 Agent 协同。
+ * 本模块仅服务于 DSH 内部的本地多 Agent 协同。
  */
 
 export type DshGroupChatRole = 'owner' | 'admin' | 'member'
@@ -75,6 +75,9 @@ export interface DshGroupChatAgent {
   executionMode?: 'draft' | 'published'
   currentVersion?: string | null
   addedAt: string
+  channelId?: string
+  modelId?: string
+  modelName?: string
 }
 
 export interface DshGroupChatDetail {
@@ -212,7 +215,29 @@ export interface DshCreateGroupInput {
   conversationKind?: DshConversationKind
   peerUserId?: string
   members?: Array<{ userId: string; displayName: string; role?: DshGroupChatRole }>
-  agents?: Array<{ agentId: string; name: string; isLeader?: boolean; responsibility?: string }>
+  agents?: Array<{
+    agentId: string
+    name: string
+    isLeader?: boolean
+    responsibility?: string
+    channelId?: string
+    modelId?: string
+    modelName?: string
+  }>
+}
+
+export interface DshUpdateAgentModelInput {
+  groupId: string
+  agentId: string
+  channelId?: string
+  modelId: string
+  modelName?: string
+}
+
+export interface DshAvailableModelGroup {
+  channelId: string
+  channelName: string
+  models: Array<{ id: string; name: string }>
 }
 
 export interface DshUpdateGroupInput {
@@ -303,6 +328,8 @@ export const DSH_GROUP_CHAT_IPC_CHANNELS = {
   ADD_AGENT: 'dsh-group-chat:add-agent',
   REMOVE_AGENT: 'dsh-group-chat:remove-agent',
   UPDATE_AGENT_RESPONSIBILITY: 'dsh-group-chat:update-agent-responsibility',
+  UPDATE_AGENT_MODEL: 'dsh-group-chat:update-agent-model',
+  GET_AVAILABLE_MODELS: 'dsh-group-chat:get-available-models',
 
   // 消息收发与历史查询
   GET_MESSAGES: 'dsh-group-chat:get-messages',

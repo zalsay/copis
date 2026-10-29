@@ -4,7 +4,6 @@ import { join } from 'node:path'
 
 const sidebarStyles = readFileSync(join(import.meta.dir, 'CopisWorkingSidebar.css'), 'utf8')
 const sidebarSource = readFileSync(join(import.meta.dir, 'CopisWorkingSidebar.tsx'), 'utf8')
-const chatroomRowComponentSource = readFileSync(join(import.meta.dir, '../chatroom/ChatroomSidebarRow.tsx'), 'utf8')
 const globalStyles = readFileSync(join(import.meta.dir, '../../styles/globals.css'), 'utf8')
 
 describe('Working 侧边栏视觉契约', () => {
@@ -188,7 +187,7 @@ describe('Working 侧边栏视觉契约', () => {
       /\.copis-working-project-row\.active\s+\.copis-working-project-main\s*\{([^}]*)\}/s,
     )?.[1]
     const pinnedNameRule = sidebarStyles.match(
-      /\.copis-working-project-pinned-name,\s*\.copis-working-chatroom-name\s*\{([^}]*)\}/s,
+      /\.copis-working-project-pinned-name\s*\{([^}]*)\}/s,
     )?.[1]
     const conversationRowRule = sidebarStyles.match(
       /\.copis-working-conversation-row\s*\{([^}]*)\}/s,
@@ -334,60 +333,6 @@ describe('Working 侧边栏视觉契约', () => {
     expect(sidebarStyles).toContain('color: var(--ui-primary)')
   })
 
-  test('Given 聊天室列表 When 展示聊天室行 Then 使用独立契约且不改变项目固定行契约', () => {
-    const chatroomRowStart = chatroomRowComponentSource.indexOf('className="copis-working-chatroom-row"')
-    const chatroomRowEnd = chatroomRowComponentSource.indexOf('</button>', chatroomRowStart)
-    const chatroomRowSource = chatroomRowComponentSource.slice(chatroomRowStart, chatroomRowEnd)
-
-    expect(chatroomRowStart).toBeGreaterThanOrEqual(0)
-    expect(chatroomRowSource).toContain('<UsersRound className="copis-working-chatroom-icon" aria-hidden="true" />')
-    expect(chatroomRowSource).toContain('className="copis-working-chatroom-copy"')
-    expect(chatroomRowSource).toContain('className="copis-working-chatroom-name"')
-    expect(chatroomRowSource).not.toContain('copis-working-project-pinned-row')
-    expect(chatroomRowSource).not.toContain('copis-working-project-pinned-icon')
-    expect(sidebarSource).toContain('<ChatroomSidebarRow')
-    expect(sidebarSource).toContain('active={activeView === \'conversations\' && activeTabId === `chatroom:${room.roomId}`}')
-    expect(sidebarStyles).toContain('.copis-working-project-pinned-row,\n.copis-working-chatroom-row')
-    expect(sidebarStyles).toContain('.copis-working-chatroom-row:hover')
-    expect(sidebarStyles).toContain('.copis-working-chatroom-icon')
-    expect(sidebarStyles).toContain('.copis-working-chatroom-entry:hover')
-    expect(sidebarStyles).toContain('.copis-working-chatroom-entry.active')
-    expect(sidebarStyles).toContain('.copis-working-chatroom-close:hover')
-  })
-
-  test('Given 聊天室分组 When 查看分组标题 Then 支持展开收起且聊天室文字不换行与数量右对齐', () => {
-    expect(sidebarSource).toContain('className="copis-working-project-group-toggle copis-working-project-chatroom-toggle"')
-    expect(sidebarSource).toContain('<span className="whitespace-nowrap">聊天室</span>')
-    expect(sidebarSource).toContain('aria-expanded={!chatroomGroupCollapsed}')
-    expect(sidebarSource).toContain('onClick={() => setChatroomGroupCollapsed((current) => !current)}')
-    expect(sidebarSource).toContain("ChevronRight className={cn('copis-working-project-group-chevron', !chatroomGroupCollapsed && 'expanded')}")
-    expect(sidebarSource).toContain('{!chatroomGroupCollapsed && (')
-
-    const chatroomToggleRule = sidebarStyles.match(
-      /\.copis-working-project-chatroom-toggle\s*\{([^}]*)\}/s,
-    )?.[1]
-    const chatroomCountRule = sidebarStyles.match(
-      /\.copis-working-project-chatroom-toggle\s+\.copis-working-project-group-count\s*\{([^}]*)\}/s,
-    )?.[1]
-
-    expect(chatroomToggleRule).toBeDefined()
-    expect(chatroomToggleRule).toContain('display: flex')
-    expect(chatroomToggleRule).toContain('white-space: nowrap')
-    expect(chatroomCountRule).toBeDefined()
-    expect(chatroomCountRule).toContain('margin-left: auto')
-
-    // 聊天室、我的项目、工作区同处于 copis-working-project-section 中，共享相同的 6px 分组间距
-    const projectSectionStart = sidebarSource.indexOf('className="copis-working-project-section"')
-    const chatroomIndex = sidebarSource.indexOf('copis-working-project-chatroom-toggle', projectSectionStart)
-    const pinnedIndex = sidebarSource.indexOf('copis-working-project-pinned-toggle', projectSectionStart)
-    const workspaceIndex = sidebarSource.indexOf('copis-working-project-workspace-toggle', projectSectionStart)
-
-    expect(projectSectionStart).toBeGreaterThanOrEqual(0)
-    expect(chatroomIndex).toBeGreaterThan(projectSectionStart)
-    expect(pinnedIndex).toBeGreaterThan(chatroomIndex)
-    expect(workspaceIndex).toBeGreaterThan(pinnedIndex)
-  })
-
   test('Given 项目分组 When 悬停分组标题 Then 背景覆盖左侧留白且内容起点与技能市场一致', () => {
     const menuRule = sidebarStyles.match(/\.copis-working-menu-button\s*\{([^}]*)\}/s)?.[1]
     const headingRule = sidebarStyles.match(
@@ -400,13 +345,13 @@ describe('Working 侧边栏视觉契约', () => {
       /\.copis-working-project-pinned-toggle\s*\{([^}]*)\}/s,
     )?.[1]
     const pinnedIconRule = sidebarStyles.match(
-      /\.copis-working-project-pinned-icon,\s*\.copis-working-chatroom-icon\s*\{([^}]*)\}/s,
+      /\.copis-working-project-pinned-icon\s*\{([^}]*)\}/s,
     )?.[1]
     const pinnedCountRule = sidebarStyles.match(
       /\.copis-working-project-pinned-toggle\s+\.copis-working-project-group-count\s*\{([^}]*)\}/s,
     )?.[1]
     const pinnedRule = sidebarStyles.match(
-      /\.copis-working-project-pinned-row,\s*\.copis-working-chatroom-row\s*\{([^}]*)\}/s,
+      /\.copis-working-project-pinned-row\s*\{([^}]*)\}/s,
     )?.[1]
 
     expect(menuRule).toBeDefined()

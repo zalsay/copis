@@ -1,9 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  closeChatRoomTab,
   closeTab,
   getPersistableTabState,
-  openChatRoomTab,
   openChromeDesktopTab,
   openTab,
   resolveRenderedTabId,
@@ -71,28 +69,6 @@ describe('会话入口持久化', () => {
       tabs: [],
       activeTabId: null,
     })
-  })
-
-  test('Given Agent 和项目 Tab 已存在 When 打开聊天室 Then 保留原 Tab 且按 roomId 聚焦复用', () => {
-    const agent: TabItem = { id: 'agent-1', type: 'agent', sessionId: 'agent-1', title: 'Agent' }
-    const project: TabItem = { id: 'preview-1', type: 'preview', sessionId: 'agent-1', title: '项目' }
-    const first = openChatRoomTab([agent, project], { roomId: 'room-1', name: '讨论' })
-    expect(first.tabs).toHaveLength(3)
-    expect(first.tabs[0]).toEqual(agent)
-    expect(first.tabs[1]).toEqual(project)
-    expect(first.activeTabId).toBe('chatroom:room-1')
-    const second = openChatRoomTab(first.tabs, { roomId: 'room-1', name: '讨论' })
-    expect(second.tabs).toBe(first.tabs)
-    expect(second.activeTabId).toBe(first.activeTabId)
-  })
-
-  test('删除聊天室关闭对应 Tab 并选择相邻 fallback', () => {
-    const agent: TabItem = { id: 'agent-1', type: 'agent', sessionId: 'agent-1', title: 'Agent' }
-    const first = openChatRoomTab([agent], { roomId: 'room-1', name: '讨论' })
-    const tabs = [...first.tabs, { id: 'chatroom:room-2', type: 'chatroom' as const, roomId: 'room-2', title: '另一个' }]
-    const result = closeChatRoomTab(tabs, first.activeTabId, 'room-1')
-    expect(result.tabs.map((tab) => tab.id)).toEqual(['agent-1', 'chatroom:room-2'])
-    expect(result.activeTabId).toBe('chatroom:room-2')
   })
 
   test('Given Agent 已打开 When 打开 Chrome 预览 Then 在同一主 Tab 栏追加并激活 Chrome Tab', () => {

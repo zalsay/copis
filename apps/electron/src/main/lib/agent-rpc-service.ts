@@ -43,7 +43,6 @@ import { getWorkingCustomModelRuntime, getWorkingModelCatalogOwnerId } from './w
 import {
   appendSDKMessages,
   createAgentSession,
-  hasAgentSessionStorageOverride,
   getAgentSessionMeta,
   getAgentSessionSDKMessages,
   resolveAgentCwd,
@@ -68,7 +67,7 @@ import {
   listAgentWorkspacesByUpdatedAt,
 } from './agent-workspace-manager'
 import { getAgentSessionWorkspacePath, getAgentWorkspacePath, getDefaultSkillsDir, getSdkConfigDir, getWorkspaceSkillsDir } from './config-paths'
-import { buildChatRoomPublicAgentRosterPrompt, buildDynamicContext, buildSystemPrompt } from './agent-prompt-builder'
+import { buildDynamicContext, buildSystemPrompt } from './agent-prompt-builder'
 import {
   HttpExpertTeamContextReader,
   resolveExpertTeamPromptContext,
@@ -122,7 +121,6 @@ import {
 } from './agent-rpc-memory'
 import { filterAttachedPaths } from './attached-paths'
 import { getTrustedAgentExternalSource, hasTrustedAgentRpcRun } from './agent-rpc-source-context'
-import { getTrustedAgentRuntimeContext, getTrustedAgentRuntimeGuard, type TrustedChatRoomAgentRuntimeContext } from './agent-rpc-runtime-context'
 import type {
   AgentRpcWorkerFrame,
   PiWorkerFileAccessPolicy,
@@ -366,27 +364,10 @@ function buildRustFileAccessPolicy(input: {
   workspaceSkillsDir?: string
   workspaceWriteRoot: string
   additionalDirectories: string[]
-  permissionMode: CopisPermissionMode | 'default'
+  permissionMode: CopisPermissionMode
   advancedAuthorization: boolean
   isAppConnector?: boolean
-  chatroomRuntimeContext?: TrustedChatRoomAgentRuntimeContext
 }): PiWorkerFileAccessPolicy {
-  if (input.chatroomRuntimeContext) {
-    const execution = input.chatroomRuntimeContext.executionWorkspace
-    return {
-      readRoots: uniqueAbsolutePaths([
-        execution.root,
-        execution.projectRoot,
-        execution.inboxRoot,
-        execution.sessionRoot,
-        ...(input.chatroomRuntimeContext.skillSnapshotPath ? [input.chatroomRuntimeContext.skillSnapshotPath] : []),
-      ]),
-      readFiles: [],
-      writeRoots: [resolve(execution.projectRoot)],
-      permissionMode: input.permissionMode,
-      advancedAuthorization: false,
-    }
-  }
   const projectRoot = getProjectFilesPath(input.workspace.slug)
   const sessionWorkspaceRoot = getAgentSessionWorkspacePath(input.workspace.slug, input.sessionId)
   const browserSessionRoot = ensureAgentWorkspaceBrowserSessionPath(input.workspace, input.sessionId)
@@ -572,53 +553,21 @@ async function resolveWorkerCredentials(channelId: string, provider: string): Pr
 
 export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: string): Promise<PiWorkerRunConfig> {
   if (trustedRunId !== undefined && !trustedRunId.trim()) {
-    throw new Error('聊天室运行 run ID 不正确')
+    throw new Error('Agent RPC run ID 不正确')
   }
-  const fallbackSource = trustedRunId === undefined
-    ? getTrustedAgentExternalSource(input.sessionId)
-    : undefined
-  const trustedSource = trustedRunId === undefined
-    ? fallbackSource
-    : getTrustedAgentExternalSource(input.sessionId, trustedRunId)
-  const chatroomRuntimeContext = getTrustedAgentRuntimeContext(input.sessionId, trustedRunId)
-  if (trustedRunId === undefined && (fallbackSource === 'chatroom'
-    || chatroomRuntimeContext !== undefined
-    || hasAgentSessionStorageOverride(input.sessionId))) {
-    throw new Error('聊天室运行缺少精确 run ID')
-  }
+  const trustedSource = getTrustedAgentExternalSource(input.sessionId, trustedRunId)
   if (trustedRunId !== undefined && !hasTrustedAgentRpcRun(input.sessionId, trustedRunId)) {
     throw new Error('Agent RPC run ID 不可信、已撤销或已结束')
   }
-  if (trustedRunId !== undefined && (trustedSource === 'chatroom' || chatroomRuntimeContext !== undefined)
-    && (trustedSource !== 'chatroom' || !chatroomRuntimeContext)) {
-    throw new Error('聊天室运行 run ID 不可信、已撤销或已被替代')
-  }
-  const trustedRunGuard = trustedRunId
-    ? getTrustedAgentRuntimeGuard(input.sessionId, trustedRunId)
-    : undefined
   const isTrustedRunCurrent = async () => {
-    if (trustedRunId === undefined) return trustedSource !== 'chatroom' && chatroomRuntimeContext === undefined
-    if (!hasTrustedAgentRpcRun(input.sessionId, trustedRunId)) return false
-    if (trustedSource !== 'chatroom' && chatroomRuntimeContext === undefined) return true
-    if (!trustedRunGuard
-      || getTrustedAgentExternalSource(input.sessionId, trustedRunId) !== 'chatroom'
-      || getTrustedAgentRuntimeContext(input.sessionId, trustedRunId) !== chatroomRuntimeContext) return false
-    try { return await trustedRunGuard() } catch { return false }
+    return trustedRunId === undefined || hasTrustedAgentRpcRun(input.sessionId, trustedRunId)
   }
   const assertTrustedRunCurrent = async () => {
-    if (!await isTrustedRunCurrent()) throw new Error('聊天室运行已取消、身份已变化或已被新运行替代')
+    if (!await isTrustedRunCurrent()) throw new Error('Agent RPC run 已取消、已撤销或已结束')
   }
   await assertTrustedRunCurrent()
   const session = getAgentSessionMeta(input.sessionId)
   if (!session) throw new Error(`Agent 会话不存在: ${input.sessionId}`)
-
-  if (chatroomRuntimeContext && trustedSource !== 'chatroom') {
-    throw new Error('trustedRuntimeContext 仅允许聊天室来源使用')
-  }
-  if (trustedSource === 'chatroom' && !chatroomRuntimeContext) {
-    throw new Error('聊天室运行缺少可信 runtimeContext')
-  }
-  const isChatroomRun = trustedSource === 'chatroom' && chatroomRuntimeContext !== undefined
 
   const workspaceId = session.workspaceId ?? input.workspaceId
   const workspace = workspaceId ? getAgentWorkspace(workspaceId) : undefined
@@ -626,11 +575,9 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
   if (!workspace) {
     throw new Error('Agent 必须绑定有效工作区后才能执行文件操作')
   }
-  const projectRootStatus = getLocalProjectRootStatus(
-    isChatroomRun ? chatroomRuntimeContext.executionWorkspace.projectRoot : workspace.projectRootPath,
-  )
+  const projectRootStatus = getLocalProjectRootStatus(workspace.projectRootPath)
   if (projectRootStatus && projectRootStatus !== 'available') {
-    throw new Error(`本地项目根目录不可用：${isChatroomRun ? chatroomRuntimeContext.executionWorkspace.projectRoot : workspace.projectRootPath}`)
+    throw new Error(`本地项目根目录不可用：${workspace.projectRootPath}`)
   }
 
   const channelId = input.channelId ?? session.channelId ?? COPIS_WORKING_CHANNEL_ID
@@ -693,14 +640,11 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
     : undefined
   const settings = getSettings()
   const sourceWorkspaceSlug = workspace.slug
-  const memoryWorkspaceSlug = isChatroomRun ? chatroomRuntimeContext.memorySource?.workspaceSlug : sourceWorkspaceSlug
-  const workspaceSlug = memoryWorkspaceSlug
-  // 聊天室运行不继承普通会话残留的 Browser binding；该 profile 没有页面能力。
-  const browserBinding = isChatroomRun ? undefined : getBrowserAgentContext(input.sessionId)
+  const workspaceSlug = sourceWorkspaceSlug
+  const browserBinding = getBrowserAgentContext(input.sessionId)
   const browserTab = browserBinding ? getWebTabState(browserBinding.tabId) : undefined
   const hasBrowserContext = Boolean(browserBinding && browserTab)
-  const isUserMainSession = !isChatroomRun
-    && (input.triggeredBy ?? 'user') === 'user'
+  const isUserMainSession = (input.triggeredBy ?? 'user') === 'user'
     && !session.sourceAutomationId
     && !session.sourceDelegationId
   console.info('[AI浏览器][prepareAgentRpcRun] 检查页签上下文与绑定状态', {
@@ -715,33 +659,27 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
   })
   const browserAdvancedAuthorization = isUserMainSession
     && isBrowserPageAdvancedAuthorizationEnabled(input.sessionId)
-  const effectivePermissionMode = isChatroomRun
-    ? 'bypassPermissions' as CopisPermissionMode
-    : resolveBrowserAgentPermissionMode(
-      hasBrowserContext,
-      input.permissionModeOverride ?? session.permissionMode ?? COPIS_DEFAULT_PERMISSION_MODE,
-    )
-  const queryPermissionMode = isChatroomRun ? 'default' as const : effectivePermissionMode
-  const effectiveSkillMentions = isChatroomRun ? undefined : resolveBrowserAgentSkillMentions(input.mentionedSkills, hasBrowserContext)
-  const agentCwd = isChatroomRun
-    ? chatroomRuntimeContext.executionWorkspace.projectRoot
-    : resolveAgentCwd(workspace, input.sessionId, session.agentCwdMode)
+  const effectivePermissionMode = resolveBrowserAgentPermissionMode(
+    hasBrowserContext,
+    input.permissionModeOverride ?? session.permissionMode ?? COPIS_DEFAULT_PERMISSION_MODE,
+  )
+  const queryPermissionMode = effectivePermissionMode
+  const effectiveSkillMentions = resolveBrowserAgentSkillMentions(input.mentionedSkills, hasBrowserContext)
+  const agentCwd = resolveAgentCwd(workspace, input.sessionId, session.agentCwdMode)
   if (!agentCwd) throw new Error('Agent 工作区 cwd 不可用，已拒绝启动文件操作')
-  const workspaceWriteRoot = isChatroomRun
-    ? chatroomRuntimeContext.executionWorkspace.projectRoot
-    : getAgentWorkspaceWritableRoot(workspace)
-  if (!isChatroomRun) ensureAgentWorkspaceContextDir(workspace)
-  const workspaceSkillsDir = isChatroomRun ? undefined : getWorkspaceSkillsDir(sourceWorkspaceSlug)
+  const workspaceWriteRoot = getAgentWorkspaceWritableRoot(workspace)
+  ensureAgentWorkspaceContextDir(workspace)
+  const workspaceSkillsDir = getWorkspaceSkillsDir(sourceWorkspaceSlug)
   const startedAt = input.startedAt ?? Date.now()
   const existingSdkSessionId = session.sdkSessionId
-  const isAppConnector = !isChatroomRun && isAppConnectorSession(session, trustedSource)
-  const directories = isChatroomRun ? [] : uniqueDirectories(input, session, workspace, isAppConnector)
+  const isAppConnector = isAppConnectorSession(session, trustedSource)
+  const directories = uniqueDirectories(input, session, workspace, isAppConnector)
   const isCustomModel = Boolean(customModelRuntime) || isWorkingCustomModelChannelId(channelId)
   const proxyUrl = isCustomModel ? await getEffectiveProxyUrl() : undefined
   await assertTrustedRunCurrent()
-  const runtimeEnv = buildRuntimeEnv(settings, proxyUrl, workspace, workspaceSlug, isCustomModel, isChatroomRun ? chatroomRuntimeContext.executionWorkspace.root : undefined)
+  const runtimeEnv = buildRuntimeEnv(settings, proxyUrl, workspace, workspaceSlug, isCustomModel)
   const compactRequest = input.userMessage.trim() === '/compact'
-  const mentionedToolsPrompt = isChatroomRun ? undefined : buildMentionedToolsPrompt(input.mentionedSkills, input.mentionedMcpServers)
+  const mentionedToolsPrompt = buildMentionedToolsPrompt(input.mentionedSkills, input.mentionedMcpServers)
   const enrichedUserMessage = mentionedToolsPrompt
     ? `${mentionedToolsPrompt}\n\n${input.userMessage}`
     : input.userMessage
@@ -757,11 +695,8 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
     permissionMode: queryPermissionMode,
     advancedAuthorization: isUserMainSession && session.advancedAuthorization === true,
     isAppConnector,
-    ...(isChatroomRun ? { chatroomRuntimeContext } : {}),
   })
-  const memoryPolicy: MemoryPolicy = isChatroomRun
-    ? (chatroomRuntimeContext.memorySource ? 'visible' : 'off')
-    : workspace.memoryPolicy ?? settings.defaultMemoryPolicy ?? 'writable'
+  const memoryPolicy: MemoryPolicy = workspace.memoryPolicy ?? settings.defaultMemoryPolicy ?? 'writable'
   const imageCapability = await resolvePiImageInputCapability(channel.provider, modelId, channelId)
   const isRemoteBotRun = Boolean(
     isAppConnector
@@ -786,7 +721,6 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
   const chromeDesktopControl = issueChromeDesktopWorkerCapability({
     sessionId: input.sessionId,
     triggeredBy: input.triggeredBy,
-    isChatroomRun,
     isAutomationRun: input.triggeredBy === 'automation' || Boolean(input.automationContext),
     isDelegationRun: input.triggeredBy === 'delegation',
     isRemoteBotRun,
@@ -796,14 +730,14 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
   })
   const dynamicContext = buildDynamicContext({
     workspaceName: workspace.name,
-    workspaceSlug: isChatroomRun ? undefined : memoryWorkspaceSlug,
+    workspaceSlug,
     agentCwd,
   })
   const baseContextualMessage = `${dynamicContext}\n\n${enrichedUserMessage}`
   const contextualMessage = compactRequest
     ? baseContextualMessage
     : await appendMemoryContext(baseContextualMessage, {
-      workspaceSlug: memoryWorkspaceSlug,
+      workspaceSlug,
       userMessage: enrichedUserMessage,
       policy: memoryPolicy,
     })
@@ -815,7 +749,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
       ? contextualMessage
       : buildContextPrompt(input.sessionId, contextualMessage, {
         agentCwd,
-        ...(isChatroomRun ? { disableHistoryGuide: true } : { workspaceSlug: memoryWorkspaceSlug }),
+        workspaceSlug,
       })
   // 专家团队上下文：delegation 只接受主进程 runner 生成的冻结上下文；
   // user 回合每次按 Rust 当前 binding/revision 重新解析（fail-soft）。
@@ -825,7 +759,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
       : undefined)
     : compactRequest
       ? undefined
-      : !isChatroomRun && (input.triggeredBy ?? 'user') === 'user'
+      : (input.triggeredBy ?? 'user') === 'user'
         ? await resolveExpertTeamPromptContext({
           workspace,
           reader: new HttpExpertTeamContextReader(),
@@ -835,7 +769,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
   const systemPrompt = buildSystemPrompt({
     agentRuntime: session.agentRuntime ?? 'pi',
     workspaceName: workspace.name,
-    workspaceSlug: isChatroomRun ? undefined : memoryWorkspaceSlug,
+    workspaceSlug,
     sessionId: input.sessionId,
     agentCwd,
     workspaceWriteRoot,
@@ -843,7 +777,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
     composerAdvancedAuthorization: isUserMainSession && session.advancedAuthorization === true,
     collaborationAvailable: false,
     // 与 Pi 内置工具保持一致：只有用户主会话可使用专家团队，委派/自动化会话只执行成员或任务本身。
-    expertTeamAvailable: !isChatroomRun && (input.triggeredBy ?? 'user') === 'user' && Boolean(workspaceId && workspaceSlug),
+    expertTeamAvailable: (input.triggeredBy ?? 'user') === 'user' && Boolean(workspaceId && workspaceSlug),
     currentModelId: modelId,
     workingMode,
     memoryPolicy,
@@ -852,7 +786,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
     ...(session.expertTeamSession ? { expertTeamSession: session.expertTeamSession } : {}),
     ...(session.expertTeamSetup ? { expertTeamSetup: true } : {}),
     ...(expertTeamContext ? { expertTeamContext } : {}),
-    ...(!isChatroomRun && browserBinding && browserTab
+    ...(browserBinding && browserTab
       ? {
         browserContext: {
           tabId: browserBinding.tabId,
@@ -862,22 +796,17 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
         browserAdvancedAuthorization,
       }
       : {}),
-  }) + (isChatroomRun
-    ? buildChatRoomPublicAgentRosterPrompt(chatroomRuntimeContext.publicAgentRoster ?? [])
-    : '') + (input.automationContext ? `\n\n## 定时任务执行上下文\n\n${input.automationContext}` : '')
+  }) + (input.automationContext ? `\n\n## 定时任务执行上下文\n\n${input.automationContext}` : '')
 
   const allSkillPaths: string[] = []
   if (workspaceSkillsDir && !allSkillPaths.includes(workspaceSkillsDir)) {
     allSkillPaths.push(workspaceSkillsDir)
   }
-  if (isChatroomRun && chatroomRuntimeContext.skillSnapshotPath) {
-    allSkillPaths.push(chatroomRuntimeContext.skillSnapshotPath)
-  }
   const defaultSkillsDir = getDefaultSkillsDir()
-  if (!isChatroomRun && existsSync(defaultSkillsDir) && !allSkillPaths.includes(defaultSkillsDir)) {
+  if (existsSync(defaultSkillsDir) && !allSkillPaths.includes(defaultSkillsDir)) {
     allSkillPaths.push(defaultSkillsDir)
   }
-  if (!isChatroomRun && isAppConnector) {
+  if (isAppConnector) {
     let allWs: AgentWorkspace[] = []
     try {
       allWs = listAgentWorkspacesByUpdatedAt()
@@ -893,7 +822,7 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
   }
 
   const maxTurns = settings.agentMaxTurns && settings.agentMaxTurns > 0 ? settings.agentMaxTurns : undefined
-  const browserPageControl = isChatroomRun ? undefined : issueBrowserAgentWorkerCapability({
+  const browserPageControl = issueBrowserAgentWorkerCapability({
     sessionId: input.sessionId,
     ...(browserBinding && browserTab ? { tabId: browserBinding.tabId } : {}),
     triggeredBy: input.triggeredBy ?? 'user',
@@ -938,20 +867,18 @@ export async function prepareAgentRpcRun(input: AgentSendInput, trustedRunId?: s
     advancedAuthorization: isUserMainSession && session.advancedAuthorization === true,
     systemPrompt,
     ...(existingSdkSessionId ? { resumeSessionId: existingSdkSessionId } : {}),
-    piAgentDir: isChatroomRun ? chatroomRuntimeContext.executionWorkspace.sessionRoot : getSdkConfigDir(),
-    piSessionDir: isChatroomRun ? join(chatroomRuntimeContext.executionWorkspace.sessionRoot, 'sessions') : join(getSdkConfigDir(), 'sessions'),
+    piAgentDir: getSdkConfigDir(),
+    piSessionDir: join(getSdkConfigDir(), 'sessions'),
     ...(settings.agentMaxBudgetUsd && settings.agentMaxBudgetUsd > 0 ? { maxBudgetUsd: settings.agentMaxBudgetUsd } : {}),
     ...(directories.length > 0 ? { additionalDirectories: directories } : {}),
     ...(allSkillPaths.length > 0 ? { additionalSkillPaths: allSkillPaths } : {}),
     ...(effectiveSkillMentions?.length ? { skillMentions: effectiveSkillMentions } : {}),
-    ...(isChatroomRun ? { capabilityProfile: 'chatroom' as const } : {}),
-    ...(!isChatroomRun && memoryWorkspaceSlug ? { workspaceSlug: memoryWorkspaceSlug } : {}),
-    ...(isChatroomRun && memoryWorkspaceSlug ? { memoryWorkspaceSlug } : {}),
-    ...(!isChatroomRun && workspace?.id ? { workspaceId: workspace.id } : {}),
-    ...(!isChatroomRun && session.sourceAutomationId ? { sourceAutomationId: session.sourceAutomationId } : {}),
-    automationEnabled: !isChatroomRun && isBuiltinMcpUserEnabled('automation'),
+    ...(workspaceSlug ? { workspaceSlug } : {}),
+    ...(workspace?.id ? { workspaceId: workspace.id } : {}),
+    ...(session.sourceAutomationId ? { sourceAutomationId: session.sourceAutomationId } : {}),
+    automationEnabled: isBuiltinMcpUserEnabled('automation'),
     // 默认图片工具与内置图片 Skill 对齐；plan 模式不因默认分支新增副作用能力。
-    imageGenerationEnabled: !isChatroomRun && (!isSessionProfessional || queryPermissionMode !== 'plan') && (
+    imageGenerationEnabled: (!isSessionProfessional || queryPermissionMode !== 'plan') && (
       (isUserMainSession && trustedSource === undefined && queryPermissionMode !== 'plan')
       || isBuiltinMcpUserEnabled('nano-banana')
       || input.mentionedMcpServers?.includes('copis_image') === true

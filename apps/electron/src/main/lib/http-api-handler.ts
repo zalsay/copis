@@ -44,7 +44,6 @@ import {
   COPIS_WORKING_GLOBAL_MODEL_ID,
   isCopisWorkingChannelId,
   isWorkingCustomModelChannelId,
-  isChatRoomAgentInvocation,
   WORKING_IPC_CHANNELS,
 } from '@copis/shared'
 import { resolveCopisHttpApiPort } from '@copis/shared/config'
@@ -72,10 +71,7 @@ import type {
   WorkingWorkspaceInput,
   WorkingReceiveChannel,
   WorkingAuthState,
-  ChatRoomAgentInvocation,
-  ChatRoomInvocationFailureCode,
 } from '@copis/shared'
-import type { ChatRoomGatewayOrigin, ChatRoomTrustedFailureResult } from './chatroom-execution-types'
 import { fileService } from './file-service'
 import { getAgentWorkspace, getAgentWorkspaceWritableRoot } from './agent-workspace-manager'
 import { broadcastChanged as broadcastAutomationsChanged } from './automation-scheduler'
@@ -148,15 +144,6 @@ export interface HttpApiDependencies {
   getBrowserAgentToolApi?: () => BrowserAgentToolHttpApi | Promise<BrowserAgentToolHttpApi>
   /** Rust bridge dispatch 使用的主进程专家团队入口。 */
   dispatchExpertTeam?: (snapshot: ExpertTeamRunSnapshot, workspaceRoot: string) => Promise<ExpertTeamRunResult>
-  /** Rust bridge dispatch 使用的主进程聊天室入口。 */
-  handleChatRoomInvocation?: (input: ChatRoomAgentInvocation, origin?: ChatRoomGatewayOrigin) => Promise<'accepted' | 'duplicate'>
-  /** 当前认证 Gateway socket 的服务端 agent.failed terminal proof。 */
-  handleChatRoomServerFailure?: (input: { roomId: string; invocationId: string; failureCode: ChatRoomInvocationFailureCode; origin: ChatRoomGatewayOrigin }) => Promise<ChatRoomTrustedFailureResult>
-  /** Rust bridge 断开通知使用的聊天室清理入口。 */
-  handleChatRoomGatewayDisconnected?: () => Promise<void>
-  stopChatRoomAgents?: (reason: 'logout') => Promise<void>
-  resumeChatRoomAgentsAfterAuthentication?: () => Promise<void>
-  handleAgentPermission?: (input: { sessionId: string; requestId: string; toolName: string; toolInput: Record<string, unknown>; description?: string }) => Promise<{ behavior: 'allow' | 'deny'; message?: string }>
   /** 测试可替换 Main prepare 边界；生产请求默认使用可信运行准备器。 */
   prepareAgentRpcRun?: typeof prepareAgentRpcRun
 }
@@ -217,22 +204,6 @@ const defaultDependencies: HttpApiDependencies = {
     })
   },
   getFileApi: () => fileService,
-  stopChatRoomAgents: async (reason) => {
-    try {
-      const { getChatRoomAgentCoordinator } = await import('./chatroom-agent-coordinator')
-      await getChatRoomAgentCoordinator().stopAll(reason)
-    } catch {
-      // 聊天室协调器尚未初始化时没有可停止的运行。
-    }
-  },
-  resumeChatRoomAgentsAfterAuthentication: async () => {
-    try {
-      const { resumeChatRoomAgentCoordinatorAfterAuthentication } = await import('./chatroom-agent-bootstrap')
-      await resumeChatRoomAgentCoordinatorAfterAuthentication()
-    } catch {
-      // 协调器尚未初始化时无需恢复状态。
-    }
-  },
 }
 
 let defaultAgentApiPromise: Promise<AgentHttpFacade> | null = null
@@ -545,181 +516,6 @@ async function readJsonBody(request: HttpApiRequest): Promise<unknown> {
   }
 }
 
-type ChatRoomCoordinatorFacade = {
-  handleInvocation(input: ChatRoomAgentInvocation, origin?: ChatRoomGatewayOrigin): Promise<'accepted' | 'duplicate'>
-  handleTrustedServerFailure(input: { roomId: string; invocationId: string; failureCode: ChatRoomInvocationFailureCode; origin: ChatRoomGatewayOrigin }): Promise<ChatRoomTrustedFailureResult>
-  handleGatewayDisconnected(): Promise<void>
-}
-
-function parseChatRoomGatewayOrigin(value: unknown): ChatRoomGatewayOrigin | undefined {
-  if (!isRecord(value)) return undefined
-  const keys = Reflect.ownKeys(value).sort()
-  if (keys.length !== 3 || keys.join(',') !== 'authEpoch,clientGeneration,socketGeneration') return undefined
-  if (![value.clientGeneration, value.socketGeneration].every((item) => typeof item === 'number' && Number.isSafeInteger(item) && item > 0)) return undefined
-  if (typeof value.authEpoch !== 'number' || !Number.isSafeInteger(value.authEpoch) || value.authEpoch < 0) return undefined
-  return { clientGeneration: value.clientGeneration as number, socketGeneration: value.socketGeneration as number, authEpoch: value.authEpoch }
-}
-
-interface ChatRoomCoordinatorModule {
-  getChatRoomAgentCoordinator?: () => ChatRoomCoordinatorFacade
-  chatRoomAgentCoordinator?: ChatRoomCoordinatorFacade
-}
-
-/**
- * 聊天室协调器必须延迟加载，避免健康检查或普通文件 API 触发 Agent runtime 初始化。
- * 使用静态字面量 import，确保 esbuild 将 Task 9 模块纳入 Main bundle。
- */
-async function getDefaultChatRoomCoordinator(): Promise<ChatRoomCoordinatorFacade> {
-  const module = await import('./chatroom-agent-coordinator') as ChatRoomCoordinatorModule
-  const coordinator = module.getChatRoomAgentCoordinator?.() ?? module.chatRoomAgentCoordinator
-  if (!coordinator) throw new Error('聊天室协调器导出不可用')
-  return coordinator
-}
-
-function throwChatRoomCoordinatorFailure(error: unknown): never {
-  // 协调器错误可能包含令牌、绝对路径和堆栈；这里只记录固定类别，避免污染日志。
-  void error
-  console.error('[聊天室] 协调器回调失败')
-  throw new HttpApiRequestError('聊天室协调器处理失败', 500, 'chatroom_coordinator_failed')
-}
-
-function isExactDisconnectedBody(value: unknown): boolean {
-  if (value === undefined) return true
-  if (!isRecord(value)) return false
-  const keys = Reflect.ownKeys(value)
-  return keys.length === 1
-    && keys[0] === 'reason'
-    && value.reason === 'realtime_disconnected'
-}
-
-const CHATROOM_FAILURE_CODES = new Set<ChatRoomInvocationFailureCode>([
-  'room_not_found', 'room_archived', 'not_room_member', 'share_code_invalid', 'share_code_rate_limited',
-  'agent_limit_reached', 'agent_offline', 'agent_busy', 'invocation_duplicate', 'invocation_depth_exceeded',
-  'host_approval_timeout', 'host_approval_denied', 'attachment_not_ready', 'attachment_forbidden',
-  'realtime_reconnecting', 'gateway_disconnected', 'app_quit', 'invalid_invocation', 'invalid_output',
-  'room_agent_not_found', 'internal_error',
-])
-
-function isTrustedServerFailureBody(value: unknown): value is {
-  event: 'agent.failed'; roomId: string; invocationId: string; failureCode: string
-  clientGeneration: number; socketGeneration: number; authEpoch: number
-} {
-  if (!isRecord(value)) return false
-  const keys = Reflect.ownKeys(value).sort()
-  return keys.length === 7
-    && keys.join(',') === 'authEpoch,clientGeneration,event,failureCode,invocationId,roomId,socketGeneration'
-    && value.event === 'agent.failed'
-    && typeof value.roomId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value.roomId)
-    && typeof value.invocationId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value.invocationId)
-    && typeof value.failureCode === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value.failureCode)
-    && [value.clientGeneration, value.socketGeneration].every((item) => typeof item === 'number' && Number.isSafeInteger(item) && item > 0)
-    && typeof value.authEpoch === 'number' && Number.isSafeInteger(value.authEpoch) && value.authEpoch >= 0
-}
-
-async function handleChatRoomInternalRequest(
-  request: HttpApiRequest,
-  path: string,
-  dependencies: HttpApiDependencies,
-): Promise<HttpApiResponse> {
-  const isInvocation = path === '/api/internal/chatrooms/invocations'
-  const isDisconnected = path === '/api/internal/chatrooms/disconnected'
-  const isServerFailure = path === '/api/internal/chatrooms/server-failure'
-  if (!isInvocation && !isDisconnected && !isServerFailure) {
-    throw new HttpApiRequestError('HTTP API 路径不存在', 404, 'not_found')
-  }
-  if (request.method !== 'POST') {
-    throw new HttpApiRequestError('聊天室内部接口只支持 POST', 405, 'method_not_allowed')
-  }
-
-  const body = await readJsonBody(request)
-  if (isServerFailure) {
-    if (!isTrustedServerFailureBody(body)) throw new HttpApiRequestError('聊天室服务端终态参数不正确', 400, 'invalid_chatroom_server_failure')
-    let result: ChatRoomTrustedFailureResult
-    const failureCode = CHATROOM_FAILURE_CODES.has(body.failureCode as ChatRoomInvocationFailureCode)
-      ? body.failureCode as ChatRoomInvocationFailureCode
-      : 'internal_error'
-    try {
-      result = dependencies.handleChatRoomServerFailure
-        ? await dependencies.handleChatRoomServerFailure({ roomId: body.roomId, invocationId: body.invocationId, failureCode, origin: { clientGeneration: body.clientGeneration, socketGeneration: body.socketGeneration, authEpoch: body.authEpoch } })
-        : await (await getDefaultChatRoomCoordinator()).handleTrustedServerFailure({ roomId: body.roomId, invocationId: body.invocationId, failureCode, origin: { clientGeneration: body.clientGeneration, socketGeneration: body.socketGeneration, authEpoch: body.authEpoch } })
-    } catch (error) {
-      throwChatRoomCoordinatorFailure(error)
-    }
-    if (result === 'retry') throw new HttpApiRequestError('聊天室 Native owner stop 或终态提交尚未确认', 503, 'chatroom_execution_handoff_unknown')
-    return { status: 200, body: { status: result === 'handled' ? 'stopped' : 'ignored' } }
-  }
-  if (isDisconnected) {
-    if (!isExactDisconnectedBody(body)) {
-      throw new HttpApiRequestError('聊天室断开通知参数不正确', 400, 'invalid_chatroom_disconnect')
-    }
-    if (dependencies.handleChatRoomGatewayDisconnected) {
-      try {
-        await dependencies.handleChatRoomGatewayDisconnected()
-      } catch (error) {
-        throwChatRoomCoordinatorFailure(error)
-      }
-      return { status: 204 }
-    }
-    let coordinator: ChatRoomCoordinatorFacade
-    try {
-      coordinator = await getDefaultChatRoomCoordinator()
-    } catch {
-      throw new HttpApiRequestError('聊天室协调器不可用', 503, 'chatroom_coordinator_unavailable')
-    }
-    try {
-      await coordinator.handleGatewayDisconnected()
-    } catch (error) {
-      throwChatRoomCoordinatorFailure(error)
-    }
-    return { status: 204 }
-  }
-
-  let invocation: unknown = body
-  let gatewayOrigin: ChatRoomGatewayOrigin | undefined
-  if (isRecord(body) && Reflect.ownKeys(body).length === 2 && Reflect.ownKeys(body).every((key) => key === 'invocation' || key === 'gatewayOrigin')) {
-    invocation = body.invocation
-    gatewayOrigin = parseChatRoomGatewayOrigin(body.gatewayOrigin)
-    if (!gatewayOrigin) throw new HttpApiRequestError('聊天室来源代际不正确', 400, 'invalid_chatroom_origin')
-  }
-  if (!isChatRoomAgentInvocation(invocation)) {
-    throw new HttpApiRequestError('聊天室调用参数不正确', 400, 'invalid_chatroom_invocation')
-  }
-  if (!gatewayOrigin) {
-    throw new HttpApiRequestError(
-      '当前 Copis Rust 运行时不支持可信聊天室来源校验，请更新 Copis 后重试',
-      400,
-      'invalid_chatroom_origin',
-    )
-  }
-  let result: 'accepted' | 'duplicate'
-  if (dependencies.handleChatRoomInvocation) {
-    try {
-      result = await dependencies.handleChatRoomInvocation(invocation, gatewayOrigin)
-    } catch (error) {
-      throwChatRoomCoordinatorFailure(error)
-    }
-  } else {
-    let coordinator: ChatRoomCoordinatorFacade
-    try {
-      coordinator = await getDefaultChatRoomCoordinator()
-    } catch {
-      throw new HttpApiRequestError('聊天室协调器不可用', 503, 'chatroom_coordinator_unavailable')
-    }
-    try {
-      result = await coordinator.handleInvocation(invocation, gatewayOrigin)
-    } catch (error) {
-      throwChatRoomCoordinatorFailure(error)
-    }
-  }
-  if (result !== 'accepted' && result !== 'duplicate') {
-    console.error('[聊天室] 协调器返回了未知状态')
-    throw new HttpApiRequestError('聊天室协调器处理失败', 500, 'chatroom_coordinator_failed')
-  }
-  return result === 'duplicate'
-    ? { status: 200, body: { status: 'duplicate' } }
-    : { status: 202, body: { status: 'accepted' } }
-}
-
 async function handleAgentRequest(
   request: HttpApiRequest,
   url: URL,
@@ -916,7 +712,6 @@ async function handleWorkingRequest(
       password: requireString(bodyRecord ?? {}, 'password', '登录密码不正确'),
     }
     const result = await client.login(input)
-    await dependencies.resumeChatRoomAgentsAfterAuthentication?.()
     return {
       status: 200,
       body: {
@@ -970,7 +765,6 @@ async function handleWorkingRequest(
   }
 
   if (resource === 'logout' && method === 'POST') {
-    await dependencies.stopChatRoomAgents?.('logout')
     client.logout()
     return { status: 200, body: makeAuthState(client) }
   }
@@ -1053,23 +847,6 @@ async function handleWorkingRequest(
   throw new HttpApiRequestError('Working API 路径不存在', 404, 'not_found')
 }
 
-export function parseAgentWorkerPermissionRequest(value: Record<string, unknown>): { sessionId: string; requestId: string; toolName: string; toolInput: Record<string, unknown>; description?: string } {
-  const keys = Object.keys(value)
-  if (keys.some((key) => !['sessionId', 'requestId', 'toolName', 'toolInput', 'description'].includes(key)) || keys.length < 4 || keys.length > 5) throw new HttpApiRequestError('权限请求字段不正确', 400, 'invalid_permission_request')
-  const text = (key: string, max: number): string => {
-    const item = value[key]
-    if (typeof item !== 'string' || item.length === 0 || item.length > max || [...item].some((char) => char.charCodeAt(0) < 32)) throw new HttpApiRequestError('权限请求参数不正确', 400, 'invalid_permission_request')
-    return item
-  }
-  const id = (key: string): string => {
-    const item = text(key, 128)
-    if ([...item].some((char) => /\s|[\\/?#]/u.test(char))) throw new HttpApiRequestError('权限请求参数不正确', 400, 'invalid_permission_request')
-    return item
-  }
-  if (!isRecord(value.toolInput) || Object.keys(value.toolInput).length > 32) throw new HttpApiRequestError('权限请求参数不正确', 400, 'invalid_permission_request')
-  return { sessionId: id('sessionId'), requestId: id('requestId'), toolName: id('toolName'), toolInput: value.toolInput, ...(value.description === undefined ? {} : { description: text('description', 1024) }) }
-}
-
 async function handleAgentRpcInternalRequest(
   request: HttpApiRequest,
   segments: string[],
@@ -1118,17 +895,6 @@ async function handleAgentRpcInternalRequest(
     }
     throw new HttpApiRequestError('Agent RPC 内部接口不存在', 404, 'not_found')
   }
-  if (action === 'permission') {
-    const input = parseAgentWorkerPermissionRequest(bodyRecord)
-    const handler = dependencies.handleAgentPermission ?? (async (input) => {
-      const module = await import('./chatroom-agent-coordinator') as { getChatRoomAgentCoordinator?: () => { requestWorkerPermission?: (value: typeof input) => Promise<{ behavior: 'allow' | 'deny'; message?: string }> } }
-      const coordinator = module.getChatRoomAgentCoordinator?.()
-      if (!coordinator?.requestWorkerPermission) throw new Error('聊天室协调器尚未注册')
-      return coordinator.requestWorkerPermission(input)
-    })
-    return { status: 200, body: await handler(input) }
-  }
-
   if (action === 'browser-tool') {
     const input = parseBrowserAgentToolRequest(bodyRecord)
     const logFields = {
@@ -1199,7 +965,7 @@ async function handleAgentRpcInternalRequest(
     const hasTrustedRunId = Object.prototype.hasOwnProperty.call(bodyRecord, '_copisTrustedRunId')
     const rawTrustedRunId = bodyRecord._copisTrustedRunId
     if (hasTrustedRunId && (typeof rawTrustedRunId !== 'string' || !rawTrustedRunId.trim())) {
-      throw new HttpApiRequestError('聊天室运行 run ID 不正确', 400, 'invalid_chatroom_run_id')
+      throw new HttpApiRequestError('Agent RPC run ID 不正确', 400, 'invalid_agent_rpc_run_id')
     }
     const trustedRunId = hasTrustedRunId ? rawTrustedRunId as string : undefined
     const inputRecord = { ...bodyRecord }
@@ -1591,15 +1357,6 @@ export async function handleHttpApiRequest(
       throw new HttpApiRequestError('HTTP API 路径不存在', 404, 'not_found')
     }
 
-    // Rust bridge 只允许明确列出的无 query、无 trailing slash 精确路径。
-    if (url.search === '' && request.path === url.pathname && (
-      url.pathname === '/api/internal/chatrooms/invocations'
-      || url.pathname === '/api/internal/chatrooms/disconnected'
-      || url.pathname === '/api/internal/chatrooms/server-failure'
-    )) {
-      return await handleChatRoomInternalRequest(request, url.pathname, dependencies)
-    }
-
     if (segments[1] === 'internal' && segments[2] === 'auth-storage') {
       if (segments[3] === 'load' && request.method === 'GET') {
         const record = loadWorkingAuthForRust()
@@ -1621,18 +1378,13 @@ export async function handleHttpApiRequest(
         const identityChanged = previousUser !== null && (
           nextUser === null || String(previousUser.id) !== String(nextUser.id ?? nextUser.userId ?? nextUser.user_id)
         )
-        let runtimeStopped = false
-        const invalidatePreviousIdentity = async (): Promise<void> => {
-          if (runtimeStopped) return
-          try {
-            await dependencies.stopChatRoomAgents?.('logout')
-          } finally {
-            runtimeStopped = true
-            // stop/release 失败也必须清除旧身份，避免旧账号继续访问聊天室工作区。
-            client.clearAuth()
-          }
+        let previousIdentityCleared = false
+        const invalidatePreviousIdentity = (): void => {
+          if (previousIdentityCleared) return
+          previousIdentityCleared = true
+          client.clearAuth()
         }
-        if (identityChanged) await invalidatePreviousIdentity()
+        if (identityChanged) invalidatePreviousIdentity()
         console.info('[HTTP API][认证存储] save 收到请求', {
           provider: body.provider ?? '-',
           hasAccessToken: typeof body.accessToken === 'string' && body.accessToken.length > 0,
@@ -1645,12 +1397,12 @@ export async function handleHttpApiRequest(
           // OIDC/Legacy 初始化可能先写入凭据、再异步补齐用户资料；缺少 user 是合法的过渡状态，
           // 但显式提供的非对象或无法归一化的用户必须拒绝，并保持 fail closed。
           if (hasInvalidUser || (nextUser !== null && !client.setAuthenticatedUserFromRust(body.user))) {
-            await invalidatePreviousIdentity()
+            invalidatePreviousIdentity()
             throw new HttpApiRequestError('认证存储记录缺少用户身份', 400, 'invalid_auth_storage')
           }
           if (nextUser === null) client.setAuthenticatedUserFromRust(null)
         } catch (error) {
-          if (!runtimeStopped) await invalidatePreviousIdentity()
+          if (!previousIdentityCleared) invalidatePreviousIdentity()
           console.error('[HTTP API][认证存储] save 失败', redactSensitiveLogValue(error))
           throw error
         }
@@ -1663,8 +1415,6 @@ export async function handleHttpApiRequest(
           authenticated: false, user: null, backendUrl: dependencies.getWorkingClient().baseUrl,
         })
         try {
-          // Rust 认证状态先释放聊天室运行时，再清理 Electron 的本地身份缓存，避免旧身份继续命中 Agent 工作区。
-          await dependencies.stopChatRoomAgents?.('logout')
           dependencies.getWorkingClient().clearAuth()
           clearWorkingAuthFromRust()
         } catch (error) {
@@ -1701,12 +1451,9 @@ export async function handleHttpApiRequest(
       }
       dependencies.syncWebSyncAuthState?.(authState)
       if (!body.authenticated) {
-        // 认证失效必须先停止聊天室 Agent，再清理 cachedUser/tokenStore，防止配置 ABA 写入旧 inbox。
-        await dependencies.stopChatRoomAgents?.('logout')
         client.clearAuth()
       }
       dependencies.notifyWorkingAuthUpdated?.(authState)
-      if (body.authenticated) await dependencies.resumeChatRoomAgentsAfterAuthentication?.()
       console.info('[HTTP API][认证状态] changed 完成', {
         authenticated: body.authenticated,
         hasUser: user !== null,

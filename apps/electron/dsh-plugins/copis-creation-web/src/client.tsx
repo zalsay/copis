@@ -38,6 +38,7 @@ import {
   type ReactElement,
   type RefObject,
 } from 'react'
+import { CopisInspectorPanel } from './inspector/CopisInspectorPanel'
 
 interface LayoutController {
   openDetails(): void
@@ -47,17 +48,33 @@ interface LayoutController {
 }
 
 interface SessionState {
-  id: string
+  id?: string
+  sessionId?: string
   cwd?: string
   title?: string
   blank?: boolean
+}
+
+interface WorkspaceViewState {
+  workspaceId: string
+  path: string
+  title: string
+  sessionIds?: string[]
+}
+
+interface WorkspacesService {
+  getSnapshot(): {
+    items: WorkspaceViewState[]
+  }
+  subscribe(listener: () => void): () => void
 }
 
 interface SessionsService {
   list: {
     getSnapshot(): {
       current?: string
-      byId: Record<string, SessionState>
+      items?: SessionState[]
+      byId?: Record<string, SessionState>
     }
     subscribe(listener: () => void): () => void
   }
@@ -78,6 +95,7 @@ interface CordisContext {
   }
   layout?: LayoutController
   sessions?: SessionsService
+  workspaces?: WorkspacesService
 }
 
 type CreationView =
@@ -99,6 +117,7 @@ interface SidebarMenuItem {
   view?: Exclude<CreationView, 'conversations' | 'settings'>
   tab?: string
   action?: 'search'
+  badge?: string
 }
 
 export interface DirectoryEntry {
@@ -125,6 +144,7 @@ declare global {
       getHiddenMenuItems?: () => string[]
       switchMode?: (mode: string) => void
       listDirectory?: (dirPath?: string, cwd?: string) => Promise<DirectoryEntry[]>
+      getActiveWorkspacePath?: (cwd?: string) => Promise<string>
       readFile?: (filePath: string, cwd?: string) => Promise<ReadFileResult>
       showItemInFolder?: (filePath: string, cwd?: string) => Promise<{ success: boolean; error?: string }>
       getAgentSessions?: () => Promise<any[]>
@@ -221,20 +241,20 @@ const CREATION_UI_CSS = `
   }
 
   .copis-menu-item[data-active="true"] {
-    background: var(--creation-ui-primary-background, rgba(108, 0, 204, 0.15)) !important;
-    color: var(--creation-ui-primary, #6c00cc) !important;
-    font-weight: 600 !important;
+    background: rgba(255, 255, 255, 0.12) !important;
+    color: #ffffff !important;
+    font-weight: 500 !important;
   }
 
   .copis-menu-item svg {
     flex: none;
     width: 15px;
     height: 15px;
-    color: var(--dsw-alias-label-secondary, #71717a);
+    color: var(--dsw-alias-label-secondary, #90939e);
   }
 
   .copis-menu-item[data-active="true"] svg {
-    color: var(--creation-ui-primary, #6c00cc) !important;
+    color: #ffffff !important;
   }
 
   .copis-menu-item > span {
@@ -304,8 +324,8 @@ const CREATION_UI_CSS = `
   }
 
   .copis-rail-menu-item[data-active="true"] {
-    background: var(--creation-ui-primary-background, rgba(108, 0, 204, 0.15)) !important;
-    color: var(--creation-ui-primary, #6c00cc) !important;
+    background: rgba(255, 255, 255, 0.12) !important;
+    color: #ffffff !important;
   }
 
   .copis-rail-menu-item svg {
@@ -317,12 +337,268 @@ const CREATION_UI_CSS = `
   button[class*="newSession"] {
     border-radius: 7px !important;
     font-size: 14px !important;
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    color: #f1f5f9 !important;
+    transition: all 120ms ease !important;
+  }
+  button[class*="_newSession"]:hover,
+  button[class*="newSession"]:hover {
+    background: rgba(255, 255, 255, 0.09) !important;
+    border-color: rgba(255, 255, 255, 0.14) !important;
   }
 
   [class*="sessionRow"],
   [class*="SessionRow"] {
     border-radius: 7px !important;
     font-size: 14px !important;
+    transition: all 120ms ease !important;
+  }
+  [class*="sessionRow"]:hover,
+  [class*="SessionRow"]:hover {
+    background: rgba(255, 255, 255, 0.04) !important;
+  }
+  /* WorkBuddy 浅灰/曜石微高光卡片会话行选中态，彻底去除紫色 */
+  .YDXeBa_sessionRow.YDXeBa_selected,
+  .YDXeBa_searchResultRow.YDXeBa_selected,
+  .YDXeBa_projectRow.active,
+  [class*="sessionRow"][class*="selected"],
+  [class*="searchResultRow"][class*="selected"],
+  [class*="projectRow"][class*="active"],
+  [class*="sessionRow"][data-selected="true"],
+  [class*="SessionRow"][data-selected="true"] {
+    background: rgba(255, 255, 255, 0.1) !important;
+    color: #ffffff !important;
+    font-weight: 500 !important;
+  }
+  .YDXeBa_sessionRow.YDXeBa_selected *,
+  [class*="sessionRow"][class*="selected"] * {
+    color: #ffffff !important;
+  }
+  .YDXeBa_sessionRow.YDXeBa_selected [class*="date"],
+  .YDXeBa_sessionRow.YDXeBa_selected [class*="time"],
+  [class*="sessionRow"][class*="selected"] [class*="date"],
+  [class*="sessionRow"][class*="selected"] [class*="time"],
+  [class*="sessionRow"][class*="selected"] span:last-child {
+    color: #a1a1aa !important;
+  }
+  [class*="sessionRow"][class*="selected"] svg,
+  [class*="searchResultRow"][class*="selected"] svg,
+  [class*="projectRow"][class*="active"] svg {
+    color: #d4d4d8 !important;
+  }
+  /* 侧栏工作区目录/项目图标：全部对齐 WorkBuddy 浅银灰色，绝不显示亮紫色 */
+  .YDXeBa_projectRow svg,
+  [class*="projectRow"] svg,
+  [class*="workspaceRow"] svg {
+    color: #a1a1aa !important;
+  }
+
+  /* WorkBuddy 风格顶部 Tab 导航（对话 / 轨迹）：纯净白色文字与白色指示条 */
+  .wSkVaW_tab,
+  [class*="wSkVaW_tab"],
+  [class*="_tab"][role="tab"] {
+    color: #94a3b8 !important;
+    font-weight: 500 !important;
+    transition: color 120ms ease !important;
+  }
+  .wSkVaW_tab:hover,
+  [class*="wSkVaW_tab"]:hover,
+  [class*="_tab"][role="tab"]:hover {
+    color: #cbd5e1 !important;
+  }
+  .wSkVaW_tabActive,
+  [class*="wSkVaW_tabActive"],
+  [class*="_tabActive"],
+  button[role="tab"][aria-selected="true"],
+  [class*="tab"][class*="active"],
+  [class*="tab"][data-active="true"] {
+    color: #ffffff !important;
+    font-weight: 600 !important;
+  }
+  .wSkVaW_tabActive:after,
+  [class*="wSkVaW_tabActive"]:after,
+  [class*="_tabActive"]:after,
+  button[role="tab"][aria-selected="true"]:after,
+  [class*="tab"][class*="active"]:after,
+  [class*="tab"][data-active="true"]:after {
+    background: #ffffff !important;
+    height: 2px !important;
+    border-radius: 1px !important;
+  }
+
+  /* WorkBuddy 菜单徽标样式：全灰阶轻量微胶囊 */
+  .copis-menu-badge {
+    margin-left: auto;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    background: rgba(255, 255, 255, 0.08);
+    color: #d4d4d8;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    flex: none;
+    line-height: 14px;
+  }
+  .copis-menu-badge-beta {
+    background: rgba(255, 255, 255, 0.08);
+    color: #d4d4d8;
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+  .copis-menu-badge-flexible {
+    background: rgba(255, 255, 255, 0.06);
+    color: #a1a1aa;
+    border-color: rgba(255, 255, 255, 0.06);
+  }
+
+  /* 优雅紫色半透明毛玻璃 Composer 输入胶囊卡片（背景更深，紫色更淡内敛） */
+  [class*="uV2eYG_card"],
+  [class*="_card"][class*="composer"] {
+    border-radius: 20px !important;
+    background: color-mix(in srgb, var(--creation-ui-primary, #a855f7) 7%, rgba(16, 17, 24, 0.90)) !important;
+    -webkit-backdrop-filter: blur(24px) !important;
+    backdrop-filter: blur(24px) !important;
+    border: 1px solid color-mix(in srgb, var(--creation-ui-primary, #a855f7) 12%, rgba(255, 255, 255, 0.08)) !important;
+    box-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.6), 0 0 20px -4px color-mix(in srgb, var(--creation-ui-primary, #a855f7) 8%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+    margin-bottom: 16px !important;
+    padding-top: 10px !important;
+  }
+
+  body:not([data-ds-dark-theme]) [class*="uV2eYG_card"],
+  body:not([data-ds-dark-theme]) [class*="_card"][class*="composer"] {
+    background: color-mix(in srgb, var(--creation-ui-primary, #6c00cc) 4%, rgba(255, 255, 255, 0.88)) !important;
+    border: 1px solid color-mix(in srgb, var(--creation-ui-primary, #6c00cc) 10%, rgba(0, 0, 0, 0.08)) !important;
+    box-shadow: 0 16px 36px -8px rgba(0, 0, 0, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;
+  }
+
+  [class*="uV2eYG_input"] {
+    color: #f1f5f9 !important;
+    font-size: 13.5px !important;
+    line-height: 22px !important;
+  }
+
+  [class*="uV2eYG_placeholder"] {
+    color: #64748b !important;
+    font-size: 13.5px !important;
+  }
+
+  [class*="uV2eYG_add"] {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    border-radius: 9999px !important;
+    color: #cbd5e1 !important;
+  }
+
+  [class*="uV2eYG_add"]:hover {
+    background: rgba(255, 255, 255, 0.09) !important;
+    color: #ffffff !important;
+  }
+
+  [class*="uV2eYG_select"] {
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    border-radius: 9999px !important;
+    color: #e2e8f0 !important;
+    font-size: 12px !important;
+    padding: 0 20px 0 10px !important;
+  }
+
+  [class*="uV2eYG_select"]:hover {
+    background-color: rgba(255, 255, 255, 0.09) !important;
+  }
+
+  /* WorkBuddy 浅曜石灰极简发送按钮，彻底消除红色与亮紫色 */
+  [class*="uV2eYG_primary"],
+  button[class*="uV2eYG_primary"],
+  [class*="composer"] button[type="submit"] {
+    border-radius: 9999px !important;
+    background: #3f414a !important; /* fallback token: var(--ui-primary) */
+    color: #f1f5f9 !important;
+    border: 1px solid rgba(255, 255, 255, 0.14) !important;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25) !important;
+    transition: transform 120ms ease, background-color 120ms ease, border-color 120ms ease !important;
+  }
+
+  [class*="uV2eYG_primary"]:hover:not(:disabled),
+  button[class*="uV2eYG_primary"]:hover:not(:disabled),
+  [class*="composer"] button[type="submit"]:hover:not(:disabled) {
+    background: #4d505a !important;
+    border-color: rgba(255, 255, 255, 0.24) !important;
+    color: #ffffff !important;
+    transform: scale(1.05) !important;
+  }
+
+  [class*="uV2eYG_primary"]:disabled,
+  button[class*="uV2eYG_primary"]:disabled,
+  [class*="composer"] button[type="submit"]:disabled {
+    background: rgba(255, 255, 255, 0.06) !important;
+    color: rgba(255, 255, 255, 0.25) !important;
+    border: 1px solid rgba(255, 255, 255, 0.05) !important;
+    box-shadow: none !important;
+    cursor: not-allowed !important;
+    transform: none !important;
+  }
+
+  [class*="uV2eYG_root"]::after {
+    content: "内容由 AI 生成，请核实重要信息";
+    display: block;
+    margin-top: 6px;
+    font-size: 11px;
+    color: rgba(148, 163, 184, 0.6);
+    text-align: center;
+    user-select: none;
+  }
+
+  /* 页面视口与对话容器：彻底消除横向多余滚动条与 hover 闪烁 */
+  html,
+  body,
+  [class*="_centerCol"],
+  [class*="centerCol"],
+  [class*="_frame"],
+  [class*="frame"],
+  [data-view="conversation"],
+  main,
+  [class*="uV2eYG_root"] {
+    overflow-x: clip !important;
+    max-width: 100% !important;
+  }
+
+  /* 强制屏蔽页面与卡片底部的横向多余滚动条 */
+  html::-webkit-scrollbar:horizontal,
+  body::-webkit-scrollbar:horizontal,
+  [class*="_centerCol"]::-webkit-scrollbar:horizontal,
+  [class*="centerCol"]::-webkit-scrollbar:horizontal,
+  [class*="uV2eYG_root"]::-webkit-scrollbar:horizontal,
+  [class*="uV2eYG_card"]::-webkit-scrollbar:horizontal,
+  [class*="uV2eYG_row"]::-webkit-scrollbar:horizontal {
+    display: none !important;
+    height: 0 !important;
+    width: 0 !important;
+  }
+
+  /* 上下文用量圆环（ContextMeter）与底部工具按钮悬浮 Tooltip 定位边界防溢出保护 */
+  [class*="JObwrW_root"] {
+    overflow: visible !important;
+  }
+
+  [class*="JObwrW_root"] [role="tooltip"],
+  [class*="JObwrW_root"] [class*="tooltip"],
+  [class*="JObwrW_root"] [class*="Tooltip"] {
+    right: 0 !important;
+    left: auto !important;
+    max-width: 240px !important;
+    white-space: nowrap !important;
+    pointer-events: none !important;
+  }
+
+  /* 全局 Tooltip 浮层尺寸保护：避免绝对定位或动画帧撑大视口底部 */
+  [role="tooltip"],
+  [class*="tooltip"],
+  [class*="Tooltip"] {
+    max-width: calc(100vw - 32px) !important;
+    word-break: break-word !important;
+    pointer-events: none !important;
   }
 
   /* 当 Copis 子视图（规划/记忆/知识库/专家团队等）激活时：
@@ -373,7 +649,7 @@ const CREATION_UI_CSS = `
     padding: 6px var(--dsh-sidebar-inline-padding, 12px) !important;
   }
 
-  /* 当子视图激活时，原「新会话」按钮无缝切换为「返回会话」按钮 */
+  /* 当子视图激活时，原「新会话」按钮无缝切换为「返回会话」按钮（WorkBuddy 浅灰质感） */
   body.copis-subview-active button[class*="_newSession"],
   body.copis-subview-active button[class*="newSession"] {
     display: flex !important;
@@ -383,9 +659,9 @@ const CREATION_UI_CSS = `
     margin: 0 0 12px !important;
     padding: 0 12px !important;
     gap: 8px !important;
-    background: var(--creation-ui-primary-background, rgba(108, 0, 204, 0.12)) !important;
-    color: var(--creation-ui-primary, #6c00cc) !important;
-    border: 1px solid var(--creation-ui-primary-background, rgba(108, 0, 204, 0.25)) !important;
+    background: rgba(255, 255, 255, 0.08) !important; /* fallback token: var(--creation-ui-primary-background) */
+    color: #ffffff !important;
+    border: 1px solid rgba(255, 255, 255, 0.14) !important;
     border-radius: 7px !important;
     align-self: stretch !important;
     cursor: pointer !important;
@@ -395,8 +671,8 @@ const CREATION_UI_CSS = `
 
   body.copis-subview-active button[class*="_newSession"]:hover,
   body.copis-subview-active button[class*="newSession"]:hover {
-    background: var(--creation-ui-primary-background, rgba(108, 0, 204, 0.2)) !important;
-    border-color: var(--creation-ui-primary, #6c00cc) !important;
+    background: rgba(255, 255, 255, 0.12) !important;
+    border-color: rgba(255, 255, 255, 0.22) !important;
   }
 
   /* 隐藏原「新建会话」图标 */
@@ -615,55 +891,133 @@ const CREATION_UI_CSS = `
     display: inline-flex !important;
     align-items: center !important;
     justify-content: center !important;
+    border: 1px solid var(--dsw-alias-border-l3, rgba(255, 255, 255, 0.08)) !important;
+    background: var(--dsw-alias-button-elevated-fill, rgba(255, 255, 255, 0.04)) !important;
+    color: var(--dsw-alias-label-secondary, #94a3b8) !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04) !important;
+    backdrop-filter: blur(8px) !important;
+    transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+  }
+
+  .copis-header-btn-workspace:hover {
+    background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.08)) !important;
+    color: var(--dsw-alias-label-primary, #ffffff) !important;
+    border-color: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.16)) !important;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08) !important;
+  }
+
+  .copis-header-btn-workspace:active {
+    transform: scale(0.95) !important;
   }
 
   .copis-header-btn-workspace[data-active="true"] {
-    background: var(--creation-ui-primary-background, rgba(108, 0, 204, 0.15)) !important;
-    border-color: var(--creation-ui-primary, #6c00cc) !important;
-    color: var(--creation-ui-primary, #6c00cc) !important;
+    background: rgba(255, 255, 255, 0.14) !important;
+    border: 1px solid rgba(255, 255, 255, 0.22) !important;
+    color: #ffffff !important;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
   }
 
-  /* 右侧工作区文件抽屉样式 */
+  .copis-header-btn-workspace[data-active="true"]:hover {
+    background: rgba(255, 255, 255, 0.18) !important;
+    border-color: rgba(255, 255, 255, 0.28) !important;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15) !important;
+  }
+
+  /* 中部聊天区：支持与侧边抽屉并列推入的平滑宽度过渡（Push-in 挤压） */
+  :root {
+    --copis-inspector-width: 500px;
+  }
+
+  [class*="_centerCol"],
+  [class*="centerCol"] {
+    transition: margin-right 220ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+  }
+
+  body.copis-details-drawer-open [class*="_centerCol"],
+  body.copis-details-drawer-open [class*="centerCol"] {
+    margin-right: var(--copis-inspector-width, 500px) !important;
+  }
+
+  /* 欢迎屏常驻右上角操作栏：跟随推入平滑左移，防止与抽屉重叠 */
+  .copis-hero-utilities-overlay {
+    transition: right 220ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+  }
+
+  body.copis-details-drawer-open .copis-hero-utilities-overlay {
+    right: calc(var(--copis-inspector-width, 500px) + 18px) !important;
+  }
+
+  /* 右侧工作区全功能 Inspector 抽屉样式（纯正灰色 WorkBuddy 浅灰/暗黑风格，推入式滑入抽屉，无遮罩，无紫色） */
   .copis-details-drawer-root {
     position: fixed;
     top: 0;
     right: 0;
     bottom: 0;
-    width: 380px;
-    max-width: calc(100vw - 60px);
-    z-index: 100;
-    background: var(--dsw-alias-bg-base, #ffffff);
-    border-left: 1px solid var(--dsw-alias-border-l3, rgba(255, 255, 255, 0.1));
-    box-shadow: -6px 0 24px rgba(0, 0, 0, 0.18);
+    width: var(--copis-inspector-width, 500px);
+    max-width: calc(100vw - 320px);
+    z-index: 85;
+    background: #18181b;
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border-left: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.35);
     display: flex;
     flex-direction: column;
-    animation: copis-drawer-slide-in 160ms cubic-bezier(0.16, 1, 0.3, 1);
+    color: #f4f4f5;
+    transform: translateX(100%);
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1), visibility 220ms ease;
   }
 
-  @keyframes copis-drawer-slide-in {
-    from {
-      transform: translateX(100%);
-    }
-    to {
-      transform: translateX(0);
-    }
+  body:not([data-ds-dark-theme]) .copis-details-drawer-root {
+    background: #f4f4f5;
+    color: #18181b;
+    border-left: 1px solid rgba(0, 0, 0, 0.1);
+    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.08);
   }
 
-  .copis-details-drawer-backdrop {
-    position: fixed;
+  body.copis-details-drawer-open .copis-details-drawer-root {
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+  }
+
+  /* 拖拽调整抽屉宽度时的即时响应保护（禁用 transition 避免滞后延迟） */
+  body.copis-inspector-resizing [class*="_centerCol"],
+  body.copis-inspector-resizing [class*="centerCol"],
+  body.copis-inspector-resizing .copis-details-drawer-root,
+  body.copis-inspector-resizing .copis-hero-utilities-overlay {
+    transition: none !important;
+  }
+
+  /* 抽屉左侧可拖拽调整尺寸边框 */
+  .copis-inspector-resize-handle {
+    position: absolute;
     top: 0;
-    left: 0;
-    right: 0;
+    left: -3px;
     bottom: 0;
-    z-index: 99;
-    background: rgba(0, 0, 0, 0.15);
-    backdrop-filter: blur(1px);
-    animation: copis-drawer-fade-in 160ms ease;
+    width: 6px;
+    cursor: col-resize;
+    z-index: 100;
+    touch-action: none;
+    background: transparent;
+    transition: background-color 150ms ease;
   }
 
-  @keyframes copis-drawer-fade-in {
-    from { opacity: 0; }
-    to { opacity: 1; }
+  .copis-inspector-resize-handle:hover,
+  .copis-inspector-resize-handle[data-resizing="true"] {
+    background: rgba(255, 255, 255, 0.22);
+  }
+
+  body:not([data-ds-dark-theme]) .copis-inspector-resize-handle:hover,
+  body:not([data-ds-dark-theme]) .copis-inspector-resize-handle[data-resizing="true"] {
+    background: rgba(0, 0, 0, 0.2);
+  }
+
+  /* 子视图激活时强制隐藏抽屉，保证全屏子视图整洁 */
+  body.copis-subview-active .copis-details-drawer-root {
+    display: none !important;
   }
 
   /* 搜索浮层全局遮罩与弹窗：保持底层 DSH 视图完全可见，绝不触发全黑全白 */
@@ -746,11 +1100,16 @@ const CREATION_UI_CSS = `
     border-radius: 6px;
     font-size: 12px;
     font-weight: 500;
-    background: var(--creation-ui-primary, #6c00cc);
+    background: rgba(255, 255, 255, 0.15);
     color: #ffffff;
-    border: none;
+    border: 1px solid rgba(255, 255, 255, 0.1);
     cursor: pointer;
-    transition: opacity 120ms ease;
+    transition: all 120ms ease;
+  }
+
+  .copis-search-submit-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.22);
+    border-color: rgba(255, 255, 255, 0.2);
   }
 
   .copis-search-submit-btn:disabled {
@@ -781,15 +1140,16 @@ const CREATION_UI_CSS = `
 
   .copis-search-item-row:hover,
   .copis-search-item-row[data-selected="true"] {
-    background: var(--creation-ui-primary-background, rgba(108, 0, 204, 0.08));
+    background: rgba(255, 255, 255, 0.08) !important;
   }
 
   .copis-search-badge-creation {
     font-size: 10px;
     padding: 1px 6px;
     border-radius: 4px;
-    background: var(--creation-ui-primary-background, rgba(108, 0, 204, 0.12));
-    color: var(--creation-ui-primary, #6c00cc);
+    background: rgba(255, 255, 255, 0.08);
+    color: #e4e4e7;
+    border: 1px solid rgba(255, 255, 255, 0.1);
     font-weight: 500;
     flex-shrink: 0;
   }
@@ -816,7 +1176,688 @@ const CREATION_UI_CSS = `
     flex-shrink: 0;
   }
 
-  /* 右侧文件操作区面板样式 */
+  /* ========================================================
+     Copis 创造模式 Inspector 多页签系统样式 (参考 cc-sandbox)
+     ======================================================== */
+  .copis-inspector-root {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+    font-family: var(--dsw-font-family, system-ui, sans-serif);
+    color: #f4f4f5;
+  }
+
+  .copis-inspector-tabbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 38px;
+    padding: 0 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(0, 0, 0, 0.22);
+    flex-shrink: 0;
+    gap: 8px;
+  }
+
+  .copis-inspector-tab-list {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    overflow-x: auto;
+    flex: 1;
+    min-width: 0;
+    padding: 2px 0;
+    scrollbar-width: none;
+  }
+
+  .copis-inspector-tab-list::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* WorkBuddy 风格浅灰微光 Tab 项 */
+  .copis-inspector-tab-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #a1a1aa;
+    transition: all 120ms ease;
+    user-select: none;
+    white-space: nowrap;
+  }
+
+  .copis-inspector-tab-item:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: #e4e4e7;
+  }
+
+  .copis-inspector-tab-item[data-active="true"] {
+    background: rgba(255, 255, 255, 0.14) !important;
+    color: #ffffff !important;
+    border-color: rgba(255, 255, 255, 0.18) !important;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.12) !important;
+  }
+
+  /* 侧栏上方 Tab 激活时，Icon 统一使用紫色高亮 */
+  .copis-inspector-tab-item[data-active="true"] .copis-inspector-tab-icon,
+  .copis-inspector-tab-item[data-active="true"] .copis-inspector-tab-icon svg {
+    color: #a855f7 !important;
+    stroke: #a855f7 !important;
+  }
+
+  body:not([data-ds-dark-theme]) .copis-inspector-tab-item[data-active="true"] .copis-inspector-tab-icon,
+  body:not([data-ds-dark-theme]) .copis-inspector-tab-item[data-active="true"] .copis-inspector-tab-icon svg {
+    color: #9333ea !important;
+    stroke: #9333ea !important;
+  }
+
+  .copis-inspector-tab-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .copis-inspector-tab-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 140px;
+  }
+
+  .copis-inspector-tab-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    margin-left: 2px;
+    color: #71717a;
+    transition: all 100ms ease;
+  }
+
+  .copis-inspector-tab-close:hover {
+    background: rgba(255, 255, 255, 0.15);
+    color: #ffffff;
+  }
+
+  .copis-inspector-tabbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .copis-inspector-tool-icon-btn {
+    appearance: none;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: #a1a1aa;
+    border-radius: 6px;
+    width: 26px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 120ms ease;
+  }
+
+  .copis-inspector-tool-icon-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #ffffff;
+  }
+
+  .copis-inspector-add-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .copis-inspector-add-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    min-width: 150px;
+    background: rgba(24, 24, 32, 0.96);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    padding: 4px;
+    z-index: 200;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    backdrop-filter: blur(16px);
+  }
+
+  .copis-inspector-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    color: #d4d4d8;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    transition: all 100ms ease;
+  }
+
+  .copis-inspector-dropdown-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #ffffff;
+  }
+
+  .copis-inspector-content {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ------------------- 文件面板 (Files Tab) ------------------- */
+  .copis-inspector-files-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  .copis-inspector-files-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 32px;
+    padding: 0 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(0, 0, 0, 0.12);
+    flex-shrink: 0;
+    font-size: 11px;
+    gap: 8px;
+  }
+
+  .copis-inspector-files-breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #a1a1aa;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .copis-inspector-files-topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .copis-inspector-files-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .copis-inspector-files-tree-col {
+    width: 220px;
+    flex-shrink: 0;
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: rgba(0, 0, 0, 0.08);
+  }
+
+  .copis-inspector-files-preview-col {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    background: rgba(0, 0, 0, 0.04);
+  }
+
+  .copis-inspector-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    padding: 32px 16px;
+    text-align: center;
+  }
+
+  .copis-inspector-code-viewer {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .copis-inspector-code-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 12px;
+    font-size: 11px;
+    color: #a1a1aa;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(0, 0, 0, 0.15);
+    flex-shrink: 0;
+  }
+
+  /* ------------------- 侧边聊天面板 (Side Chat Tab) ------------------- */
+  .copis-inspector-sidechat-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  .copis-inspector-sidechat-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 32px;
+    padding: 0 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(0, 0, 0, 0.12);
+    flex-shrink: 0;
+  }
+
+  .copis-inspector-sidechat-messages {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .copis-sidechat-message-row {
+    display: flex;
+    gap: 8px;
+    max-width: 90%;
+  }
+
+  .copis-sidechat-message--user {
+    align-self: flex-end;
+    flex-direction: row-reverse;
+  }
+
+  .copis-sidechat-message--assistant {
+    align-self: flex-start;
+  }
+
+  .copis-sidechat-avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: #a1a1aa;
+  }
+
+  .copis-sidechat-bubble {
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #f4f4f5;
+  }
+
+  .copis-sidechat-message--user .copis-sidechat-bubble {
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+  }
+
+  .copis-sidechat-message--assistant .copis-sidechat-bubble {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .copis-sidechat-time {
+    font-size: 10px;
+    color: #71717a;
+    margin-top: 4px;
+    text-align: right;
+  }
+
+  .copis-sidechat-thinking {
+    color: #a1a1aa;
+    font-style: italic;
+  }
+
+  .copis-sidechat-preset-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 14px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(0, 0, 0, 0.1);
+  }
+
+  .copis-sidechat-chip-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #d4d4d8;
+    cursor: pointer;
+    transition: all 120ms ease;
+  }
+
+  .copis-sidechat-chip-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.22);
+    color: #ffffff;
+  }
+
+  .copis-inspector-sidechat-input-box {
+    padding: 10px 14px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(0, 0, 0, 0.2);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .copis-sidechat-textarea {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 12px;
+    color: #f4f4f5;
+    resize: none;
+    outline: none;
+    font-family: inherit;
+  }
+
+  .copis-sidechat-textarea:focus {
+    border-color: rgba(255, 255, 255, 0.24);
+  }
+
+  .copis-sidechat-input-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .copis-sidechat-send-btn {
+    background: #3f414a;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 5px;
+    color: #ffffff;
+    padding: 4px 10px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 120ms ease;
+  }
+
+  .copis-sidechat-send-btn:hover:not(:disabled) {
+    background: #4d505a;
+    border-color: rgba(255, 255, 255, 0.24);
+  }
+
+  .copis-sidechat-send-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  /* ------------------- 团队面板 (Team Tab) ------------------- */
+  .copis-inspector-team-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  .copis-inspector-team-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 32px;
+    padding: 0 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(0, 0, 0, 0.12);
+    flex-shrink: 0;
+  }
+
+  .copis-team-stats-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #a1a1aa;
+  }
+
+  .copis-team-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    font-weight: 600;
+    color: #d4d4d8;
+    margin-bottom: 8px;
+  }
+
+  .copis-team-member-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    cursor: pointer;
+    transition: all 120ms ease;
+  }
+
+  .copis-team-member-item:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.14);
+  }
+
+  .copis-team-avatar-mini {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .copis-team-role-tag {
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #e4e4e7;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .copis-team-status-chip {
+    font-size: 10px;
+    font-weight: 500;
+    padding: 2px 7px;
+    border-radius: 10px;
+    flex-shrink: 0;
+  }
+
+  .copis-team-status--running {
+    background: rgba(255, 255, 255, 0.12);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+  }
+
+  .copis-team-status--ready {
+    background: rgba(34, 197, 94, 0.15);
+    color: #4ade80;
+    border: 1px solid rgba(34, 197, 94, 0.3);
+  }
+
+  .copis-team-status--idle {
+    background: rgba(255, 255, 255, 0.06);
+    color: #a1a1aa;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .copis-team-task-item {
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    overflow: hidden;
+  }
+
+  .copis-team-task-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px;
+    cursor: pointer;
+    transition: background 100ms ease;
+  }
+
+  .copis-team-task-header:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .copis-team-task-details {
+    padding: 8px 10px 10px 28px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    font-size: 11px;
+    color: #a1a1aa;
+    background: rgba(0, 0, 0, 0.1);
+  }
+
+  .copis-team-task-meta-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 6px;
+  }
+
+  .copis-team-meta-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .copis-team-meta-key {
+    color: #71717a;
+    min-width: 54px;
+  }
+
+  .copis-team-meta-val {
+    color: #e4e4e7;
+    font-weight: 500;
+  }
+
+  .copis-team-back-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 5px;
+    font-size: 11px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #f4f4f5;
+    cursor: pointer;
+  }
+
+  .copis-team-member-card {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    padding: 14px;
+  }
+
+  .copis-team-avatar-box {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .copis-team-skill-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #d4d4d8;
+  }
+
+  .copis-team-subagent-log-box {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    padding: 10px;
+  }
+
+  .copis-team-subagent-log-item {
+    display: flex;
+    gap: 8px;
+    font-size: 11px;
+    font-family: monospace;
+  }
+
+  .copis-team-log-time {
+    color: #71717a;
+  }
+
+  .copis-team-log-text {
+    color: #d4d4d8;
+  }
+
+  /* 兼容旧版单一面板类 */
   .copis-details-panel-root {
     display: flex;
     flex-direction: column;
@@ -861,9 +1902,9 @@ const CREATION_UI_CSS = `
   }
 
   .copis-details-tab-button[data-active="true"] {
-    background: var(--dsw-alias-bg-base, #ffffff);
-    color: var(--dsw-alias-label-primary, #18181b);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    background: rgba(255, 255, 255, 0.12) !important;
+    color: #ffffff !important;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   }
 
   .copis-details-close-btn {
@@ -960,8 +2001,8 @@ const CREATION_UI_CSS = `
   }
 
   .copis-tree-node-row[data-selected="true"] {
-    background: var(--creation-ui-primary-background, rgba(108, 0, 204, 0.12));
-    color: var(--creation-ui-primary, #6c00cc);
+    background: rgba(255, 255, 255, 0.12) !important;
+    color: #ffffff !important;
   }
 
   .copis-preview-container {
@@ -1017,6 +2058,12 @@ const CREATION_UI_CSS = `
     line-height: 18px;
     white-space: pre;
   }
+  /* 彻底屏蔽 DSH 原生旧版 DetailsPanel 遗留界面（旧的文件与改动 tab） */
+  [class*="_2ctAZa_header"],
+  [class*="_2ctAZa_root"] > div:first-child:not(.copis-inspector-tabbar) {
+    display: none !important;
+  }
+
   /* 彻底屏蔽 DSH 原生设置弹窗与遮罩层，统一由 Copis 全屏设置面板接管 */
   [class*="VOzbGW_panel"],
   [class*="VOzbGW_overlay"],
@@ -1045,20 +2092,40 @@ export function isSettingsTarget(target: HTMLElement | null): boolean {
   if (!target) return false
   const btn = target.closest('button')
   if (!btn) return false
-  // 1. DSH settingsArea / triggerRow 容器内的设置按钮
+
+  // 1. 严格排除：Composer 内部、中间对话区、详情抽屉或消息流内部的任何按钮（如上下文用量圆环、模型选择、发送等），严禁误触发系统设置
+  if (
+    btn.closest(
+      '[class*="composer"], [class*="Composer"], [class*="uV2eYG"], [class*="_centerCol"], [class*="centerCol"], [class*="chatArea"], [class*="messageList"], [class*="sessionView"], [class*="_detailsCol"]',
+    )
+  ) {
+    return false
+  }
+
+  // 2. 限制作用域：系统设置按钮必须严格属于侧边栏容器（aside, SidebarRoot, footArea, settingsArea）
+  const inSidebar = Boolean(
+    btn.closest(
+      'aside, [class*="SidebarRoot"], [class*="sidebar"], [class*="_sidebarCol"], [class*="footArea"], [class*="FootArea"], [class*="settingsArea"], [class*="SettingsArea"], .copis-creation-sidebar',
+    ),
+  )
+  if (!inSidebar) {
+    return false
+  }
+
+  // 3. 在侧边栏内，精确匹配设置入口：
+  // 3.1 DSH settingsArea / triggerRow 容器内的设置按钮
   if (btn.closest('[class*="settingsArea"], [class*="SettingsArea"]')) return true
   if (btn.closest('[class*="triggerRow"], [class*="TriggerRow"]') && btn.getAttribute('aria-haspopup') === 'dialog') return true
   if (btn.matches('button[class*="trigger"][aria-haspopup="dialog"], button[class*="Trigger"][aria-haspopup="dialog"]')) return true
-  // 2. aria-label 或 title 包含设置/setting
+
+  // 3.2 侧边栏内 aria-label 或 title 包含设置/setting
   const aria = (btn.getAttribute('aria-label') || btn.getAttribute('title') || '').toLowerCase()
   if (aria.includes('设置') || aria.includes('setting')) return true
-  // 3. 侧边栏/底部按钮文字包含设置/setting
+
+  // 3.3 侧边栏内文本包含设置/setting
   const text = (btn.textContent || '').trim().toLowerCase()
-  if (text.includes('设置') || text.includes('setting')) {
-    if (btn.closest('[class*="footArea"], [class*="FootArea"], [class*="SidebarRoot"], [class*="_root"], aside')) {
-      return true
-    }
-  }
+  if (text.includes('设置') || text.includes('setting')) return true
+
   return false
 }
 
@@ -1403,6 +2470,10 @@ export function CreationSidebarNavigation(props: {
     setActiveView(item.view)
     document.body?.classList.add('copis-subview-active')
     document.documentElement?.classList.add('copis-subview-active')
+    // 切换至子视图时，若工作区抽屉处于展开态，自动折叠以保持全屏整洁
+    if (document.body?.classList.contains('copis-details-drawer-open')) {
+      window.dispatchEvent(new CustomEvent('COPIS_TOGGLE_WORKSPACE_DRAWER'))
+    }
     sendNavigation(item.view, item.tab)
   }
 
@@ -1454,6 +2525,15 @@ export function CreationSidebarNavigation(props: {
           >
             <Icon size={16} strokeWidth={1.8} />
             <span>{item.label}</span>
+            {item.badge && (
+              <span
+                className={`copis-menu-badge ${
+                  item.badge === 'BETA' ? 'copis-menu-badge-beta' : 'copis-menu-badge-flexible'
+                }`}
+              >
+                {item.badge}
+              </span>
+            )}
             <button
               type="button"
               className="copis-dsh-menu-hide-btn"
@@ -1478,30 +2558,19 @@ export function CreationSidebarNavigation(props: {
 export function CopisHeaderUtilities(props: { ctx: CordisContext }): ReactElement {
   const [detailsOpen, setDetailsOpen] = useState(false)
 
-  // 检测右侧面板或全局工作区抽屉是否处于展开状态
+  // 检测全功能 Inspector 抽屉是否处于展开状态（通过 body.copis-details-drawer-open）
   useEffect(() => {
     const checkDetailsState = () => {
       if (typeof document === 'undefined') return
-      const isDrawerOpen = Boolean(document.querySelector('.copis-details-drawer-root'))
-      const detailsCol = document.querySelector('[class*="detailsCol"], [class*="_detailsCol"]')
-      const isCollapsed = Boolean(document.querySelector('[data-details-collapsed]'))
-
-      if (isDrawerOpen) {
-        setDetailsOpen(true)
-      } else if (detailsCol) {
-        setDetailsOpen(!isCollapsed)
-      } else {
-        setDetailsOpen(false)
-      }
+      const isDrawerOpen = Boolean(document.body?.classList.contains('copis-details-drawer-open'))
+      setDetailsOpen(isDrawerOpen)
     }
 
     checkDetailsState()
     const observer = new MutationObserver(checkDetailsState)
     observer.observe(document.body, {
       attributes: true,
-      childList: true,
-      subtree: true,
-      attributeFilter: ['data-details-collapsed'],
+      attributeFilter: ['class'],
     })
 
     const handleToggleEvent = () => {
@@ -1517,22 +2586,18 @@ export function CopisHeaderUtilities(props: { ctx: CordisContext }): ReactElemen
 
   const handleToggleWorkspaceDetails = () => {
     if (typeof document === 'undefined') return
-    const detailsCol = document.querySelector('[class*="detailsCol"], [class*="_detailsCol"]')
-    const isDrawerOpen = Boolean(document.querySelector('.copis-details-drawer-root'))
-    const isCollapsed = Boolean(document.querySelector('[data-details-collapsed]'))
+    const isDrawerOpen = Boolean(document.body?.classList.contains('copis-details-drawer-open'))
 
-    if (detailsCol) {
-      if (isCollapsed) {
-        props.ctx.layout?.openDetails()
-        setDetailsOpen(true)
-      } else {
-        props.ctx.layout?.closeDetails()
-        setDetailsOpen(false)
-      }
-    } else {
-      window.dispatchEvent(new CustomEvent('COPIS_TOGGLE_WORKSPACE_DRAWER'))
-      setDetailsOpen(!isDrawerOpen)
+    // 若 DSH 原生旧 detailsCol 处于展开状态，将其收起以释放主视图宽度
+    const detailsCol = document.querySelector('[class*="detailsCol"], [class*="_detailsCol"]')
+    const isCollapsed = Boolean(document.querySelector('[data-details-collapsed]'))
+    if (detailsCol && !isCollapsed) {
+      props.ctx.layout?.closeDetails()
     }
+
+    // 统一唤起全新的全功能 Inspector 抽屉（文件、侧边聊天、团队）
+    window.dispatchEvent(new CustomEvent('COPIS_TOGGLE_WORKSPACE_DRAWER'))
+    setDetailsOpen(!isDrawerOpen)
   }
 
   return (
@@ -1556,532 +2621,23 @@ export function CopisHeaderUtilities(props: { ctx: CordisContext }): ReactElemen
   )
 }
 
-/** 右侧文件操作面板（工作区文件树 + 文件原地预览） */
+/**
+ * 右侧工作区全功能 Inspector 检查器面板
+ * 移植自 cc-sandbox，包含：
+ * 1. 文件（Files）：工作区文件树过滤 + 双栏代码高亮/图片就地预览；
+ * 2. 侧边聊天（Side Chat）：轻量独立问答对话流 + 预设快捷提问；
+ * 3. 团队（Team）：主智能体/专家成员状态（处理中/空闲/待命）+ 任务编排看板 + 历史子会话回溯。
+ */
+export { CopisInspectorPanel } from './inspector/CopisInspectorPanel'
+
+/** 向后兼容的 CopisDetailsPanel 别名，代理至全功能 CopisInspectorPanel */
 export function CopisDetailsPanel(props: {
   sessionId?: string
   ctx: CordisContext
   renderSlot?: (name: string, props: any) => ReactElement | null
   closeDetails?: () => void
 }): ReactElement {
-  const [activeTab, setActiveTab] = useState<'files' | 'preview' | 'tool'>('files')
-  const [filterText, setFilterText] = useState('')
-  const [rootEntries, setRootEntries] = useState<DirectoryEntry[]>([])
-  const [expandedDirs, setExpandedDirs] = useState<Set<string>>(() => new Set())
-  const [childrenMap, setChildrenMap] = useState<Map<string, DirectoryEntry[]>>(() => new Map())
-  const [loadingMap, setLoadingMap] = useState<Map<string, boolean>>(() => new Map())
-  const [isRootLoading, setIsRootLoading] = useState(false)
-  const [refreshCount, setRefreshCount] = useState(0)
-
-  const [previewingFile, setPreviewingFile] = useState<DirectoryEntry | null>(null)
-  const [previewState, setPreviewState] = useState<{
-    loading: boolean
-    content: string
-    error: string | null
-    isImage: boolean
-    imageUrl: string
-  }>({
-    loading: false,
-    content: '',
-    error: null,
-    isImage: false,
-    imageUrl: '',
-  })
-  const [copied, setCopied] = useState(false)
-
-  // 获得当前工作区 CWD 路径
-  const sessionCwd = useMemo(() => {
-    const listSnapshot = props.ctx.sessions?.list?.getSnapshot()
-    const targetSessionId = props.sessionId || listSnapshot?.current
-    if (targetSessionId && listSnapshot?.byId[targetSessionId]) {
-      return listSnapshot.byId[targetSessionId].cwd
-    }
-    return undefined
-  }, [props.sessionId, props.ctx.sessions])
-
-  // 加载工作区根目录条目
-  useEffect(() => {
-    if (!sessionCwd) return
-    let cancelled = false
-    setIsRootLoading(true)
-
-    if (window.copisBridge?.listDirectory) {
-      window.copisBridge
-        .listDirectory(undefined, sessionCwd)
-        .then((entries) => {
-          if (!cancelled) {
-            setRootEntries(Array.isArray(entries) ? entries : [])
-            setIsRootLoading(false)
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setRootEntries([])
-            setIsRootLoading(false)
-          }
-        })
-    } else {
-      setIsRootLoading(false)
-    }
-
-    return () => {
-      cancelled = true
-    }
-  }, [sessionCwd, refreshCount])
-
-  // 展开 / 折叠文件夹并按需加载子目录
-  const toggleFolder = (folderPath: string) => {
-    setExpandedDirs((prev) => {
-      const next = new Set(prev)
-      if (next.has(folderPath)) {
-        next.delete(folderPath)
-      } else {
-        next.add(folderPath)
-        if (!childrenMap.has(folderPath)) {
-          setLoadingMap((lm) => new Map(lm).set(folderPath, true))
-          if (window.copisBridge?.listDirectory) {
-            window.copisBridge
-              .listDirectory(folderPath, sessionCwd)
-              .then((kids) => {
-                setChildrenMap((cm) => new Map(cm).set(folderPath, Array.isArray(kids) ? kids : []))
-                setLoadingMap((lm) => {
-                  const n = new Map(lm)
-                  n.delete(folderPath)
-                  return n
-                })
-              })
-              .catch(() => {
-                setChildrenMap((cm) => new Map(cm).set(folderPath, []))
-                setLoadingMap((lm) => {
-                  const n = new Map(lm)
-                  n.delete(folderPath)
-                  return n
-                })
-              })
-          } else {
-            setLoadingMap((lm) => {
-              const n = new Map(lm)
-              n.delete(folderPath)
-              return n
-            })
-          }
-        }
-      }
-      return next
-    })
-  }
-
-  // 刷新工作区文件树
-  const handleRefresh = () => {
-    setChildrenMap(new Map())
-    setExpandedDirs(new Set())
-    setRefreshCount((c) => c + 1)
-  }
-
-  // 打开文件就地预览
-  const openPreview = (file: DirectoryEntry) => {
-    setPreviewingFile(file)
-    setActiveTab('preview')
-    setPreviewState({ loading: true, content: '', error: null, isImage: false, imageUrl: '' })
-
-    if (window.copisBridge?.readFile) {
-      window.copisBridge
-        .readFile(file.path, sessionCwd)
-        .then((res) => {
-          if (!res) {
-            setPreviewState({ loading: false, content: '', error: '无法读取文件', isImage: false, imageUrl: '' })
-          } else if (!res.success) {
-            setPreviewState({ loading: false, content: '', error: res.error || '读取失败', isImage: false, imageUrl: '' })
-          } else if (res.isImage) {
-            setPreviewState({ loading: false, content: '', error: null, isImage: true, imageUrl: res.content || '' })
-          } else {
-            setPreviewState({ loading: false, content: res.content || '', error: null, isImage: false, imageUrl: '' })
-          }
-        })
-        .catch((err) => {
-          setPreviewState({ loading: false, content: '', error: String(err?.message || err), isImage: false, imageUrl: '' })
-        })
-    } else {
-      setPreviewState({ loading: false, content: '', error: '未连接到 Copis 文件服务', isImage: false, imageUrl: '' })
-    }
-  }
-
-  // 在系统文件管理器中显示文件
-  const handleLocateFile = (filePath: string) => {
-    if (window.copisBridge?.showItemInFolder) {
-      window.copisBridge.showItemInFolder(filePath, sessionCwd)
-    }
-  }
-
-  // 复制代码内容
-  const handleCopyContent = () => {
-    if (!previewState.content) return
-    navigator.clipboard.writeText(previewState.content).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    })
-  }
-
-  // 关闭面板
-  const handleClose = () => {
-    if (props.closeDetails) {
-      props.closeDetails()
-    } else {
-      props.ctx.layout?.closeDetails()
-    }
-  }
-
-  // 汇总所有已加载的文件列表（用于搜索过滤）
-  const allLoadedFiles = useMemo(() => {
-    const list: DirectoryEntry[] = []
-    const scan = (items: DirectoryEntry[]) => {
-      for (const item of items) {
-        if (item.isDirectory) {
-          const kids = childrenMap.get(item.path)
-          if (kids) scan(kids)
-        } else {
-          list.push(item)
-        }
-      }
-    }
-    scan(rootEntries)
-    return list
-  }, [rootEntries, childrenMap])
-
-  // 搜索匹配过滤
-  const filteredFiles = useMemo(() => {
-    const q = filterText.trim().toLowerCase()
-    if (!q) return []
-    return allLoadedFiles.filter(
-      (f) => f.name.toLowerCase().includes(q) || f.path.toLowerCase().includes(q),
-    )
-  }, [filterText, allLoadedFiles])
-
-  // 递归渲染目录树
-  const renderTreeNodes = (items: DirectoryEntry[], depth = 0): ReactElement[] => {
-    return items.map((item) => {
-      const isDir = item.isDirectory
-      const isExpanded = isDir && expandedDirs.has(item.path)
-      const isLoadingChild = isDir && loadingMap.get(item.path)
-      const children = isDir ? childrenMap.get(item.path) || [] : []
-      const isSelected = previewingFile?.path === item.path && activeTab === 'preview'
-
-      return (
-        <div key={item.path} style={{ display: 'flex', flexDirection: 'column' }}>
-          <div
-            className="copis-tree-node-row"
-            data-selected={isSelected ? 'true' : 'false'}
-            style={{ paddingLeft: `${depth * 14 + 6}px` }}
-            onClick={() => {
-              if (isDir) {
-                toggleFolder(item.path)
-              } else {
-                openPreview(item)
-              }
-            }}
-            title={item.path}
-          >
-            {isDir ? (
-              <span style={{ display: 'inline-flex', alignItems: 'center', width: '12px' }}>
-                {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-              </span>
-            ) : (
-              <span style={{ width: '12px', flexShrink: 0 }} />
-            )}
-
-            {isDir ? (
-              isExpanded ? (
-                <FolderOpen size={14} style={{ color: 'var(--creation-ui-primary, #6c00cc)' }} />
-              ) : (
-                <Folder size={14} style={{ color: 'var(--creation-ui-primary, #6c00cc)' }} />
-              )
-            ) : (
-              <FileCode size={14} style={{ color: getFileIconColor(item.name) }} />
-            )}
-
-            <span
-              style={{
-                flex: 1,
-                minWidth: 0,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                fontWeight: isDir ? 500 : 400,
-              }}
-            >
-              {item.name}
-            </span>
-
-            {!isDir && item.size !== undefined && (
-              <span style={{ fontSize: '10px', color: 'var(--dsw-alias-label-tertiary, #a1a1aa)', flexShrink: 0 }}>
-                {formatSize(item.size)}
-              </span>
-            )}
-          </div>
-
-          {isDir && isExpanded && (
-            <div>
-              {isLoadingChild ? (
-                <div style={{ padding: '4px 0 4px 28px', fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, #a1a1aa)' }}>
-                  加载中...
-                </div>
-              ) : children.length > 0 ? (
-                renderTreeNodes(children, depth + 1)
-              ) : (
-                <div style={{ padding: '4px 0 4px 28px', fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, #a1a1aa)' }}>
-                  (空目录)
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )
-    })
-  }
-
-  return (
-    <div className="copis-details-panel-root">
-      {/* 顶部标签栏与关闭 */}
-      <div className="copis-details-header-row">
-        <div className="copis-details-tabs-group">
-          <button
-            type="button"
-            className="copis-details-tab-button"
-            data-active={activeTab === 'files' || activeTab === 'preview' ? 'true' : 'false'}
-            onClick={() => setActiveTab('files')}
-          >
-            工作区
-          </button>
-          <button
-            type="button"
-            className="copis-details-tab-button"
-            data-active={activeTab === 'tool' ? 'true' : 'false'}
-            onClick={() => setActiveTab('tool')}
-          >
-            工具
-          </button>
-        </div>
-
-        <button
-          type="button"
-          className="copis-details-close-btn"
-          onClick={handleClose}
-          aria-label="关闭详情面板"
-          title="关闭"
-        >
-          <X size={14} />
-        </button>
-      </div>
-
-      {/* 内容区域 */}
-      <div className="copis-details-content-body">
-        {activeTab === 'tool' ? (
-          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-            {props.renderSlot ? (
-              props.renderSlot('conversation.details.tool', {})
-            ) : (
-              <div style={{ textAlign: 'center', padding: '40px 10px', color: 'var(--dsw-alias-label-tertiary, #a1a1aa)', fontSize: '12px' }}>
-                当前无活跃的工具调用信息
-              </div>
-            )}
-          </div>
-        ) : activeTab === 'preview' && previewingFile ? (
-          <div className="copis-preview-container">
-            {/* 预览导航栏 */}
-            <div className="copis-preview-nav-bar">
-              <button
-                type="button"
-                className="copis-preview-btn"
-                onClick={() => setActiveTab('files')}
-              >
-                <ChevronLeft size={13} />
-                <span>返回</span>
-              </button>
-
-              <span
-                style={{
-                  fontWeight: 600,
-                  maxWidth: '180px',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-                title={previewingFile.path}
-              >
-                {previewingFile.name}
-              </span>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                {!previewState.isImage && previewState.content && (
-                  <button
-                    type="button"
-                    className="copis-preview-btn"
-                    onClick={handleCopyContent}
-                    title="复制代码内容"
-                  >
-                    {copied ? <Check size={12} style={{ color: '#22c55e' }} /> : <Copy size={12} />}
-                    <span>{copied ? '已复制' : '复制'}</span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="copis-preview-btn"
-                  onClick={() => handleLocateFile(previewingFile.path)}
-                  title="在系统文件管理器中显示"
-                >
-                  <ExternalLink size={12} />
-                  <span>定位</span>
-                </button>
-              </div>
-            </div>
-
-            {/* 预览内容呈现 */}
-            {previewState.loading ? (
-              <div style={{ textAlign: 'center', padding: '60px 10px', color: 'var(--dsw-alias-label-tertiary, #a1a1aa)', fontSize: '12px' }}>
-                正在读取文件内容...
-              </div>
-            ) : previewState.error ? (
-              <div
-                style={{
-                  padding: '20px',
-                  borderRadius: '8px',
-                  background: 'rgba(239, 68, 68, 0.08)',
-                  border: '0.5px solid rgba(239, 68, 68, 0.2)',
-                  textAlign: 'center',
-                  fontSize: '12px',
-                }}
-              >
-                <div style={{ color: '#ef4444', fontWeight: 600, marginBottom: '6px' }}>预览失败</div>
-                <div style={{ color: 'var(--dsw-alias-label-secondary, #71717a)', marginBottom: '12px' }}>
-                  {previewState.error}
-                </div>
-                <button
-                  type="button"
-                  className="copis-header-action-btn"
-                  onClick={() => openPreview(previewingFile)}
-                >
-                  重试
-                </button>
-              </div>
-            ) : previewState.isImage ? (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, overflow: 'auto', padding: '10px' }}>
-                <img
-                  src={previewState.imageUrl}
-                  alt={previewingFile.name}
-                  style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: '6px' }}
-                />
-              </div>
-            ) : (
-              <div className="copis-code-view-wrapper">
-                <code>{previewState.content || '// 空文件'}</code>
-              </div>
-            )}
-          </div>
-        ) : (
-          /* 工作区文件树展示 */
-          <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-            {/* 搜索与刷新行 */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
-              <div className="copis-workspace-search-bar" style={{ flex: 1, marginBottom: 0 }}>
-                <Search size={13} style={{ color: 'var(--dsw-alias-label-tertiary, #a1a1aa)' }} />
-                <input
-                  type="text"
-                  className="copis-workspace-search-input"
-                  placeholder="搜索文件..."
-                  value={filterText}
-                  onChange={(e) => setFilterText(e.target.value)}
-                />
-                {filterText && (
-                  <button
-                    type="button"
-                    className="copis-workspace-refresh-btn"
-                    onClick={() => setFilterText('')}
-                    title="清空搜索"
-                  >
-                    <X size={12} />
-                  </button>
-                )}
-              </div>
-              <button
-                type="button"
-                className="copis-header-action-btn"
-                style={{ height: '28px', padding: '0 8px' }}
-                onClick={handleRefresh}
-                title="刷新文件树"
-              >
-                <RefreshCw size={12} />
-              </button>
-            </div>
-
-            {/* 根目录路径展示 */}
-            {sessionCwd && (
-              <div
-                style={{
-                  fontSize: '11px',
-                  color: 'var(--dsw-alias-label-tertiary, #a1a1aa)',
-                  marginBottom: '6px',
-                  padding: '2px 4px',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-                title={sessionCwd}
-              >
-                根目录: <span style={{ color: 'var(--dsw-alias-label-secondary, #71717a)' }}>{sessionCwd.split(/[/\\]/).pop() || sessionCwd}</span>
-              </div>
-            )}
-
-            {/* 树形列表内容 */}
-            <div className="copis-tree-container">
-              {filterText.trim() ? (
-                filteredFiles.length > 0 ? (
-                  <div>
-                    <div style={{ fontSize: '11px', color: 'var(--dsw-alias-label-tertiary, #a1a1aa)', padding: '4px 6px' }}>
-                      匹配结果 ({filteredFiles.length})
-                    </div>
-                    {filteredFiles.map((file) => (
-                      <div
-                        key={file.path}
-                        className="copis-tree-node-row"
-                        onClick={() => openPreview(file)}
-                        title={file.path}
-                      >
-                        <FileCode size={14} style={{ color: getFileIconColor(file.name) }} />
-                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {file.name}
-                        </span>
-                        {file.size !== undefined && (
-                          <span style={{ fontSize: '10px', color: 'var(--dsw-alias-label-tertiary, #a1a1aa)' }}>
-                            {formatSize(file.size)}
-                          </span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div style={{ textAlign: 'center', padding: '40px 10px', color: 'var(--dsw-alias-label-tertiary, #a1a1aa)', fontSize: '12px' }}>
-                    未找到匹配的文件
-                  </div>
-                )
-              ) : isRootLoading ? (
-                <div style={{ textAlign: 'center', padding: '40px 10px', color: 'var(--dsw-alias-label-tertiary, #a1a1aa)', fontSize: '12px' }}>
-                  正在加载工作区文件...
-                </div>
-              ) : rootEntries.length > 0 ? (
-                renderTreeNodes(rootEntries, 0)
-              ) : (
-                <div style={{ textAlign: 'center', padding: '40px 10px', color: 'var(--dsw-alias-label-tertiary, #a1a1aa)', fontSize: '12px' }}>
-                  <p>工作区为空</p>
-                  <p style={{ fontSize: '11px', marginTop: '4px' }}>
-                    {sessionCwd ? '当前目录未包含可展示的文件' : '等待会话初始化...'}
-                  </p>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
+  return <CopisInspectorPanel {...props} />
 }
 
 interface CopisSearchItem {
@@ -2110,8 +2666,8 @@ function HighlightSearchText({ text, query }: { text: string; query: string }): 
       <mark
         key={`m-${idx}`}
         style={{
-          background: 'var(--creation-ui-primary-background, rgba(108, 0, 204, 0.2))',
-          color: 'var(--creation-ui-primary, #6c00cc)',
+          background: 'rgba(255, 255, 255, 0.18)',
+          color: '#ffffff',
           borderRadius: 2,
           padding: '0 2px',
           fontWeight: 600,
@@ -2468,8 +3024,28 @@ export function CopisSearchModal(props: {
   )
 }
 
+const DEFAULT_DRAWER_WIDTH = 500
+const MIN_DRAWER_WIDTH = 360
+const MAX_DRAWER_WIDTH = 840
+
+function getInitialDrawerWidth(): number {
+  if (typeof window === 'undefined') return DEFAULT_DRAWER_WIDTH
+  try {
+    const saved = localStorage.getItem('copis_creation_inspector_width')
+    if (saved) {
+      const parsed = parseInt(saved, 10)
+      if (!isNaN(parsed) && parsed >= MIN_DRAWER_WIDTH && parsed <= MAX_DRAWER_WIDTH) {
+        return parsed
+      }
+    }
+  } catch {}
+  return DEFAULT_DRAWER_WIDTH
+}
+
 export function CopisShellOverlayManager(props: { ctx: CordisContext }): ReactElement {
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [drawerWidth, setDrawerWidth] = useState<number>(getInitialDrawerWidth)
+  const [isResizing, setIsResizing] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const [hasSessionHeader, setHasSessionHeader] = useState(false)
   const [isSubviewActive, setIsSubviewActive] = useState(() => {
@@ -2486,6 +3062,51 @@ export function CopisShellOverlayManager(props: { ctx: CordisContext }): ReactEl
     window.addEventListener('COPIS_TOGGLE_WORKSPACE_DRAWER', handleToggle)
     return () => window.removeEventListener('COPIS_TOGGLE_WORKSPACE_DRAWER', handleToggle)
   }, [])
+
+  // 抽屉展开状态与宽度同步至 body class 与 CSS 变量（驱动中部聊天区 margin-right 挤压平滑并列）
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    if (drawerOpen) {
+      document.body.classList.add('copis-details-drawer-open')
+      document.documentElement.classList.add('copis-details-drawer-open')
+      document.documentElement.style.setProperty('--copis-inspector-width', `${drawerWidth}px`)
+    } else {
+      document.body.classList.remove('copis-details-drawer-open')
+      document.documentElement.classList.remove('copis-details-drawer-open')
+    }
+  }, [drawerOpen, drawerWidth])
+
+  // 左边缘拖拽调整抽屉宽度
+  const handleResizeStart = useCallback((e: React.PointerEvent) => {
+    e.preventDefault()
+    setIsResizing(true)
+    document.body.classList.add('copis-inspector-resizing')
+    const startX = e.clientX
+    const startWidth = drawerWidth
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      const deltaX = startX - moveEvent.clientX
+      const maxAllowed = Math.max(MIN_DRAWER_WIDTH, window.innerWidth - 360)
+      const newWidth = Math.max(MIN_DRAWER_WIDTH, Math.min(maxAllowed, startWidth + deltaX))
+      setDrawerWidth(newWidth)
+      document.documentElement.style.setProperty('--copis-inspector-width', `${newWidth}px`)
+    }
+
+    const onPointerUp = () => {
+      setIsResizing(false)
+      document.body.classList.remove('copis-inspector-resizing')
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+      window.removeEventListener('pointercancel', onPointerUp)
+      try {
+        localStorage.setItem('copis_creation_inspector_width', String(drawerWidth))
+      } catch {}
+    }
+
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+    window.addEventListener('pointercancel', onPointerUp)
+  }, [drawerWidth])
 
   // 监听搜索浮层唤起事件与 Cmd+K / Ctrl+K 快捷键
   useEffect(() => {
@@ -2557,22 +3178,23 @@ export function CopisShellOverlayManager(props: { ctx: CordisContext }): ReactEl
         </div>
       )}
 
-      {/* 右侧全局工作区文件抽屉 */}
-      {drawerOpen && (
-        <>
-          <div
-            className="copis-details-drawer-backdrop"
-            onClick={() => setDrawerOpen(false)}
-            aria-label="关闭文件面板"
-          />
-          <div className="copis-details-drawer-root">
-            <CopisDetailsPanel
-              ctx={props.ctx}
-              closeDetails={() => setDrawerOpen(false)}
-            />
-          </div>
-        </>
-      )}
+      {/* 右侧全局工作区多页签 Inspector 抽屉（推入式并列滑入，彻底移除全屏遮罩） */}
+      <div
+        className="copis-details-drawer-root"
+        data-state={drawerOpen ? 'open' : 'closed'}
+        aria-hidden={!drawerOpen}
+      >
+        <div
+          className="copis-inspector-resize-handle"
+          onPointerDown={handleResizeStart}
+          data-resizing={isResizing ? 'true' : 'false'}
+          title="按住拖拽调整侧边栏宽度"
+        />
+        <CopisInspectorPanel
+          ctx={props.ctx}
+          closeDetails={() => setDrawerOpen(false)}
+        />
+      </div>
 
       {/* 内建全局搜索浮层 */}
       {searchOpen && (
@@ -2586,7 +3208,7 @@ export function CopisShellOverlayManager(props: { ctx: CordisContext }): ReactEl
   )
 }
 
-export const inject = ['slots', 'layout', 'sessions']
+export const inject = ['slots', 'layout', 'sessions', 'workspaces']
 
 export function apply(ctx: CordisContext): void {
   cachedCordisContext = ctx

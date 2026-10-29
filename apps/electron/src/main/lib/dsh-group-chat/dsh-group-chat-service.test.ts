@@ -189,4 +189,86 @@ describe('DshGroupChatService', () => {
     expect(messages[1]?.agentName).toBe('前端工程师')
     expect(messages[1]?.text).toBe('已经收到需求，正在为您编写前端组件。')
   })
+
+  it('should update agent model and pass model info to streamFn during invocation', async () => {
+    let capturedAgent: any = null
+    const testService = new DshGroupChatService({
+      store: new DshGroupChatStore({ baseDir: testDir }),
+      listCreationWorkspaces: () => [
+        { id: 'ws_analyst', name: '基金分析师', path: '/path/to/analyst' },
+      ],
+      streamFn: async (input) => {
+        capturedAgent = input.agent
+        return '策略报告已生成。'
+      },
+      getAvailableModels: async () => [
+        {
+          channelId: 'copis-working-deepseek',
+          channelName: 'DeepSeek',
+          models: [
+            { id: 'deepseek-v4-flash', name: '快速 (v4 Flash)' },
+            { id: 'deepseek-v4-pro', name: '专业 (v4 Pro)' },
+          ],
+        },
+      ],
+    })
+
+    const group = testService.createGroup({
+      name: '投资决策群',
+      agents: [
+        { agentId: 'ws_analyst', name: '基金分析师', modelId: 'deepseek-v4-flash' },
+      ],
+    })
+
+    // 1. 获取可用模型
+    const available = await testService.getAvailableModels()
+    expect(available.length).toBe(1)
+    expect(available[0]?.channelId).toBe('copis-working-deepseek')
+
+    // 2. 切换模型为 deepseek-v4-pro
+    const updated = testService.updateAgentModel({
+      groupId: group.id,
+      agentId: 'ws_analyst',
+      channelId: 'copis-working-deepseek',
+      modelId: 'deepseek-v4-pro',
+      modelName: '专业 (v4 Pro)',
+    })
+    expect(updated?.agents[0]?.modelId).toBe('deepseek-v4-pro')
+    expect(updated?.agents[0]?.modelName).toBe('专业 (v4 Pro)')
+
+    // 3. 触发调用，检查 streamFn 接收到的 agent model 配置
+    testService.postMessage({
+      groupId: group.id,
+      text: '@基金分析师 请分析当前半导体ETF',
+      mentions: [{ type: 'agent', id: 'ws_analyst', name: '基金分析师' }],
+    })
+
+    await new Promise((r) => setTimeout(r, 60))
+    expect(capturedAgent).not.toBeNull()
+    expect(capturedAgent.modelId).toBe('deepseek-v4-pro')
+    expect(capturedAgent.modelName).toBe('专业 (v4 Pro)')
+  })
+
+  it('should return available models with fallback guarantee when models are empty', async () => {
+    const models = await service.getAvailableModels()
+    expect(Array.isArray(models)).toBeTrue()
+    expect(models.length).toBeGreaterThan(0)
+    expect(models[0]!.models.length).toBeGreaterThan(0)
+  })
+
+  it('should use deps.getAvailableModels when provided', async () => {
+    const customModels = [
+      {
+        channelId: 'custom-ch',
+        channelName: 'Custom Channel',
+        models: [{ id: 'custom-m1', name: 'Custom Model 1' }],
+      },
+    ]
+    const store = new DshGroupChatStore({ baseDir: testDir })
+    const customService = new DshGroupChatService(store, {
+      getAvailableModels: async () => customModels,
+    })
+    const models = await customService.getAvailableModels()
+    expect(models).toEqual(customModels)
+  })
 })

@@ -40,8 +40,7 @@ function registeredHandler(channel: string): IpcHandler {
 
 test('Working 登录验证参数并刷新 Cordis 插件', async () => {
   const { registerWorkingAccountIpcHandlers } = await import('../ipc/working-account.ipc')
-  const resume = mock(async () => undefined)
-  registerWorkingAccountIpcHandlers({ resumeChatRoomAgentsAfterAuthentication: resume })
+  registerWorkingAccountIpcHandlers()
 
   await expect(registeredHandler(WORKING_IPC_CHANNELS.LOGIN)({}, { email: 'user@example.com', password: 'secret' })).resolves.toEqual({
     authenticated: true,
@@ -49,29 +48,18 @@ test('Working 登录验证参数并刷新 Cordis 插件', async () => {
   })
   expect(login).toHaveBeenCalledWith({ email: 'user@example.com', password: 'secret' })
   expect(reloadDshCordisPlugins).toHaveBeenCalledWith({ startIfNeeded: false })
-  expect(resume).toHaveBeenCalledTimes(1)
   login.mockImplementationOnce(async () => { throw new Error('login failed') })
   await expect(registeredHandler(WORKING_IPC_CHANNELS.LOGIN)({}, { email: 'user@example.com', password: 'wrong' })).rejects.toThrow('login failed')
-  expect(resume).toHaveBeenCalledTimes(1)
   await expect(registeredHandler(WORKING_IPC_CHANNELS.LOGIN)({}, { email: 'user@example.com' })).rejects.toThrow('登录参数不正确')
 })
 
-test('Working 登出先等待聊天室清理再清除认证', async () => {
+test('Working 登出后清除当前认证', async () => {
   const { registerWorkingAccountIpcHandlers } = await import('../ipc/working-account.ipc')
   const order: string[] = []
   logout.mockImplementation(() => { order.push('logout') })
-  registerWorkingAccountIpcHandlers({ stopChatRoomAgents: async () => { order.push('stopAll') } })
+  registerWorkingAccountIpcHandlers()
   await registeredHandler(WORKING_IPC_CHANNELS.LOGOUT)({})
-  expect(order).toEqual(['stopAll', 'logout'])
-})
-
-test('Working OIDC 登录成功触发同一聊天室恢复回调', async () => {
-  const { registerWorkingAccountIpcHandlers } = await import('../ipc/working-account.ipc')
-  const resume = mock(async () => undefined)
-  registerWorkingAccountIpcHandlers({ resumeChatRoomAgentsAfterAuthentication: resume })
-  await registeredHandler(WORKING_IPC_CHANNELS.LOGIN_OIDC)()
-  expect(loginWithOAuth).toHaveBeenCalledTimes(1)
-  expect(resume).toHaveBeenCalledTimes(1)
+  expect(order).toEqual(['logout'])
 })
 
 test('迟到的 GET_AUTH_STATE 不得覆盖 Rust 已通知的新账号分区', async () => {
@@ -93,23 +81,4 @@ test('迟到的 GET_AUTH_STATE 不得覆盖 Rust 已通知的新账号分区', a
     0,
   )
   expect(setAuthState).not.toHaveBeenCalled()
-})
-
-test('迟到的 LOGOUT cleanup 不得中断并发切换到 B 的登录', async () => {
-  const { registerWorkingAccountIpcHandlers } = await import('../ipc/working-account.ipc')
-  let resolveCleanup!: () => void
-  const cleanupFinished = new Promise<void>((resolve) => { resolveCleanup = resolve })
-  logout.mockClear()
-  registerWorkingAccountIpcHandlers({ stopChatRoomAgents: async () => cleanupFinished })
-  authGeneration = 0
-  const request = registeredHandler(WORKING_IPC_CHANNELS.LOGOUT)({})
-  authGeneration = 1
-  resolveCleanup()
-
-  await expect(request).resolves.toEqual({
-    authenticated: true,
-    user: { id: 'oidc-user' },
-    backendUrl: client.baseUrl,
-  })
-  expect(logout).not.toHaveBeenCalled()
 })

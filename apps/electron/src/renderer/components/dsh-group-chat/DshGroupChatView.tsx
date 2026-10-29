@@ -10,6 +10,7 @@ import { DshGroupChatSidebar } from './DshGroupChatSidebar'
 import { DshGroupChatWorkspace } from './DshGroupChatWorkspace'
 import { DshGroupChatTasksPanel } from './DshGroupChatTasksPanel'
 import { DshGroupChatInvocationDetail } from './DshGroupChatInvocationDetail'
+import { DshGroupChatAgentsPanel } from './DshGroupChatAgentsPanel'
 import { DshGroupChatCreateDialog } from './DshGroupChatCreateDialog'
 import { dshActiveDrawerAtom } from '@/atoms/dsh-group-chat-atoms'
 
@@ -31,6 +32,7 @@ export function DshGroupChatView({ onClose }: DshGroupChatViewProps): React.Reac
       {/* 3. 右侧协作抽屉 */}
       {activeDrawer === 'tasks' && <DshGroupChatTasksPanel />}
       {activeDrawer === 'invocation' && <DshGroupChatInvocationDetail />}
+      {activeDrawer === 'agents' && <DshGroupChatAgentsPanel />}
 
       {/* 4. 新建群聊弹窗 */}
       <DshGroupChatCreateDialog />

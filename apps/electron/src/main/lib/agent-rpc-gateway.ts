@@ -188,13 +188,12 @@ export class AgentRpcGateway {
     throw new Error('Agent queue 响应不正确')
   }
 
-  async stop(sessionId: string, trustedRunId?: string): Promise<void> {
+  async stop(sessionId: string): Promise<void> {
     const response = await this.fetchImpl(
       `${this.baseUrl}/api/agent/sessions/${encodeURIComponent(sessionId)}/stop`,
       {
         method: 'POST',
-        headers: { Accept: 'application/json', ...(trustedRunId ? { 'Content-Type': 'application/json' } : {}) },
-        ...(trustedRunId ? { body: JSON.stringify({ _copisTrustedRunId: trustedRunId }) } : {}),
+        headers: { Accept: 'application/json' },
       },
     )
     if (!response.ok) throw new Error(await readErrorMessage(response))

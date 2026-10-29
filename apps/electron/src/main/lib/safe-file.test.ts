@@ -15,8 +15,8 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import {
-  CHATROOM_CONFIG_MAX_BYTES,
-  CHATROOM_RECOVERY_ENVELOPE_MAX_BYTES,
+  JSON_RECOVERY_PAYLOAD_MAX_BYTES,
+  JSON_RECOVERY_ENVELOPE_MAX_BYTES,
   readJsonFileSafe,
   readJsonFileSafeDetailed,
   writeJsonFileAtomic,
@@ -55,7 +55,7 @@ function writeRawRecoveryEnvelope(path: string, ownerToken: string, generation: 
 beforeEach(() => mkdirSync(root, { recursive: true }))
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 
-describe('聊天室 durable JSON writer', () => {
+describe('持久化 JSON 安全读写', () => {
   test('Given 合法通用 JSON 超过 4 MiB When 安全读取 Then 保持既有通用索引兼容', () => {
     const file = join(root, 'large-generic.json')
     const value = 'x'.repeat(4 * 1024 * 1024)
@@ -64,15 +64,15 @@ describe('聊天室 durable JSON writer', () => {
     expect(readJsonFileSafe<{ value: string }>(file)?.value.length).toBe(value.length)
   })
 
-  test('Given 聊天室配置 payload 恰好在显式上限内 When 安全读取 Then 接受 payload', () => {
+  test('Given JSON 配置 payload 恰好在显式上限内 When 安全读取 Then 接受 payload', () => {
     const file = join(root, 'room-boundary.json')
     const prefix = '{\n  "value": "'
     const suffix = '"\n}'
-    const value = 'x'.repeat(CHATROOM_CONFIG_MAX_BYTES - Buffer.byteLength(prefix) - Buffer.byteLength(suffix))
+    const value = 'x'.repeat(JSON_RECOVERY_PAYLOAD_MAX_BYTES - Buffer.byteLength(prefix) - Buffer.byteLength(suffix))
     writeFileSync(file, `${prefix}${value}${suffix}`)
 
-    const result = readJsonFileSafeDetailed<{ value: string }>(file, '聊天室配置', {
-      maxBytes: CHATROOM_CONFIG_MAX_BYTES,
+    const result = readJsonFileSafeDetailed<{ value: string }>(file, 'JSON 配置', {
+      maxBytes: JSON_RECOVERY_PAYLOAD_MAX_BYTES,
     })
     expect(result.status).toBe('valid')
     expect(result.value?.value.length).toBe(value.length)
@@ -85,20 +85,20 @@ describe('聊天室 durable JSON writer', () => {
     expect(existsSync(file)).toBe(false)
   })
 
-  test('Given 聊天室配置 recovery envelope 近 payload 上限 When 恢复 Then 预留包装与转义空间', () => {
+  test('Given JSON 配置 recovery envelope 近 payload 上限 When 恢复 Then 预留包装与转义空间', () => {
     const file = join(root, 'room-envelope-boundary.json')
-    const value = 'x'.repeat(CHATROOM_CONFIG_MAX_BYTES - 64)
+    const value = 'x'.repeat(JSON_RECOVERY_PAYLOAD_MAX_BYTES - 64)
     writeJsonFileAtomicDurable(file, { value })
     writeFileSync(`${file}.bak`, 'external bak')
     writeJsonFileAtomicDurable(file, { value: `${value}2` })
     const slots = [...new Bun.Glob('room-envelope-boundary.json.bak-recovery-*').scanSync(root)]
       .filter((path) => !path.endsWith('-owner'))
     expect(slots.length).toBeGreaterThan(0)
-    expect(slots.every((path) => Buffer.byteLength(readFileSync(join(root, path))) <= CHATROOM_RECOVERY_ENVELOPE_MAX_BYTES)).toBe(true)
+    expect(slots.every((path) => Buffer.byteLength(readFileSync(join(root, path))) <= JSON_RECOVERY_ENVELOPE_MAX_BYTES)).toBe(true)
     writeFileSync(file, '{broken')
 
-    const result = readJsonFileSafeDetailed<{ value: string }>(file, '聊天室配置', {
-      maxBytes: CHATROOM_CONFIG_MAX_BYTES,
+    const result = readJsonFileSafeDetailed<{ value: string }>(file, 'JSON 配置', {
+      maxBytes: JSON_RECOVERY_PAYLOAD_MAX_BYTES,
     })
     expect(result.status).toBe('recovered')
     expect(result.value?.value).toBe(value)
@@ -301,34 +301,34 @@ describe('聊天室 durable JSON writer', () => {
     expect(result.status).toBe('corrupt')
   })
 
-  test('Given token-scoped recovery envelope 的 payload 超过聊天室上限但仅由空白填充 When 主文件损坏 Then 拒绝恢复且不提升主文件', () => {
+  test('Given token-scoped recovery envelope 的 payload 超过显式上限但仅由空白填充 When 主文件损坏 Then 拒绝恢复且不提升主文件', () => {
     const file = join(root, 'room-token-oversized-payload.json')
     const token = '11111111-1111-4111-8111-111111111111'
     const payloadPrefix = '{"value":"ok"}'
-    const payload = `${payloadPrefix}${' '.repeat(CHATROOM_CONFIG_MAX_BYTES - Buffer.byteLength(payloadPrefix) + 1)}`
+    const payload = `${payloadPrefix}${' '.repeat(JSON_RECOVERY_PAYLOAD_MAX_BYTES - Buffer.byteLength(payloadPrefix) + 1)}`
     writeFileSync(`${file}.bak-recovery-owner`, JSON.stringify({ token }))
     writeRawRecoveryEnvelope(recoverySlotPath(file, token, 'a'), token, 1, payload)
     writeFileSync(file, '{broken')
 
-    const result = readJsonFileSafeDetailed<{ value: string }>(file, '聊天室配置', {
-      maxBytes: CHATROOM_CONFIG_MAX_BYTES,
+    const result = readJsonFileSafeDetailed<{ value: string }>(file, 'JSON 配置', {
+      maxBytes: JSON_RECOVERY_PAYLOAD_MAX_BYTES,
     })
 
     expect(result).toEqual({ value: null, status: 'corrupt' })
     expect(readFileSync(file, 'utf8')).toBe('{broken')
   })
 
-  test('Given legacy recovery envelope 的 payload 超过聊天室上限但仅由空白填充 When 主文件损坏 Then 拒绝恢复且不提升主文件', () => {
+  test('Given legacy recovery envelope 的 payload 超过显式上限但仅由空白填充 When 主文件损坏 Then 拒绝恢复且不提升主文件', () => {
     const file = join(root, 'room-legacy-oversized-payload.json')
     const token = '11111111-1111-4111-8111-111111111111'
     const payloadPrefix = '{"value":"legacy"}'
-    const payload = `${payloadPrefix}${' '.repeat(CHATROOM_CONFIG_MAX_BYTES - Buffer.byteLength(payloadPrefix) + 1)}`
+    const payload = `${payloadPrefix}${' '.repeat(JSON_RECOVERY_PAYLOAD_MAX_BYTES - Buffer.byteLength(payloadPrefix) + 1)}`
     writeFileSync(`${file}.bak-recovery-owner`, JSON.stringify({ token }))
     writeRawRecoveryEnvelope(legacyRecoverySlotPath(file, 'a'), token, 1, payload)
     writeFileSync(file, '{broken')
 
-    const result = readJsonFileSafeDetailed<{ value: string }>(file, '聊天室配置', {
-      maxBytes: CHATROOM_CONFIG_MAX_BYTES,
+    const result = readJsonFileSafeDetailed<{ value: string }>(file, 'JSON 配置', {
+      maxBytes: JSON_RECOVERY_PAYLOAD_MAX_BYTES,
     })
 
     expect(result).toEqual({ value: null, status: 'corrupt' })
@@ -339,31 +339,31 @@ describe('聊天室 durable JSON writer', () => {
     const file = join(root, 'room-oversized-payload-canonical-fallback.json')
     const token = '11111111-1111-4111-8111-111111111111'
     const payloadPrefix = '{"value":"oversized"}'
-    const payload = `${payloadPrefix}${' '.repeat(CHATROOM_CONFIG_MAX_BYTES - Buffer.byteLength(payloadPrefix) + 1)}`
+    const payload = `${payloadPrefix}${' '.repeat(JSON_RECOVERY_PAYLOAD_MAX_BYTES - Buffer.byteLength(payloadPrefix) + 1)}`
     writeFileSync(`${file}.bak-recovery-owner`, JSON.stringify({ token }))
     writeRawRecoveryEnvelope(recoverySlotPath(file, token, 'a'), token, 1, payload)
     writeFileSync(`${file}.bak`, JSON.stringify({ value: 'canonical' }))
     writeFileSync(file, '{broken')
 
-    const result = readJsonFileSafeDetailed<{ value: string }>(file, '聊天室配置', {
-      maxBytes: CHATROOM_CONFIG_MAX_BYTES,
+    const result = readJsonFileSafeDetailed<{ value: string }>(file, 'JSON 配置', {
+      maxBytes: JSON_RECOVERY_PAYLOAD_MAX_BYTES,
     })
 
     expect(result).toEqual({ value: { value: 'canonical' }, status: 'recovered' })
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ value: 'canonical' })
   })
 
-  test('Given token-scoped recovery envelope 的 payload 恰好达到聊天室上限 When 主文件损坏 Then 正常恢复', () => {
+  test('Given token-scoped recovery envelope 的 payload 恰好达到显式上限 When 主文件损坏 Then 正常恢复', () => {
     const file = join(root, 'room-boundary-recovery-payload.json')
     const token = '11111111-1111-4111-8111-111111111111'
     const payloadPrefix = '{"value":"boundary"}'
-    const payload = `${payloadPrefix}${' '.repeat(CHATROOM_CONFIG_MAX_BYTES - Buffer.byteLength(payloadPrefix))}`
+    const payload = `${payloadPrefix}${' '.repeat(JSON_RECOVERY_PAYLOAD_MAX_BYTES - Buffer.byteLength(payloadPrefix))}`
     writeFileSync(`${file}.bak-recovery-owner`, JSON.stringify({ token }))
     writeRawRecoveryEnvelope(recoverySlotPath(file, token, 'a'), token, 1, payload)
     writeFileSync(file, '{broken')
 
-    const result = readJsonFileSafeDetailed<{ value: string }>(file, '聊天室配置', {
-      maxBytes: CHATROOM_CONFIG_MAX_BYTES,
+    const result = readJsonFileSafeDetailed<{ value: string }>(file, 'JSON 配置', {
+      maxBytes: JSON_RECOVERY_PAYLOAD_MAX_BYTES,
     })
 
     expect(result).toEqual({ value: { value: 'boundary' }, status: 'recovered' })

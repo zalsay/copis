@@ -1,12 +1,11 @@
 use std::collections::HashMap;
-use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex, Weak};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -17,12 +16,6 @@ mod app_update;
 mod auth_session;
 mod automation;
 mod automation_scheduler;
-mod chatroom_ack;
-mod chatroom_client;
-mod chatroom_execution;
-mod chatroom_gateway;
-mod chatroom_management;
-mod chatroom_protocol;
 mod edu_api_client;
 mod expert_teams;
 mod memory;
@@ -47,12 +40,6 @@ use automation::{
     AutomationUpdateInput,
 };
 use automation_scheduler::AutomationScheduler;
-use chatroom_client::TungsteniteConnector;
-use chatroom_gateway::{
-    is_chatroom_internal_path, is_chatroom_path, ChatroomBridge, ChatroomGateway,
-    GatewayHttpResponse,
-};
-use chatroom_protocol::ChatroomProtocolOptions;
 use edu_api_client::{EduApiClient, EduApiResponse, DEFAULT_MAX_CONCURRENT_REQUESTS};
 use expert_teams::{ExpertTeamError, ExpertTeamStore};
 use memory::{
@@ -93,7 +80,6 @@ const HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 51730;
 // 文件写入接口允许 50 MB 内容，额外预留 JSON/path/sessionId 等请求字段空间。
 const MAX_REQUEST_BODY_BYTES: usize = 50 * 1024 * 1024 + 256 * 1024;
-const MAX_CHATROOM_MANAGEMENT_BODY_BYTES: usize = 64 * 1024;
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_LINE_BYTES: usize = 64 * 1024;
 const MAX_RECORDING_LINE_BYTES: usize = 256 * 1024;
@@ -124,22 +110,6 @@ fn is_working_model_route(method: &str, path: &str) -> bool {
         )
 }
 
-fn is_chatroom_management_http_path(path: &str) -> bool {
-    if path == "/api/internal/chatrooms/agent-management/capabilities" {
-        return true;
-    }
-    let parts: Vec<&str> = path.split('/').collect();
-    matches!(
-        parts.as_slice(),
-        ["", "api", "internal", "chatrooms", "rooms", room_id, "agent-management", "operations"]
-            if !room_id.is_empty()
-    ) || matches!(
-        parts.as_slice(),
-        ["", "api", "internal", "chatrooms", "rooms", room_id, "agent-management", "operations", "status"]
-            if !room_id.is_empty()
-    )
-}
-
 fn bridge_request_timeout() -> Duration {
     let millis = std::env::var("COPIS_HTTP_API_BRIDGE_TIMEOUT_MS")
         .ok()
@@ -152,9 +122,6 @@ fn bridge_request_timeout() -> Duration {
 fn bridge_request_timeout_for_path(path: &str) -> Duration {
     if path == "/api/working/images/generate" {
         return Duration::from_secs(300);
-    }
-    if path == "/api/internal/chatrooms/server-failure" {
-        return Duration::from_millis(1_500);
     }
     if path == INTERNAL_AGENT_PERMISSION_PATH {
         return Duration::from_secs(90);
@@ -171,46 +138,9 @@ fn connection_read_timeout() -> Duration {
     Duration::from_millis(millis)
 }
 
-fn chatroom_sse_heartbeat_interval() -> Duration {
-    let millis = std::env::var("COPIS_CHATROOM_SSE_HEARTBEAT_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(15_000);
-    Duration::from_millis(millis)
-}
-
 struct BridgeResponse {
     status: u16,
     body: Option<String>,
-}
-
-const CHATROOM_INVOCATION_BRIDGE_FAILURE: &str = "聊天室 Agent bridge 返回失败状态";
-
-fn chatroom_invocation_bridge_failure(response: &BridgeResponse) -> &'static str {
-    if response.status != 400 {
-        return CHATROOM_INVOCATION_BRIDGE_FAILURE;
-    }
-    let Some(body) = response.body.as_deref() else {
-        return CHATROOM_INVOCATION_BRIDGE_FAILURE;
-    };
-    let Ok(value) = serde_json::from_str::<Value>(body) else {
-        return CHATROOM_INVOCATION_BRIDGE_FAILURE;
-    };
-    let Some(object) = value.as_object() else {
-        return CHATROOM_INVOCATION_BRIDGE_FAILURE;
-    };
-    if object.len() == 2
-        && object
-            .get("code")
-            .and_then(Value::as_str)
-            .is_some_and(|code| code == "invalid_chatroom_origin")
-        && object.get("error").and_then(Value::as_str).is_some()
-    {
-        chatroom_gateway::CHATROOM_NATIVE_RUNTIME_UNSUPPORTED
-    } else {
-        CHATROOM_INVOCATION_BRIDGE_FAILURE
-    }
 }
 
 struct Bridge {
@@ -222,106 +152,6 @@ struct Bridge {
     recording_paths: Mutex<HashMap<(String, String), PathBuf>>,
     #[cfg(test)]
     request_records: Mutex<Vec<(String, Vec<u8>)>>,
-}
-
-enum ChatroomGatewayLifecycleState {
-    WaitingForRegistration,
-    Registered(Weak<ChatroomGateway>),
-    StartupFailed,
-}
-
-struct ChatroomGatewayLifecycle {
-    state: Mutex<ChatroomGatewayLifecycleState>,
-    changed: std::sync::Condvar,
-}
-
-impl ChatroomGatewayLifecycle {
-    fn new() -> Self {
-        Self {
-            state: Mutex::new(ChatroomGatewayLifecycleState::WaitingForRegistration),
-            changed: std::sync::Condvar::new(),
-        }
-    }
-
-    fn register_gateway(&self, gateway: &Arc<ChatroomGateway>) {
-        let mut state = self.state.lock().unwrap();
-        let rejected_gateway = match &*state {
-            ChatroomGatewayLifecycleState::WaitingForRegistration => {
-                *state = ChatroomGatewayLifecycleState::Registered(Arc::downgrade(gateway));
-                self.changed.notify_all();
-                None
-            }
-            ChatroomGatewayLifecycleState::StartupFailed => Some(Arc::clone(gateway)),
-            ChatroomGatewayLifecycleState::Registered(registered) => {
-                let is_same_gateway = registered
-                    .upgrade()
-                    .map(|registered| Arc::ptr_eq(&registered, gateway))
-                    .unwrap_or(false);
-                if is_same_gateway {
-                    None
-                } else {
-                    Some(Arc::clone(gateway))
-                }
-            }
-        };
-        drop(state);
-        if let Some(gateway) = rejected_gateway {
-            gateway.shutdown();
-        }
-    }
-
-    fn mark_startup_failed(&self) {
-        let gateway = {
-            let mut state = self.state.lock().unwrap();
-            let gateway = match &*state {
-                ChatroomGatewayLifecycleState::Registered(gateway) => Some(gateway.clone()),
-                ChatroomGatewayLifecycleState::WaitingForRegistration
-                | ChatroomGatewayLifecycleState::StartupFailed => None,
-            };
-            if !matches!(&*state, ChatroomGatewayLifecycleState::StartupFailed) {
-                *state = ChatroomGatewayLifecycleState::StartupFailed;
-                self.changed.notify_all();
-            }
-            gateway
-        };
-        if let Some(gateway) = gateway.and_then(|gateway| gateway.upgrade()) {
-            gateway.shutdown();
-        }
-    }
-
-    fn gateway(&self) -> Option<Arc<ChatroomGateway>> {
-        let state = self.state.lock().unwrap();
-        match &*state {
-            ChatroomGatewayLifecycleState::Registered(gateway) => gateway.upgrade(),
-            ChatroomGatewayLifecycleState::WaitingForRegistration
-            | ChatroomGatewayLifecycleState::StartupFailed => None,
-        }
-    }
-
-    fn shutdown_after_bridge_disconnect(&self) {
-        let mut state = self.state.lock().unwrap();
-        loop {
-            match &*state {
-                ChatroomGatewayLifecycleState::WaitingForRegistration => {
-                    state = self.changed.wait(state).unwrap();
-                }
-                ChatroomGatewayLifecycleState::Registered(gateway) => {
-                    let gateway = gateway.upgrade();
-                    drop(state);
-                    if let Some(gateway) = gateway {
-                        gateway.shutdown();
-                    }
-                    return;
-                }
-                ChatroomGatewayLifecycleState::StartupFailed => return,
-            }
-        }
-    }
-}
-
-fn startup_failed_and_exit(lifecycle: &ChatroomGatewayLifecycle, code: i32) -> ! {
-    lifecycle.mark_startup_failed();
-    process::exit(code);
 }
 
 struct AuthWorkingBackend {
@@ -376,7 +206,6 @@ fn parse_auth_working_response(response: EduApiResponse) -> Result<Value, SkillM
 
 struct BridgeAuthStorage {
     bridge: Arc<Bridge>,
-    chatroom_gateway: Arc<ChatroomGatewayLifecycle>,
 }
 
 impl AuthStorage for BridgeAuthStorage {
@@ -510,22 +339,6 @@ impl AuthStorage for BridgeAuthStorage {
 }
 
 impl BridgeAuthStorage {
-    fn set_chatroom_gateway(&self, gateway: &Arc<ChatroomGateway>) {
-        self.chatroom_gateway.register_gateway(gateway);
-    }
-
-    fn notify_chatroom_gateway(&self, authenticated: bool) {
-        let gateway = self.chatroom_gateway.gateway();
-        let Some(gateway) = gateway else {
-            return;
-        };
-        if authenticated {
-            gateway.resume_connection();
-        } else {
-            gateway.shutdown_connection();
-        }
-    }
-
     fn notify_state_changed(
         &self,
         authenticated: bool,
@@ -607,14 +420,6 @@ impl Bridge {
     }
 
     fn send_request(&self, request: &HttpRequest) -> Result<BridgeResponse, String> {
-        self.send_request_cancellable(request, None)
-    }
-
-    fn send_request_cancellable(
-        &self,
-        request: &HttpRequest,
-        shutdown: Option<&AtomicBool>,
-    ) -> Result<BridgeResponse, String> {
         if !self.available.load(Ordering::Acquire) {
             return Err("HTTP API 业务桥不可用".to_string());
         }
@@ -652,10 +457,6 @@ impl Bridge {
         let timeout = bridge_request_timeout_for_path(&request.target);
         let deadline = Instant::now() + timeout;
         loop {
-            if shutdown.is_some_and(|flag| flag.load(Ordering::Acquire)) {
-                self.pending.lock().unwrap().remove(&id);
-                return Err("聊天室业务桥调用已取消".to_string());
-            }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 self.pending.lock().unwrap().remove(&id);
@@ -682,247 +483,11 @@ impl Bridge {
     }
 }
 
-impl chatroom_gateway::ChatroomBridge for Bridge {
-    fn send_invocation(&self, body: Vec<u8>, shutdown: &AtomicBool) -> Result<(), String> {
-        let response = self.send_request_cancellable(
-            &HttpRequest {
-                method: "POST".to_string(),
-                target: "/api/internal/chatrooms/invocations".to_string(),
-                headers: HashMap::new(),
-                body,
-            },
-            Some(shutdown),
-        )?;
-        if (200..300).contains(&response.status) {
-            Ok(())
-        } else {
-            Err(chatroom_invocation_bridge_failure(&response).to_string())
-        }
-    }
-
-    fn send_disconnected(&self, body: Vec<u8>, shutdown: &AtomicBool) -> Result<(), String> {
-        let response = self.send_request_cancellable(
-            &HttpRequest {
-                method: "POST".to_string(),
-                target: "/api/internal/chatrooms/disconnected".to_string(),
-                headers: HashMap::new(),
-                body,
-            },
-            Some(shutdown),
-        )?;
-        if (200..300).contains(&response.status) {
-            Ok(())
-        } else {
-            Err("聊天室断开通知返回失败状态".to_string())
-        }
-    }
-
-    fn send_server_failure(&self, body: Vec<u8>, shutdown: &AtomicBool) -> Result<(), String> {
-        let response = self.send_request_cancellable(
-            &HttpRequest {
-                method: "POST".to_string(),
-                target: "/api/internal/chatrooms/server-failure".to_string(),
-                headers: HashMap::new(),
-                body,
-            },
-            Some(shutdown),
-        )?;
-        if (200..300).contains(&response.status) {
-            Ok(())
-        } else {
-            Err("聊天室服务端终态通知返回失败状态".to_string())
-        }
-    }
-}
-
 struct HttpRequest {
     method: String,
     target: String,
     headers: HashMap<String, String>,
     body: Vec<u8>,
-}
-
-fn chatroom_http_route_owned(path: &str) -> bool {
-    is_chatroom_path(path) || is_chatroom_internal_path(path)
-}
-
-fn chatroom_preflight_is_authorized(method: &str, path: &str, internal_token_valid: bool) -> bool {
-    method != "OPTIONS" || !is_chatroom_internal_path(path) || internal_token_valid
-}
-
-fn bind_and_start_chatroom_gateway(
-    port: u16,
-    gateway: &Arc<ChatroomGateway>,
-) -> io::Result<TcpListener> {
-    let listener = match TcpListener::bind((HOST, port)) {
-        Ok(listener) => listener,
-        Err(error) => {
-            gateway.shutdown();
-            return Err(error);
-        }
-    };
-    gateway.start();
-    Ok(listener)
-}
-
-struct ChatroomGatewayShutdownGuard(Arc<ChatroomGateway>);
-
-impl Drop for ChatroomGatewayShutdownGuard {
-    fn drop(&mut self) {
-        self.0.shutdown();
-    }
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ClientDeviceFile {
-    version: u8,
-    device_id: String,
-    created_at: u64,
-}
-
-fn valid_chatroom_device_id(value: &str) -> bool {
-    value.len() == 36
-        && value.as_bytes().iter().enumerate().all(|(index, byte)| {
-            if matches!(index, 8 | 13 | 18 | 23) {
-                *byte == b'-'
-            } else {
-                (*byte as char).is_ascii_hexdigit()
-            }
-        })
-        && value.as_bytes()[14] == b'4'
-        && matches!(
-            value.as_bytes()[19],
-            b'8'..=b'9' | b'a'..=b'b' | b'A'..=b'B'
-        )
-}
-
-fn generate_chatroom_device_id() -> Result<String, String> {
-    let mut bytes = [0_u8; 16];
-    if getrandom::getrandom(&mut bytes).is_err() {
-        return Err("无法生成聊天室设备标识".to_string());
-    }
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    Ok(format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0],
-        bytes[1],
-        bytes[2],
-        bytes[3],
-        bytes[4],
-        bytes[5],
-        bytes[6],
-        bytes[7],
-        bytes[8],
-        bytes[9],
-        bytes[10],
-        bytes[11],
-        bytes[12],
-        bytes[13],
-        bytes[14],
-        bytes[15]
-    ))
-}
-
-fn repair_chatroom_device_permissions(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = fs::metadata(path)?.permissions().mode() & 0o777;
-        if mode != 0o600 {
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-        }
-    }
-    Ok(())
-}
-
-fn publish_chatroom_device_file(temporary: &Path, target: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        fs::hard_link(temporary, target)?;
-        fs::remove_file(temporary)
-    }
-    #[cfg(not(unix))]
-    {
-        // 临时文件已完整写入并 flush；硬链接发布避免读者看到半成品，
-        // 同时在目标已存在时以 AlreadyExists 失败而不会覆盖。
-        fs::hard_link(temporary, target)?;
-        fs::remove_file(temporary)
-    }
-}
-
-fn parse_chatroom_device_file(path: &Path) -> Result<String, String> {
-    let bytes = fs::read(path).map_err(|error| format!("读取聊天室设备文件失败: {error}"))?;
-    let config = serde_json::from_slice::<ClientDeviceFile>(&bytes)
-        .map_err(|_| "聊天室设备文件格式不正确".to_string())?;
-    if config.version != 1 || !valid_chatroom_device_id(&config.device_id) {
-        return Err("聊天室设备文件内容不正确".to_string());
-    }
-    repair_chatroom_device_permissions(path)
-        .map_err(|error| format!("修复聊天室设备文件权限失败: {error}"))?;
-    Ok(config.device_id)
-}
-
-fn resolve_chatroom_device_id() -> Result<String, String> {
-    resolve_chatroom_device_id_at(&resolve_config_directory().join("client-device.json"))
-}
-
-fn resolve_chatroom_device_id_at(path: &Path) -> Result<String, String> {
-    match fs::metadata(&path) {
-        Ok(_) => return parse_chatroom_device_file(&path),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(format!("检查聊天室设备文件失败: {error}")),
-    }
-
-    let device_id = generate_chatroom_device_id()?;
-    let config = ClientDeviceFile {
-        version: 1,
-        device_id: device_id.clone(),
-        created_at: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
-            .map_err(|_| "系统时间无效".to_string())?,
-    };
-    let encoded =
-        serde_json::to_vec_pretty(&config).map_err(|_| "聊天室设备文件序列化失败".to_string())?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| format!("创建 Copis 配置目录失败: {error}"))?;
-    }
-    let temporary = path.with_file_name(format!(
-        "client-device.json.{}.{}.tmp",
-        process::id(),
-        device_id
-    ));
-    let write_result = (|| -> io::Result<()> {
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&temporary)?;
-        file.write_all(&encoded)?;
-        file.sync_all()?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
-        }
-        publish_chatroom_device_file(&temporary, &path)
-    })();
-    match write_result {
-        Ok(()) => Ok(device_id),
-        Err(_) => {
-            let _ = fs::remove_file(&temporary);
-            if fs::metadata(&path).is_ok() {
-                parse_chatroom_device_file(&path)
-            } else {
-                Err("聊天室设备文件无法原子创建".to_string())
-            }
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -1007,18 +572,6 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, RequestError
             "invalid_http_request",
         ));
     }
-    let management_body_limit = is_chatroom_management_http_path(
-        request_parts[1]
-            .split('?')
-            .next()
-            .unwrap_or(request_parts[1]),
-    );
-    let max_body_bytes = if management_body_limit {
-        MAX_CHATROOM_MANAGEMENT_BODY_BYTES
-    } else {
-        MAX_REQUEST_BODY_BYTES
-    };
-
     let mut headers = HashMap::new();
     for line in lines {
         if line.is_empty() {
@@ -1038,17 +591,13 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, RequestError
         .map(|value| value.to_ascii_lowercase().contains("chunked"))
         .unwrap_or(false)
     {
-        read_chunked_body(&mut reader, max_body_bytes, management_body_limit)?
+        read_chunked_body(&mut reader, MAX_REQUEST_BODY_BYTES)?
     } else if let Some(content_length) = headers.get("content-length") {
         let length = content_length
             .parse::<usize>()
             .map_err(|_| RequestError::BadRequest("请求体长度不正确", "invalid_content_length"))?;
-        if length > max_body_bytes {
-            return Err(if management_body_limit {
-                RequestError::BadRequest("管理请求体超过 64 KiB 限制", "invalid_request")
-            } else {
-                RequestError::TooLarge
-            });
+        if length > MAX_REQUEST_BODY_BYTES {
+            return Err(RequestError::TooLarge);
         }
         reader
             .read_exact_bytes(length)
@@ -1068,7 +617,6 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, RequestError
 fn read_chunked_body(
     reader: &mut BufferedReader,
     max_body_bytes: usize,
-    management_body_limit: bool,
 ) -> Result<Vec<u8>, RequestError> {
     let mut body = Vec::new();
     loop {
@@ -1091,11 +639,7 @@ fn read_chunked_body(
             break;
         }
         if body.len().saturating_add(size) > max_body_bytes {
-            return Err(if management_body_limit {
-                RequestError::BadRequest("管理请求体超过 64 KiB 限制", "invalid_request")
-            } else {
-                RequestError::TooLarge
-            });
+            return Err(RequestError::TooLarge);
         }
         body.extend_from_slice(
             &reader
@@ -1592,11 +1136,7 @@ fn send_memory_not_found(stream: &mut TcpStream, origin: Option<&str>) {
     );
 }
 
-fn read_bridge_responses_from<R: BufRead>(
-    reader: R,
-    bridge: &Bridge,
-    lifecycle: &ChatroomGatewayLifecycle,
-) {
+fn read_bridge_responses_from<R: BufRead>(reader: R, bridge: &Bridge) {
     for line_result in reader.lines() {
         let Ok(line) = line_result else {
             break;
@@ -1609,18 +1149,13 @@ fn read_bridge_responses_from<R: BufRead>(
             eprintln!("[HTTP API] 收到无法解析的 Electron 响应");
         }
     }
-    cleanup_after_bridge_disconnect(bridge, lifecycle);
-}
-
-fn cleanup_after_bridge_disconnect(bridge: &Bridge, lifecycle: &ChatroomGatewayLifecycle) {
     bridge.fail_all("Electron HTTP API 业务桥已关闭");
-    lifecycle.shutdown_after_bridge_disconnect();
 }
 
-fn read_bridge_responses(bridge: Arc<Bridge>, lifecycle: Arc<ChatroomGatewayLifecycle>) {
+fn read_bridge_responses(bridge: Arc<Bridge>) {
     let stdin = io::stdin();
     let reader = BufReader::new(stdin.lock());
-    read_bridge_responses_from(reader, &bridge, &lifecycle);
+    read_bridge_responses_from(reader, &bridge);
     process::exit(0);
 }
 
@@ -2045,7 +1580,6 @@ fn handle_connection(
     workspace_skills_store: Arc<WorkspaceSkillsStore>,
     automation_store: Arc<AutomationStore>,
     automation_scheduler: Arc<AutomationScheduler>,
-    chatroom_gateway: Option<Arc<ChatroomGateway>>,
 ) {
     let _ = stream.set_read_timeout(Some(connection_read_timeout()));
     let request = match read_http_request(&mut stream) {
@@ -2087,11 +1621,15 @@ fn handle_connection(
         .split('?')
         .next()
         .unwrap_or(request.target.as_str());
-    if !chatroom_preflight_is_authorized(&request.method, path, is_internal_token_valid(&request)) {
+    if path == "/api/chatrooms"
+        || path.starts_with("/api/chatrooms/")
+        || path == "/api/internal/chatrooms"
+        || path.starts_with("/api/internal/chatrooms/")
+    {
         send_json_response(
             &mut stream,
-            403,
-            r#"{"error":"聊天室内部接口未授权","code":"internal_token_required"}"#,
+            404,
+            r#"{"error":"路由不存在","code":"route_not_found"}"#,
             origin,
         );
         let _ = stream.shutdown(Shutdown::Both);
@@ -2119,12 +1657,6 @@ fn handle_connection(
             r#"{"error":"认证存储桥仅允许 Rust stdio 调用","code":"private_bridge_only"}"#,
             origin,
         );
-        let _ = stream.shutdown(Shutdown::Both);
-        return;
-    }
-
-    if chatroom_http_route_owned(path) {
-        handle_chatroom_http(&mut stream, &request, origin, chatroom_gateway.as_deref());
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
@@ -2648,7 +2180,7 @@ fn handle_agent_stop(
         Ok(owner_id) => owner_id,
         Err(error) => {
             let body = format!(
-                r#"{{"error":"{}","code":"invalid_chatroom_run_id"}}"#,
+                r#"{{"error":"{}","code":"invalid_run_id"}}"#,
                 escape_json_string(&error)
             );
             send_json_response(stream, 400, &body, origin);
@@ -2665,84 +2197,6 @@ fn handle_agent_stop(
                 r#"{"error":"Pi worker 不可用","code":"pi_worker_unavailable"}"#,
                 origin,
             );
-        }
-    }
-}
-
-fn handle_chatroom_http(
-    stream: &mut TcpStream,
-    request: &HttpRequest,
-    origin: Option<&str>,
-    gateway: Option<&ChatroomGateway>,
-) {
-    let path = request
-        .target
-        .split('?')
-        .next()
-        .unwrap_or(request.target.as_str());
-    let internal = is_chatroom_internal_path(path);
-    if internal && !is_internal_token_valid(request) {
-        send_json_response(
-            stream,
-            403,
-            r#"{"error":"聊天室内部接口未授权","code":"internal_token_required"}"#,
-            origin,
-        );
-        return;
-    }
-    let Some(gateway) = gateway else {
-        send_json_response(
-            stream,
-            503,
-            r#"{"error":"聊天室网关不可用","code":"gateway_unavailable"}"#,
-            origin,
-        );
-        return;
-    };
-    let response = match gateway.handle_http(
-        &request.method,
-        &request.target,
-        &request.headers,
-        &request.body,
-    ) {
-        Ok(response) => response,
-        Err(error) => {
-            let body = json!({"error": error.message, "code": error.code}).to_string();
-            send_json_response(stream, error.status, &body, origin);
-            return;
-        }
-    };
-    match response {
-        GatewayHttpResponse::Json { status, body } => {
-            send_json_response(stream, status, &body.to_string(), origin);
-        }
-        GatewayHttpResponse::Empty { status } => {
-            send_empty_response(stream, status, origin);
-        }
-        GatewayHttpResponse::Sse(subscription) => {
-            let heartbeat = chatroom_sse_heartbeat_interval();
-            let _ = stream.set_write_timeout(Some(heartbeat));
-            let headers = sse_headers_with_origin(200, origin);
-            if stream.write_all(headers.as_bytes()).is_err() {
-                return;
-            }
-            let _ = stream.flush();
-            loop {
-                match subscription.receiver.recv_timeout(heartbeat) {
-                    Ok(event) => {
-                        if send_sse_frame(stream, &event).is_err() {
-                            break;
-                        }
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        if stream.write_all(b": keepalive\n\n").is_err() || stream.flush().is_err()
-                        {
-                            break;
-                        }
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                }
-            }
         }
     }
 }
@@ -3690,7 +3144,7 @@ fn handle_internal_agent_permission(
     }
     if let Err(error) = workers
         .file_policies()
-        .validate_chatroom_worker_token(session_id, token)
+        .validate_worker_token(session_id, token)
     {
         let body = json!({"error": error.message, "code": error.code}).to_string();
         send_json_response(stream, error.status, &body, origin);
@@ -3706,7 +3160,7 @@ fn handle_internal_agent_permission(
         Err(_) => send_json_response(
             stream,
             503,
-            r#"{"error":"聊天室权限通道不可用","code":"permission_bridge_unavailable"}"#,
+            r#"{"error":"Agent 权限通道不可用","code":"permission_bridge_unavailable"}"#,
             origin,
         ),
     }
@@ -3814,7 +3268,7 @@ fn handle_agent_stream(
         Ok(owner_id) => owner_id,
         Err(error) => {
             let body = format!(
-                r#"{{"error":"{}","code":"invalid_chatroom_run_id"}}"#,
+                r#"{{"error":"{}","code":"invalid_run_id"}}"#,
                 escape_json_string(&error)
             );
             send_json_response(stream, 400, &body, origin);
@@ -4114,7 +3568,7 @@ fn trusted_agent_run_id(body: &[u8]) -> Result<Option<String>, String> {
     match object.get("_copisTrustedRunId") {
         None => Ok(None),
         Some(Value::String(run_id)) if !run_id.trim().is_empty() => Ok(Some(run_id.clone())),
-        Some(_) => Err("聊天室运行 run ID 不正确".to_string()),
+        Some(_) => Err("Agent 运行 run ID 不正确".to_string()),
     }
 }
 
@@ -4508,37 +3962,6 @@ fn configured_port() -> u16 {
         .unwrap_or(DEFAULT_PORT)
 }
 
-fn parse_chatroom_protocol_options(
-    lookup: impl Fn(&str) -> Option<OsString>,
-) -> Result<ChatroomProtocolOptions, String> {
-    const FLAGS: [(&str, fn(&mut ChatroomProtocolOptions) -> &mut bool); 3] = [
-        ("COPIS_CHATROOM_AGENT_READY_V1", |options| {
-            &mut options.agent_ready_v1
-        }),
-        ("COPIS_CHATROOM_INVOCATION_ACK_V1", |options| {
-            &mut options.invocation_ack_v1
-        }),
-        ("COPIS_CHATROOM_DELTA_FRAME_ID_V1", |options| {
-            &mut options.delta_frame_id_v1
-        }),
-    ];
-    let mut options = ChatroomProtocolOptions::default();
-    for (name, select) in FLAGS {
-        let Some(value) = lookup(name) else {
-            continue;
-        };
-        let Some(value) = value.to_str() else {
-            return Err(format!("{name} 必须精确设置为小写 true 或 false"));
-        };
-        *select(&mut options) = match value {
-            "true" => true,
-            "false" => false,
-            _ => return Err(format!("{name} 必须精确设置为小写 true 或 false")),
-        };
-    }
-    Ok(options)
-}
-
 struct ConnectionCountGuard(Arc<AtomicUsize>);
 
 impl Drop for ConnectionCountGuard {
@@ -4550,37 +3973,26 @@ impl Drop for ConnectionCountGuard {
 fn main() {
     let port = configured_port();
     let bridge = Arc::new(Bridge::new());
-    let chatroom_gateway_lifecycle = Arc::new(ChatroomGatewayLifecycle::new());
-    let chatroom_protocol_options =
-        match parse_chatroom_protocol_options(|name| std::env::var_os(name)) {
-            Ok(options) => options,
-            Err(error) => {
-                eprintln!("[HTTP API] 聊天室协议配置无效: {error}");
-                startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
-            }
-        };
     if bridge.available.load(Ordering::Acquire) {
         let response_bridge = Arc::clone(&bridge);
-        let response_lifecycle = Arc::clone(&chatroom_gateway_lifecycle);
-        thread::spawn(move || read_bridge_responses(response_bridge, response_lifecycle));
+        thread::spawn(move || read_bridge_responses(response_bridge));
     }
     let edu_client = match EduApiClient::from_environment(DEFAULT_MAX_CONCURRENT_REQUESTS) {
         Ok(client) => Arc::new(client),
         Err(error) => {
             eprintln!("[HTTP API] edu-api client 初始化失败: {}", error);
-            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
+            process::exit(1);
         }
     };
     let bridge_auth_storage = Arc::new(BridgeAuthStorage {
         bridge: Arc::clone(&bridge),
-        chatroom_gateway: Arc::clone(&chatroom_gateway_lifecycle),
     });
     let auth_storage: Arc<dyn AuthStorage> = bridge_auth_storage.clone();
     let auth_client = match EduApiClient::from_auth_environment(DEFAULT_MAX_CONCURRENT_REQUESTS) {
         Ok(client) => Arc::new(client),
         Err(error) => {
             eprintln!("[HTTP API] Auth OIDC client 初始化失败: {}", error);
-            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
+            process::exit(1);
         }
     };
     let auth_session = match AuthSession::new_with_oidc(
@@ -4591,7 +4003,7 @@ fn main() {
         Ok(session) => Arc::new(session),
         Err(error) => {
             eprintln!("[HTTP API] Working 认证会话初始化失败: {}", error);
-            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
+            process::exit(1);
         }
     };
     // Electron 此时只启动了子进程，尚未把 Rust API 判定为 ready。
@@ -4601,7 +4013,7 @@ fn main() {
         Ok(client) => client,
         Err(error) => {
             eprintln!("[HTTP API] model-request client 初始化失败: {}", error);
-            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
+            process::exit(1);
         }
     };
     eprintln!(
@@ -4622,14 +4034,14 @@ fn main() {
         Ok(store) => Arc::new(store),
         Err(error) => {
             eprintln!("[HTTP API] Memory 存储初始化失败: {}", error);
-            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
+            process::exit(1);
         }
     };
     let expert_team_store = match ExpertTeamStore::open(resolve_expert_teams_directory()) {
         Ok(store) => Arc::new(store),
         Err(error) => {
             eprintln!("[HTTP API] Expert Teams 存储初始化失败: {}", error);
-            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
+            process::exit(1);
         }
     };
     let skill_market_state = Arc::new(SkillMarketState::production(Arc::new(AuthWorkingBackend {
@@ -4643,7 +4055,7 @@ fn main() {
         Ok(workspace) => Arc::new(workspace),
         Err(error) => {
             eprintln!("[HTTP API] 默认支付工作区初始化失败: {}", error);
-            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
+            process::exit(1);
         }
     };
     start_desktop_payment_poller(
@@ -4663,31 +4075,6 @@ fn main() {
     ));
     automation_scheduler.start();
 
-    let chatroom_device_id = match resolve_chatroom_device_id() {
-        Ok(device_id) => device_id,
-        Err(error) => {
-            eprintln!("[HTTP API] 聊天室设备标识初始化失败: {}", error);
-            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
-        }
-    };
-    let chatroom_bridge: Arc<dyn ChatroomBridge> = bridge.clone();
-    let chatroom_gateway = match ChatroomGateway::new(
-        Arc::clone(&auth_session),
-        edu_client.base_url().to_string(),
-        Arc::new(TungsteniteConnector::default()),
-        chatroom_bridge,
-        chatroom_device_id,
-        chatroom_protocol_options,
-    ) {
-        Ok(gateway) => gateway,
-        Err(error) => {
-            eprintln!("[HTTP API] 聊天室网关初始化失败: {}", error.message);
-            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
-        }
-    };
-    chatroom_gateway
-        .attach_execution_runtime(workers.chatroom_execution_registry(), Arc::clone(&workers));
-    bridge_auth_storage.set_chatroom_gateway(&chatroom_gateway);
     let auth_observer_storage = Arc::clone(&bridge_auth_storage);
     let auth_session_weak = Arc::downgrade(&auth_session);
     auth_session.set_auth_state_observer(Arc::new(move |_| {
@@ -4700,16 +4087,15 @@ fn main() {
             auth_state.user.as_ref(),
             auth_state.expires_at,
         );
-        auth_observer_storage.notify_chatroom_gateway(auth_state.authenticated);
     }));
-    let listener = match bind_and_start_chatroom_gateway(port, &chatroom_gateway) {
+
+    let listener = match TcpListener::bind((HOST, port)) {
         Ok(listener) => listener,
         Err(error) => {
             eprintln!("[HTTP API] 无法监听 {}:{}: {}", HOST, port, error);
-            startup_failed_and_exit(&chatroom_gateway_lifecycle, 1);
+            process::exit(1);
         }
     };
-    let _chatroom_shutdown = ChatroomGatewayShutdownGuard(Arc::clone(&chatroom_gateway));
     eprintln!("[HTTP API] Rust 服务监听 http://{}:{}", HOST, port);
     let active_connections = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
@@ -4733,7 +4119,6 @@ fn main() {
                 let connection_workspace_skills = Arc::clone(&workspace_skills_store);
                 let connection_automation = Arc::clone(&automation_store);
                 let connection_automation_scheduler = Arc::clone(&automation_scheduler);
-                let connection_chatroom_gateway = Arc::clone(&chatroom_gateway);
                 let connection_active = Arc::clone(&active_connections);
                 thread::spawn(move || {
                     let _guard = ConnectionCountGuard(connection_active);
@@ -4752,7 +4137,6 @@ fn main() {
                         connection_workspace_skills,
                         connection_automation,
                         connection_automation_scheduler,
-                        Some(connection_chatroom_gateway),
                     )
                 });
             }
@@ -4761,7 +4145,6 @@ fn main() {
             }
         }
     }
-    chatroom_gateway.shutdown();
 }
 
 #[cfg(test)]
@@ -4771,19 +4154,6 @@ mod tests;
 #[cfg(test)]
 #[path = "auth_session_tests.rs"]
 mod auth_session_tests;
-
-#[cfg(test)]
-#[path = "chatroom_protocol_tests.rs"]
-mod chatroom_protocol_tests;
-
-#[cfg(test)]
-#[path = "chatroom_client_tests.rs"]
-mod chatroom_client_tests;
-#[cfg(test)]
-mod chatroom_execution_tests;
-
-#[cfg(test)]
-mod chatroom_gateway_tests;
 
 #[cfg(test)]
 #[path = "automation_test.rs"]

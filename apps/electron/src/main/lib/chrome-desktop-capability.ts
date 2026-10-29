@@ -21,7 +21,6 @@ export interface IssueChromeDesktopCapabilityOptions {
   sessionId: string
   platform?: string
   triggeredBy?: string
-  isChatroomRun?: boolean
   isAutomationRun?: boolean
   isDelegationRun?: boolean
   isRemoteBotRun?: boolean
@@ -40,7 +39,6 @@ export function isEligibleForChromeDesktopControl(
   const currentPlatform = options.platform ?? process.platform
   if (currentPlatform !== 'darwin') return false
   if (options.triggeredBy !== undefined && options.triggeredBy !== 'user') return false
-  if (options.isChatroomRun === true) return false
   if (options.isAutomationRun === true) return false
   if (options.isDelegationRun === true) return false
   if (options.isRemoteBotRun === true) return false

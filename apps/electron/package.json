@@ -60,7 +60,6 @@
     "@pierre/diffs": "^1.1.20",
     "@xmldom/xmldom": "^0.8.11",
     "adm-zip": "^0.5.17",
-    "cos-nodejs-sdk-v5": "3.0.0",
     "dompurify": "^3.4.5",
     "iconv-lite": "^0.6.3",
     "mammoth": "^1.12.0",
@@ -178,7 +177,7 @@
   },
   "copis": {
     "platformVersions": {
-      "darwin-arm64": "0.0.98",
+      "darwin-arm64": "0.0.100",
       "darwin-x64": "0.0.82",
       "win32-x64": "0.0.95",
       "linux-x64": "0.0.82"

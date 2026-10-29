@@ -4,6 +4,10 @@ import { join } from 'node:path'
 
 const source = readFileSync(join(import.meta.dir, 'client.tsx'), 'utf8')
 const preloadSource = readFileSync(join(import.meta.dir, '../../../src/preload/dsh-bridge-preload.ts'), 'utf8')
+const filesTabSource = readFileSync(join(import.meta.dir, 'inspector/FilesInspectorTab.tsx'), 'utf8')
+const sideChatTabSource = readFileSync(join(import.meta.dir, 'inspector/SideChatInspectorTab.tsx'), 'utf8')
+const teamTabSource = readFileSync(join(import.meta.dir, 'inspector/TeamInspectorTab.tsx'), 'utf8')
+const inspectorPanelSource = readFileSync(join(import.meta.dir, 'inspector/CopisInspectorPanel.tsx'), 'utf8')
 
 test('Given macOS 创造模式侧栏 When 检查内置插件菜单 Then 功能入口文案和顺序与参考界面一致', () => {
   const labels = ['搜索', '日程表', '定时任务', '记忆', '知识库', '专家团队', '群聊协作', '技能市场', '我的投资']
@@ -89,47 +93,66 @@ test('Given 创造模式中部对话区右上角 When 插件加载 Then 右上�
   expect(preloadSource).toContain('button[class*="sessionLogButton"]')
   expect(preloadSource).toContain('button[title*="返回 Agent 模式"]')
 
-  // 3. 具备工作区文件展开/折叠按钮（与 Agent 模式对齐，单个 icon 图标控制，无多余文字标签）
+  // 3. 具备工作区文件展开/折叠按钮（与 Agent 模式对齐，单个 icon 图标控制，统一唤起宽幅多页签抽屉）
   expect(source).toContain('handleToggleWorkspaceDetails')
-  expect(source).toContain('props.ctx.layout?.openDetails()')
+  expect(source).toContain('COPIS_TOGGLE_WORKSPACE_DRAWER')
   expect(source).toContain('props.ctx.layout?.closeDetails()')
   expect(source).toContain('PanelRight')
   expect(source).toContain('PanelRightClose')
   expect(source).not.toContain('<span>工作区</span>')
 })
 
-test('Given 创造模式右侧详情区 When 插件加载 Then 不重复注入 details 插槽避免冲突且具备独立面板能力', () => {
-  // 1. 不重复注册 details 插槽，交由官方 Chat DetailsPanel 承载，避免 single slot priority 冲突
+test('Given 创造模式右侧详情区 When 插件加载 Then 具备多页签 Inspector 系统且文件面板支持异步浏览与高亮预览', () => {
+  // 1. 不重复注册 details 插槽避免 single slot priority 冲突，导出并兼容 CopisInspectorPanel / CopisDetailsPanel
   expect(source).not.toContain("ctx.slots.inject('details'")
   expect(source).toContain('CopisDetailsPanel')
+  expect(source).toContain('CopisInspectorPanel')
 
-  // 2. 具备工作区根目录读取与子目录按需异步加载
-  expect(source).toContain('listDirectory(undefined, sessionCwd)')
-  expect(source).toContain('listDirectory(folderPath, sessionCwd)')
-  expect(source).toContain('toggleFolder')
-  expect(source).toContain('handleRefresh')
+  // 2. FilesInspectorTab 具备工作区根目录读取与子目录按需异步加载
+  expect(filesTabSource).toContain('listDirectory(undefined, sessionCwd)')
+  expect(filesTabSource).toContain('listDirectory(folderPath, sessionCwd)')
+  expect(filesTabSource).toContain('toggleFolder')
+  expect(filesTabSource).toContain('handleRefresh')
 
-  // 3. 具备搜索过滤功能
-  expect(source).toContain('filterText')
-  expect(source).toContain('filteredFiles')
+  // 3. 具备文件名搜索过滤功能
+  expect(filesTabSource).toContain('filterText')
+  expect(filesTabSource).toContain('filteredFiles')
 
-  // 4. 具备文件原地预览（文本/代码高亮与图片渲染）及系统定位
-  expect(source).toContain('openPreview')
-  expect(source).toContain('readFile(file.path, sessionCwd)')
-  expect(source).toContain('handleLocateFile')
-  expect(source).toContain('showItemInFolder(filePath, sessionCwd)')
-  expect(source).toContain('handleCopyContent')
-  expect(source).toContain('previewState.isImage')
+  // 4. 具备文件原地预览（代码高亮与图片渲染）、复制内容及系统定位
+  expect(filesTabSource).toContain('openPreview')
+  expect(filesTabSource).toContain('readFile(file.path, sessionCwd)')
+  expect(filesTabSource).toContain('handleLocateFile')
+  expect(filesTabSource).toContain('showItemInFolder(filePath, sessionCwd)')
+  expect(filesTabSource).toContain('handleCopyContent')
+  expect(filesTabSource).toContain('previewState.isImage')
 })
 
-test('Given 创造模式全局根层 When 插件加载 Then 注入 shell.overlay 承载欢迎页常驻操作栏与全局工作区文件抽屉', () => {
+test('Given 创造模式全局根层 When 插件加载 Then 侧边栏为推入式抽屉并列排布且严禁渲染遮罩覆盖聊天区', () => {
+  // 1. 在 shell.overlay 注入常驻操作栏与推入式抽屉管理器
   expect(source).toContain("ctx.slots.inject('shell.overlay'")
   expect(source).toContain("name: 'shell.overlay'")
   expect(source).toContain('CopisShellOverlayManager')
   expect(source).toContain('copis-hero-utilities-overlay')
   expect(source).toContain('copis-details-drawer-root')
-  expect(source).toContain('copis-details-drawer-backdrop')
   expect(source).toContain('COPIS_TOGGLE_WORKSPACE_DRAWER')
+
+  // 2. 彻底移除全屏遮罩，严禁覆盖聊天区导致无法交互
+  expect(source).not.toContain('copis-details-drawer-backdrop')
+
+  // 3. 抽屉展开时，中部聊天区通过 margin-right 响应推入并列布局
+  expect(source).toContain('body.copis-details-drawer-open [class*="_centerCol"]')
+  expect(source).toContain('margin-right: var(--copis-inspector-width')
+  expect(source).toContain('transition: margin-right')
+
+  // 4. 具备左边缘拖拽调整宽度手柄与尺寸记忆
+  expect(source).toContain('copis-inspector-resize-handle')
+  expect(source).toContain('handleResizeStart')
+  expect(source).toContain('copis-inspector-resizing')
+
+  // 5. 抽屉背景色为纯正灰色（深色 #18181b / 浅色 #f4f4f5），严禁在抽屉背景上混入紫色
+  expect(source).toContain('.copis-details-drawer-root')
+  expect(source).toContain('background: #18181b;')
+  expect(source).toContain('body:not([data-ds-dark-theme]) .copis-details-drawer-root {\n    background: #f4f4f5;')
 })
 
 test('Given 创造模式激活子功能视图 When 渲染左侧导航与计算展开状态 Then 保持宽态菜单且调用 toggleSidebar 展开 DSH 侧边栏', () => {
@@ -246,4 +269,135 @@ test('Given 创造模式内建搜索浮层 When 检查组件与样式契约 Then
   expect(source).toContain("e.key === 'ArrowDown'")
   expect(source).toContain("e.key === 'ArrowUp'")
 })
+
+test('Given 创造模式 Composer 输入框胶囊 When 检查视觉契约 Then 采用紫色半透明毛玻璃背景配合微光边框与辉光阴影', () => {
+  // 1. client.tsx 源码契约：覆盖 uV2eYG_card 与 composer 卡片，呈现背景更深、紫色更淡的毛玻璃质感
+  expect(source).toContain('[class*="uV2eYG_card"]')
+  expect(source).toContain('color-mix(in srgb, var(--creation-ui-primary')
+  expect(source).toContain('backdrop-filter: blur(')
+  expect(source).toContain('box-shadow:')
+
+  // 2. preload 脚本契约：保持初始化即注入相同毛玻璃质感，避免闪烁
+  expect(preloadSource).toContain('[class*="uV2eYG_card"]')
+  expect(preloadSource).toContain('color-mix(in srgb, var(--creation-ui-primary')
+  expect(preloadSource).toContain('backdrop-filter: blur(')
+})
+
+test('Given 创造模式侧栏菜单项 When 检查专家团队与群聊协作 Then 不包含 BETA 与 灵活 tag 徽标', () => {
+  expect(source).toContain("id: 'expert-team', label: '专家团队', icon: UsersRound, view: 'expert-team'")
+  expect(source).toContain("id: 'group-chat', label: '群聊协作', icon: UsersRound, view: 'group-chat'")
+  expect(source).not.toContain("badge: 'BETA'")
+  expect(source).not.toContain("badge: '灵活'")
+})
+
+test('Given 创造模式 Composer 内部按钮（如上下文用量圆环） When 执行 isSettingsTarget 判定 Then 严禁误判为设置入口', () => {
+  // 1. client 源码契约：排除 composer 与 对话区按钮，限制必须在侧栏容器内
+  expect(source).toContain('[class*="composer"]')
+  expect(source).toContain('[class*="_centerCol"]')
+  expect(source).toContain('inSidebar')
+
+  // 2. preload 脚本契约：同步排除 composer 与 对话区按钮，限制必须在侧栏容器内
+  expect(preloadSource).toContain('[class*="composer"]')
+  expect(preloadSource).toContain('[class*="_centerCol"]')
+  expect(preloadSource).toContain('inSidebar')
+})
+
+test('Given 创造模式 Composer 圆环与视口 When 悬浮弹出 Tooltip Then 包含横向滚动条抑制与 Tooltip 边界定位保护', () => {
+  // 1. client.tsx 源码契约：overflow-x clip 与 webkit-scrollbar:horizontal 隐藏
+  expect(source).toContain('overflow-x: clip !important;')
+  expect(source).toContain('::-webkit-scrollbar:horizontal')
+  expect(source).toContain('[class*="JObwrW_root"]')
+
+  // 2. preload 脚本契约：保持初始化即注入横向滚动条抑制规则
+  expect(preloadSource).toContain('overflow-x: clip !important;')
+  expect(preloadSource).toContain('::-webkit-scrollbar:horizontal')
+  expect(preloadSource).toContain('[class*="JObwrW_root"]')
+})
+
+test('Given 创造模式 Inspector 多页签系统 When 检查顶栏交互 Then 支持文件、侧边聊天、团队多页签切换且支持加号下拉菜单添加与关闭页签', () => {
+  // 1. 具备默认三大页签配置
+  expect(inspectorPanelSource).toContain("kind: 'files'")
+  expect(inspectorPanelSource).toContain("label: '工作区文件'")
+  expect(inspectorPanelSource).toContain("kind: 'side-chat'")
+  expect(inspectorPanelSource).toContain("label: '侧边聊天'")
+  expect(inspectorPanelSource).toContain("kind: 'team'")
+  expect(inspectorPanelSource).toContain("label: '智能体团队'")
+
+  // 2. 具备 Tab 切换、激活态与关闭逻辑
+  expect(inspectorPanelSource).toContain('setActiveTabId')
+  expect(inspectorPanelSource).toContain('handleCloseTab')
+
+  // 3. 具备加号下拉菜单新建或重新打开页签
+  expect(inspectorPanelSource).toContain('copis-inspector-add-dropdown')
+  expect(inspectorPanelSource).toContain('handleAddTab')
+  expect(inspectorPanelSource).toContain('新建侧边聊天')
+
+  // 4. 具备工作区抽屉容器类名
+  expect(source).toContain('copis-inspector-root')
+  expect(source).toContain('copis-inspector-tabbar')
+
+  // 5. 侧栏上方 Tab 激活时，Icon 使用紫色高亮
+  expect(inspectorPanelSource).toContain("activePurple = '#a855f7'")
+  expect(inspectorPanelSource).toContain('isActive ? activePurple :')
+  expect(source).toContain('.copis-inspector-tab-item[data-active="true"] .copis-inspector-tab-icon')
+  expect(source).toContain('color: #a855f7 !important;')
+})
+
+test('Given 创造模式侧边聊天 (Side Chat) 检查器 When 检查轻量问答能力 Then 包含上下文对话流、预设推荐快捷提问与首条消息自动更新页签标题', () => {
+  // 1. 具备消息流与发送能力
+  expect(sideChatTabSource).toContain('handleSend')
+  expect(sideChatTabSource).toContain('copis-inspector-sidechat-messages')
+  expect(sideChatTabSource).toContain('copis-sidechat-bubble')
+
+  // 2. 首条消息动态更新 Tab 标题
+  expect(sideChatTabSource).toContain('onTitleChange')
+
+  // 3. 具备预设快捷推荐 Chips
+  expect(sideChatTabSource).toContain('PRESET_PROMPTS')
+  expect(sideChatTabSource).toContain('copis-sidechat-preset-chips')
+
+  // 4. 具备清空历史会话能力
+  expect(sideChatTabSource).toContain('handleClear')
+})
+
+test('Given 创造模式智能体团队 (Team) 检查器 When 检查协同与任务编排 Then 展示成员状态、任务依赖状态与历史会话回溯', () => {
+  // 1. 团队成员列表与状态指示
+  expect(teamTabSource).toContain('copis-team-member-item')
+  expect(teamTabSource).toContain('copis-team-status-chip')
+  expect(teamTabSource).toContain('协同成员')
+  expect(teamTabSource).toContain('创造模式主智能体')
+
+  // 2. 任务编排看板与依赖展示
+  expect(teamTabSource).toContain('copis-team-task-item')
+  expect(teamTabSource).toContain('任务编排')
+  expect(teamTabSource).toContain('blockedBy')
+  expect(teamTabSource).toContain('writeScopes')
+
+  // 3. 历史子智能体会话回溯视图与返回
+  expect(teamTabSource).toContain('copis-inspector-subagent-view')
+  expect(teamTabSource).toContain('返回团队看板')
+  expect(teamTabSource).toContain('copis-team-subagent-log-box')
+})
+
+test('Given 创造模式工作区文件检查器 When 解析当前会话与工作区 CWD Then 包含响应式订阅、多源 fallback 与零短路加载', () => {
+  // 1. client.tsx 声明注入 workspaces 服务，并声明 getActiveWorkspacePath bridge 接口
+  expect(source).toContain("export const inject = ['slots', 'layout', 'sessions', 'workspaces']")
+  expect(source).toContain('getActiveWorkspacePath?: (cwd?: string) => Promise<string>')
+  expect(preloadSource).toContain('getActiveWorkspacePath: (cwd?: string) => {')
+
+  // 2. CopisInspectorPanel 实现 resolveInspectorSessionCwd 并覆盖 items 与 workspaces 多源 fallback
+  expect(inspectorPanelSource).toContain('resolveInspectorSessionCwd')
+  expect(inspectorPanelSource).toContain('listSnapshot?.items')
+  expect(inspectorPanelSource).toContain('ctx?.workspaces?.getSnapshot')
+  expect(inspectorPanelSource).toContain('props.ctx?.sessions?.list?.subscribe')
+  expect(inspectorPanelSource).toContain('props.ctx?.workspaces?.subscribe')
+  expect(inspectorPanelSource).toContain('window.copisBridge?.getActiveWorkspacePath')
+
+  // 3. FilesInspectorTab 彻底移除 if (!sessionCwd) return 致命短路，确保初次挂载时立即调用目录扫描
+  expect(filesTabSource).not.toContain('if (!sessionCwd) return')
+  expect(filesTabSource).toContain('.listDirectory(undefined, sessionCwd)')
+  expect(filesTabSource).toContain('重新扫描')
+})
+
+
 

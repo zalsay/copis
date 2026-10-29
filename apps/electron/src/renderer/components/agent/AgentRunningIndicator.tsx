@@ -2,7 +2,7 @@ import * as React from 'react'
 import { Spinner } from '@/components/ui/spinner'
 import './AgentView.css'
 
-/** Agent 和聊天室共用的运行指示器：方块动效、文字扫光及运行时间。 */
+/** Agent 运行指示器：方块动效、文字扫光及运行时间。 */
 export function AgentRunningIndicator({ startedAt, label = '正在思考' }: { startedAt?: number; label?: string }): React.ReactElement {
   const [fallbackStart] = React.useState(() => Date.now())
   const start = startedAt ?? fallbackStart

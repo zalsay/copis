@@ -38,7 +38,7 @@ export function CopisModeSwitcher({
               className={cn(
                 'copis-working-sidebar-icon-button relative transition-all duration-200',
                 isCreation
-                  ? 'bg-[var(--creation-ui-primary-background)] text-[var(--creation-ui-primary)] hover:opacity-90'
+                  ? 'bg-card text-foreground shadow-sm border border-border/60 hover:bg-accent/60'
                   : 'text-[var(--ui-primary)] hover:bg-muted/40',
                 className,
               )}
@@ -46,14 +46,14 @@ export function CopisModeSwitcher({
               onClick={() => handleSwitchMode(isCreation ? 'agent' : 'creation')}
             >
               {isCreation ? (
-                <Lightbulb className="w-4 h-4 text-[var(--creation-ui-primary)]" aria-hidden="true" />
+                <Lightbulb className="w-4 h-4 text-foreground/90" aria-hidden="true" />
               ) : (
                 <CopisLogoIcon className="w-4 h-4 text-[var(--ui-primary)]" />
               )}
               <span
                 className={cn(
                   'absolute bottom-1 right-1 w-1.5 h-1.5 rounded-full',
-                  isCreation ? 'bg-[var(--creation-ui-primary)]' : 'bg-[var(--ui-primary)]',
+                  isCreation ? 'bg-foreground/70' : 'bg-[var(--ui-primary)]',
                 )}
               />
             </button>
@@ -103,12 +103,18 @@ export function CopisModeSwitcher({
           className={cn(
             'flex-1 min-w-0 flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-lg text-xs font-medium transition-all duration-150 whitespace-nowrap',
             currentMode === 'creation'
-              ? 'bg-card text-[var(--creation-ui-primary)] shadow-sm font-semibold border border-border/40'
+              ? 'bg-card text-foreground shadow-sm font-semibold border border-border/60'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
           )}
           onClick={() => handleSwitchMode('creation')}
         >
-          <Lightbulb className="w-3.5 h-3.5 text-[var(--creation-ui-primary)] shrink-0" aria-hidden="true" />
+          <Lightbulb
+            className={cn(
+              'w-3.5 h-3.5 shrink-0 transition-colors',
+              currentMode === 'creation' ? 'text-foreground/90' : 'text-muted-foreground',
+            )}
+            aria-hidden="true"
+          />
           <span className="whitespace-nowrap truncate">创造模式</span>
         </button>
       </div>

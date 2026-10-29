@@ -231,6 +231,9 @@ const copisBridge = {
   listDirectory: (dirPath?: string, cwd?: string) => {
     return ipcRenderer.invoke(DSH_CORDIS_IPC_CHANNELS.LIST_DIRECTORY, dirPath, cwd)
   },
+  getActiveWorkspacePath: (cwd?: string) => {
+    return ipcRenderer.invoke(DSH_CORDIS_IPC_CHANNELS.GET_ACTIVE_WORKSPACE_PATH, cwd)
+  },
   hideMenuItem: (menuId: string) => {
     void hideDshMenuItem(menuId)
   },
@@ -452,6 +455,32 @@ function injectCopisThemeAccent(): void {
       display: inline-flex !important;
       align-items: center !important;
       justify-content: center !important;
+      border: 1px solid var(--dsw-alias-border-l3, rgba(255, 255, 255, 0.08)) !important;
+      background: var(--dsw-alias-button-elevated-fill, rgba(255, 255, 255, 0.04)) !important;
+      color: var(--dsw-alias-label-secondary, #94a3b8) !important;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04) !important;
+      backdrop-filter: blur(8px) !important;
+      transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+    }
+    .copis-header-btn-workspace:hover {
+      background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.08)) !important;
+      color: var(--dsw-alias-label-primary, #ffffff) !important;
+      border-color: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.16)) !important;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08) !important;
+    }
+    .copis-header-btn-workspace:active {
+      transform: scale(0.95) !important;
+    }
+    .copis-header-btn-workspace[data-active="true"] {
+      background: rgba(255, 255, 255, 0.12) !important;
+      border: 1px solid rgba(255, 255, 255, 0.16) !important;
+      color: #ffffff !important;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+    }
+    .copis-header-btn-workspace[data-active="true"]:hover {
+      background: rgba(255, 255, 255, 0.16) !important;
+      border-color: rgba(255, 255, 255, 0.24) !important;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
     }
     /* 创造模式会话列表行圆角与字号对齐 Agent 模式 */
     .YDXeBa_sessionRow,
@@ -517,21 +546,142 @@ function injectCopisThemeAccent(): void {
       color: var(--creation-ui-primary) !important;
     }
 
-    /* 会话与项目行选中激活态：使用 creation-ui-primary 体系 */
+    /* 会话与项目行选中激活态：使用 WorkBuddy 浅灰/曜石微高光体系，彻底消除紫色 */
     .YDXeBa_sessionRow.YDXeBa_selected,
     .YDXeBa_searchResultRow.YDXeBa_selected,
     .YDXeBa_projectRow.active,
     [class*="sessionRow"][class*="selected"],
     [class*="searchResultRow"][class*="selected"],
-    [class*="projectRow"][class*="active"] {
-      background: var(--creation-ui-primary-background) !important;
-      color: var(--creation-ui-primary) !important;
-      font-weight: 600 !important;
+    [class*="projectRow"][class*="active"],
+    [class*="sessionRow"][data-selected="true"],
+    [class*="SessionRow"][data-selected="true"] {
+      background: rgba(255, 255, 255, 0.1) !important;
+      color: #ffffff !important;
+      font-weight: 500 !important;
+    }
+    .YDXeBa_sessionRow.YDXeBa_selected *,
+    [class*="sessionRow"][class*="selected"] * {
+      color: #ffffff !important;
+    }
+    .YDXeBa_sessionRow.YDXeBa_selected [class*="date"],
+    .YDXeBa_sessionRow.YDXeBa_selected [class*="time"],
+    [class*="sessionRow"][class*="selected"] [class*="date"],
+    [class*="sessionRow"][class*="selected"] [class*="time"],
+    [class*="sessionRow"][class*="selected"] span:last-child {
+      color: #a1a1aa !important;
     }
     [class*="sessionRow"][class*="selected"] svg,
     [class*="searchResultRow"][class*="selected"] svg,
     [class*="projectRow"][class*="active"] svg {
-      color: var(--creation-ui-primary) !important;
+      color: #d4d4d8 !important;
+    }
+    .YDXeBa_projectRow svg,
+    [class*="projectRow"] svg,
+    [class*="workspaceRow"] svg {
+      color: #a1a1aa !important;
+    }
+
+    /* 顶部 Tab 导航（对话 / 轨迹）：WorkBuddy 纯白文字与白色指示条 */
+    .wSkVaW_tab,
+    [class*="wSkVaW_tab"],
+    [class*="_tab"][role="tab"] {
+      color: #94a3b8 !important;
+      font-weight: 500 !important;
+    }
+    .wSkVaW_tab:hover,
+    [class*="wSkVaW_tab"]:hover,
+    [class*="_tab"][role="tab"]:hover {
+      color: #cbd5e1 !important;
+    }
+    .wSkVaW_tabActive,
+    [class*="wSkVaW_tabActive"],
+    [class*="_tabActive"],
+    button[role="tab"][aria-selected="true"],
+    [class*="tab"][class*="active"],
+    [class*="tab"][data-active="true"] {
+      color: #ffffff !important;
+      font-weight: 600 !important;
+    }
+    .wSkVaW_tabActive:after,
+    [class*="wSkVaW_tabActive"]:after,
+    [class*="_tabActive"]:after,
+    button[role="tab"][aria-selected="true"]:after,
+    [class*="tab"][class*="active"]:after,
+    [class*="tab"][data-active="true"]:after {
+      background: #ffffff !important;
+      height: 2px !important;
+      border-radius: 1px !important;
+    }
+
+    /* 优雅紫色半透明毛玻璃 Composer 输入胶囊卡片（背景更深，紫色更淡内敛） */
+    [class*="uV2eYG_card"],
+    [class*="_card"][class*="composer"] {
+      border-radius: 20px !important;
+      background: color-mix(in srgb, var(--creation-ui-primary, #a855f7) 7%, rgba(16, 17, 24, 0.90)) !important;
+      -webkit-backdrop-filter: blur(24px) !important;
+      backdrop-filter: blur(24px) !important;
+      border: 1px solid color-mix(in srgb, var(--creation-ui-primary, #a855f7) 12%, rgba(255, 255, 255, 0.08)) !important;
+      box-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.6), 0 0 20px -4px color-mix(in srgb, var(--creation-ui-primary, #a855f7) 8%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+      margin-bottom: 16px !important;
+      padding-top: 10px !important;
+    }
+
+    body:not([data-ds-dark-theme]) [class*="uV2eYG_card"],
+    body:not([data-ds-dark-theme]) [class*="_card"][class*="composer"] {
+      background: color-mix(in srgb, var(--creation-ui-primary, #6c00cc) 4%, rgba(255, 255, 255, 0.88)) !important;
+      border: 1px solid color-mix(in srgb, var(--creation-ui-primary, #6c00cc) 10%, rgba(0, 0, 0, 0.08)) !important;
+      box-shadow: 0 16px 36px -8px rgba(0, 0, 0, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;
+    }
+
+    /* 页面视口与对话容器：彻底消除横向多余滚动条与 hover 闪烁 */
+    html,
+    body,
+    [class*="_centerCol"],
+    [class*="centerCol"],
+    [class*="_frame"],
+    [class*="frame"],
+    [data-view="conversation"],
+    main,
+    [class*="uV2eYG_root"] {
+      overflow-x: clip !important;
+      max-width: 100% !important;
+    }
+
+    /* 强制屏蔽页面与卡片底部的横向多余滚动条 */
+    html::-webkit-scrollbar:horizontal,
+    body::-webkit-scrollbar:horizontal,
+    [class*="_centerCol"]::-webkit-scrollbar:horizontal,
+    [class*="centerCol"]::-webkit-scrollbar:horizontal,
+    [class*="uV2eYG_root"]::-webkit-scrollbar:horizontal,
+    [class*="uV2eYG_card"]::-webkit-scrollbar:horizontal,
+    [class*="uV2eYG_row"]::-webkit-scrollbar:horizontal {
+      display: none !important;
+      height: 0 !important;
+      width: 0 !important;
+    }
+
+    /* 上下文用量圆环（ContextMeter）与底部工具按钮悬浮 Tooltip 定位边界防溢出保护 */
+    [class*="JObwrW_root"] {
+      overflow: visible !important;
+    }
+
+    [class*="JObwrW_root"] [role="tooltip"],
+    [class*="JObwrW_root"] [class*="tooltip"],
+    [class*="JObwrW_root"] [class*="Tooltip"] {
+      right: 0 !important;
+      left: auto !important;
+      max-width: 240px !important;
+      white-space: nowrap !important;
+      pointer-events: none !important;
+    }
+
+    /* 全局 Tooltip 浮层尺寸保护：避免绝对定位或动画帧撑大视口底部 */
+    [role="tooltip"],
+    [class*="tooltip"],
+    [class*="Tooltip"] {
+      max-width: calc(100vw - 32px) !important;
+      word-break: break-word !important;
+      pointer-events: none !important;
     }
 
     /* 创造模式会话列表项：背景色与条目留出左侧间距，形成优雅层级对齐 */
@@ -1090,17 +1240,40 @@ function isDshSettingsTarget(target: HTMLElement | null): boolean {
   if (!target) return false
   const btn = target.closest('button')
   if (!btn) return false
+
+  // 1. 严格排除：Composer 内部、中间对话区、详情抽屉或消息流内部的任何按钮（如上下文用量圆环、模型选择、发送等），严禁误触发系统设置
+  if (
+    btn.closest(
+      '[class*="composer"], [class*="Composer"], [class*="uV2eYG"], [class*="_centerCol"], [class*="centerCol"], [class*="chatArea"], [class*="messageList"], [class*="sessionView"], [class*="_detailsCol"]',
+    )
+  ) {
+    return false
+  }
+
+  // 2. 限制作用域：系统设置按钮必须严格属于侧边栏容器（aside, SidebarRoot, footArea, settingsArea）
+  const inSidebar = Boolean(
+    btn.closest(
+      'aside, [class*="SidebarRoot"], [class*="sidebar"], [class*="_sidebarCol"], [class*="footArea"], [class*="FootArea"], [class*="settingsArea"], [class*="SettingsArea"], .copis-creation-sidebar',
+    ),
+  )
+  if (!inSidebar) {
+    return false
+  }
+
+  // 3. 在侧边栏内，精确匹配设置入口：
+  // 3.1 DSH settingsArea / triggerRow 容器内的设置按钮
   if (btn.closest('[class*="settingsArea"], [class*="SettingsArea"]')) return true
   if (btn.closest('[class*="triggerRow"], [class*="TriggerRow"]') && btn.getAttribute('aria-haspopup') === 'dialog') return true
   if (btn.matches('button[class*="trigger"][aria-haspopup="dialog"], button[class*="Trigger"][aria-haspopup="dialog"]')) return true
+
+  // 3.2 侧边栏内 aria-label 或 title 包含设置/setting
   const aria = (btn.getAttribute('aria-label') || btn.getAttribute('title') || '').toLowerCase()
   if (aria.includes('设置') || aria.includes('setting')) return true
+
+  // 3.3 侧边栏内文本包含设置/setting
   const text = (btn.textContent || '').trim().toLowerCase()
-  if (text.includes('设置') || text.includes('setting')) {
-    if (btn.closest('[class*="footArea"], [class*="FootArea"], [class*="SidebarRoot"], [class*="_root"], aside')) {
-      return true
-    }
-  }
+  if (text.includes('设置') || text.includes('setting')) return true
+
   return false
 }
 

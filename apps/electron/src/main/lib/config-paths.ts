@@ -416,90 +416,9 @@ export function getAgentWorkspacesDir(): string {
   return dir
 }
 
-const CHATROOM_COMPONENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
-
-function validateChatroomPathComponent(value: string, name: string): void {
-  if (!CHATROOM_COMPONENT_PATTERN.test(value)) {
-    throw new Error(`${name} 参数不正确`)
-  }
-}
-
-/** 获取聊天室本地存储根目录。 */
-export function getChatRoomsRootPath(): string {
-  const workspacesRoot = getAgentWorkspacesDir()
-  assertRealDirectory(workspacesRoot, 'Agent 工作区')
-  const dir = join(workspacesRoot, 'chatrooms')
-  try {
-    lstatSync(dir)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    mkdirSync(dir, { recursive: false })
-  }
-  assertRealDirectory(dir, '聊天室根')
-  assertRealDirectory(workspacesRoot, 'Agent 工作区')
-  return dir
-}
-
-function assertRealDirectory(path: string, label: string): void {
-  let stats
-  try {
-    stats = lstatSync(path)
-  } catch (error) {
-    throw new Error(`${label}路径不可用`, { cause: error })
-  }
-  if (!stats.isDirectory()) throw new Error(`${label}路径不是目录`)
-}
-
 /** 获取稳定客户端设备文件路径。 */
 export function getClientDevicePath(): string {
   return join(getConfigDir(), 'client-device.json')
-}
-
-/** 获取聊天室目录。 */
-export function getChatRoomPath(roomId: string): string {
-  validateChatroomPathComponent(roomId, 'roomId')
-  return join(getChatRoomsRootPath(), roomId)
-}
-
-/** 获取聊天室本地配置文件。 */
-export function getChatRoomConfigPath(roomId: string): string {
-  return join(getChatRoomPath(roomId), 'room.json')
-}
-
-/** 获取聊天室 Agent 根目录。 */
-export function getChatRoomAgentPath(roomId: string, roomAgentId: string): string {
-  validateChatroomPathComponent(roomAgentId, 'roomAgentId')
-  return join(getChatRoomPath(roomId), 'agents', roomAgentId)
-}
-
-/** 获取聊天室 Agent session 目录。 */
-export function getChatRoomAgentSessionDir(roomId: string, roomAgentId: string): string {
-  return join(getChatRoomAgentPath(roomId, roomAgentId), 'sessions')
-}
-
-/** 获取聊天室 Agent session 元数据路径。 */
-export function getChatRoomAgentSessionMetaPath(roomId: string, roomAgentId: string): string {
-  return join(getChatRoomAgentSessionDir(roomId, roomAgentId), 'meta.json')
-}
-
-/** 获取聊天室 Agent session 消息路径。 */
-export function getChatRoomAgentSessionMessagesPath(roomId: string, roomAgentId: string): string {
-  return join(getChatRoomAgentSessionDir(roomId, roomAgentId), 'messages.jsonl')
-}
-
-/** 获取聊天室 Agent 独立项目根目录。 */
-export function getChatRoomAgentProjectPath(roomId: string, roomAgentId: string): string {
-  return join(getChatRoomAgentPath(roomId, roomAgentId), 'workspace-files', 'project')
-}
-
-/** 获取聊天室 Agent 附件收件箱。 */
-export function getChatRoomAgentInboxPath(roomId: string, roomAgentId: string): string {
-  return join(getChatRoomAgentProjectPath(roomId, roomAgentId), 'inbox')
-}
-
-/** 获取聊天室 Agent 的只读 Skill 快照目录。 */
-export function getChatRoomAgentSkillsSnapshotPath(roomId: string, roomAgentId: string): string {
-  return join(getChatRoomAgentPath(roomId, roomAgentId), 'skills-snapshot')
 }
 
 /**

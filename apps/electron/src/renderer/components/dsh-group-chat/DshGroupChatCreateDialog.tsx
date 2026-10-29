@@ -28,11 +28,24 @@ import {
   AlertCircle,
   Loader2,
   FolderGit2,
+  Cpu,
+  Sparkles,
+  ChevronDown,
+  Layers,
 } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {
   dshCreateGroupDialogOpenAtom,
   dshGroupListAtom,
   dshActiveGroupIdAtom,
+  dshAvailableModelsAtom,
 } from '@/atoms/dsh-group-chat-atoms'
 import type { DshConversationKind, DshCreationWorkspace } from '@copis/shared'
 
@@ -49,10 +62,14 @@ export function DshGroupChatCreateDialog(): React.ReactElement {
   const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([])
   const [leaderId, setLeaderId] = useState<string>('')
   const [responsibilities, setResponsibilities] = useState<Record<string, string>>({})
+  const [availableModels, setAvailableModels] = useAtom(dshAvailableModelsAtom)
+  const [agentModels, setAgentModels] = useState<
+    Record<string, { channelId?: string; modelId: string; modelName?: string }>
+  >({})
   const [loading, setLoading] = useState(false)
   const [fetchingWorkspaces, setFetchingWorkspaces] = useState(false)
 
-  // 当弹窗打开时，主动从创造模式加载工作区智能体
+  // 当弹窗打开时，主动从创造模式加载工作区智能体与可用模型
   useEffect(() => {
     if (!open) return
     let mounted = true
@@ -72,10 +89,23 @@ export function DshGroupChatCreateDialog(): React.ReactElement {
     }
 
     void loadWorkspaces()
+
+    // 刷新可用模型
+    window.electronAPI.dshGroupChat
+      .getAvailableModels()
+      .then((models) => {
+        if (mounted && Array.isArray(models) && models.length > 0) {
+          setAvailableModels(models)
+        }
+      })
+      .catch((err) => {
+        console.error('[DshGroupChatCreateDialog] 加载模型列表失败:', err)
+      })
+
     return () => {
       mounted = false
     }
-  }, [open])
+  }, [open, setAvailableModels])
 
   // 当工作区列表加载就绪且尚未选择时，默认选中前两个工作区并设定第一个为 Leader
   useEffect(() => {
@@ -127,6 +157,9 @@ export function DshGroupChatCreateDialog(): React.ReactElement {
           isLeader: ws.id === leaderId,
           responsibility:
             responsibilities[ws.id] || `负责「${ws.name}」领域相关执行与交付`,
+          channelId: agentModels[ws.id]?.channelId,
+          modelId: agentModels[ws.id]?.modelId,
+          modelName: agentModels[ws.id]?.modelName,
         }))
 
       const newGroup = await window.electronAPI.dshGroupChat.createGroup({
@@ -165,7 +198,7 @@ export function DshGroupChatCreateDialog(): React.ReactElement {
       <DialogContent className="sm:max-w-[540px] max-h-[85vh] flex flex-col border border-border/60 shadow-2xl bg-card p-0 gap-0 overflow-hidden">
         <DialogHeader className="p-4 pb-3 border-b border-border/50">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary shrink-0">
+            <div className="w-8 h-8 rounded-lg bg-white/[0.08] border border-white/[0.08] flex items-center justify-center text-zinc-300 shrink-0">
               <UsersRound className="w-4 h-4" />
             </div>
             <div>
@@ -206,7 +239,7 @@ export function DshGroupChatCreateDialog(): React.ReactElement {
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
-                <Bot className="w-3.5 h-3.5 text-primary" />
+                <Bot className="w-3.5 h-3.5 text-zinc-300" />
                 <span>选择加入群组的创造模式工作区 Agent</span>
               </label>
               <span className="text-[11px] text-muted-foreground">
@@ -229,11 +262,11 @@ export function DshGroupChatCreateDialog(): React.ReactElement {
             <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
               {fetchingWorkspaces ? (
                 <div className="p-6 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                  <Loader2 className="w-4 h-4 animate-spin text-zinc-300" />
                   <span>正在获取创造模式本地工作区智能体...</span>
                 </div>
               ) : filteredWorkspaces.length === 0 ? (
-                <div className="p-6 text-center text-xs text-muted-foreground border border-dashed rounded-xl space-y-1.5">
+                <div className="p-6 text-center text-xs text-muted-foreground border border-dashed border-border/60 rounded-xl space-y-1.5">
                   <AlertCircle className="w-6 h-6 text-muted-foreground/60 mx-auto" />
                   <p className="font-medium text-foreground/80">未找到匹配的创造模式工作区</p>
                   <p className="text-[11px]">请在创造模式（DSH）中打开或创建项目目录，即可作为智能体加入协作</p>
@@ -249,7 +282,7 @@ export function DshGroupChatCreateDialog(): React.ReactElement {
                       onClick={() => handleToggleWorkspace(ws)}
                       className={`p-2.5 rounded-xl border text-xs cursor-pointer transition-all space-y-2 ${
                         isSelected
-                          ? 'border-primary/50 bg-primary/5 shadow-xs'
+                          ? 'border-white/[0.22] bg-white/[0.08] shadow-xs'
                           : 'border-border/60 hover:bg-muted/40 hover:border-border'
                       }`}
                     >
@@ -259,7 +292,7 @@ export function DshGroupChatCreateDialog(): React.ReactElement {
                           <div
                             className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 transition-colors ${
                               isSelected
-                                ? 'bg-primary text-primary-foreground'
+                                ? 'bg-white/[0.2] border border-white/[0.25] text-white'
                                 : 'bg-muted border border-border/80 text-muted-foreground'
                             }`}
                           >
@@ -274,7 +307,7 @@ export function DshGroupChatCreateDialog(): React.ReactElement {
                                 创造工作区
                               </span>
                               {isCurrentLeader && (
-                                <span className="px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-semibold flex items-center gap-0.5 shrink-0">
+                                <span className="px-1.5 py-0.2 rounded bg-white/[0.08] border border-white/[0.08] text-zinc-300 text-[10px] font-medium flex items-center gap-0.5 shrink-0">
                                   <Crown className="w-2.5 h-2.5" />
                                   Leader 协调者
                                 </span>
@@ -290,7 +323,9 @@ export function DshGroupChatCreateDialog(): React.ReactElement {
                           <Button
                             variant={isCurrentLeader ? 'secondary' : 'ghost'}
                             size="sm"
-                            className="h-6 px-2 text-[10px] shrink-0"
+                            className={`h-6 px-2 text-[10px] shrink-0 ${
+                              isCurrentLeader ? 'bg-white/[0.12] text-white border border-white/[0.1]' : ''
+                            }`}
                             onClick={(e) => {
                               e.stopPropagation()
                               setLeaderId(ws.id)
@@ -301,23 +336,117 @@ export function DshGroupChatCreateDialog(): React.ReactElement {
                         )}
                       </div>
 
-                      {/* 岗位职责编辑框（选中时展开） */}
+                      {/* 岗位职责编辑框与模型配置（选中时展开） */}
                       {isSelected && (
-                        <div className="pt-1.5 border-t border-border/40" onClick={(e) => e.stopPropagation()}>
-                          <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1">
-                            <span>群内岗位职责分工 (Responsibility)：</span>
+                        <div
+                          className="pt-1.5 border-t border-border/40 space-y-2"
+                          onClick={(e) => e.stopPropagation()}
+                          onPointerDown={(e) => e.stopPropagation()}
+                        >
+                          <div>
+                            <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1">
+                              <span>群内岗位职责分工 (Responsibility)：</span>
+                            </div>
+                            <Input
+                              value={responsibilities[ws.id] || ''}
+                              onChange={(e) =>
+                                setResponsibilities((prev) => ({
+                                  ...prev,
+                                  [ws.id]: e.target.value,
+                                }))
+                              }
+                              placeholder={`例如：负责「${ws.name}」领域的代码开发与业务方案分析`}
+                              className="h-6 text-[11px] bg-background/80"
+                            />
                           </div>
-                          <Input
-                            value={responsibilities[ws.id] || ''}
-                            onChange={(e) =>
-                              setResponsibilities((prev) => ({
-                                ...prev,
-                                [ws.id]: e.target.value,
-                              }))
-                            }
-                            placeholder={`例如：负责「${ws.name}」领域的代码开发与业务方案分析`}
-                            className="h-6 text-[11px] bg-background/80"
-                          />
+
+                          {/* 推理模型选择 */}
+                          <div className="flex items-center justify-between gap-2 pt-0.5">
+                            <span className="text-[10px] text-muted-foreground flex items-center gap-1 shrink-0">
+                              <Cpu className="w-3 h-3 text-muted-foreground/80" />
+                              执行模型:
+                            </span>
+
+                            <DropdownMenu modal={false}>
+                              <DropdownMenuTrigger asChild>
+                                <button
+                                  type="button"
+                                  onClick={(e) => e.stopPropagation()}
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  className="group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium border border-border/50 bg-background/80 hover:bg-muted/70 hover:border-border text-foreground transition-all shadow-2xs hover:shadow-xs max-w-[210px] truncate cursor-pointer"
+                                  title="为此工作区智能体分配初始执行模型"
+                                >
+                                  <div className="w-4 h-4 rounded-md bg-white/[0.08] flex items-center justify-center text-zinc-300 shrink-0 transition-colors group-hover:bg-white/[0.12]">
+                                    <Sparkles className="w-2.5 h-2.5" />
+                                  </div>
+                                  <span className="truncate">
+                                    {agentModels[ws.id]?.modelName || '默认模型 (DeepSeek Flash)'}
+                                  </span>
+                                  <ChevronDown className="w-3 h-3 text-muted-foreground/60 shrink-0 ml-auto transition-transform group-hover:translate-y-0.5" />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent
+                                align="end"
+                                className="w-56 max-h-[260px] overflow-y-auto z-[99999]"
+                                onCloseAutoFocus={(e) => e.preventDefault()}
+                              >
+                                {availableModels.length === 0 ? (
+                                  <div className="p-2 text-[11px] text-muted-foreground text-center">
+                                    暂无可用模型
+                                  </div>
+                                ) : (
+                                  availableModels.map((group, groupIdx) => (
+                                    <React.Fragment key={group.channelId || groupIdx}>
+                                      {groupIdx > 0 && <DropdownMenuSeparator />}
+                                      <DropdownMenuLabel className="text-[10px] text-muted-foreground uppercase tracking-wider px-2 py-1 flex items-center gap-1">
+                                        <Layers className="w-2.5 h-2.5" />
+                                        {group.channelName}
+                                      </DropdownMenuLabel>
+                                      {group.models.map((model) => {
+                                        const isModelSelected =
+                                          agentModels[ws.id]?.modelId === model.id ||
+                                          (!agentModels[ws.id]?.modelId && model.id === 'deepseek-v4-flash')
+
+                                        return (
+                                          <DropdownMenuItem
+                                            key={model.id}
+                                            onSelect={() =>
+                                              setAgentModels((prev) => ({
+                                                ...prev,
+                                                [ws.id]: {
+                                                  channelId: group.channelId,
+                                                  modelId: model.id,
+                                                  modelName: model.name,
+                                                },
+                                              }))
+                                            }
+                                            onClick={() =>
+                                              setAgentModels((prev) => ({
+                                                ...prev,
+                                                [ws.id]: {
+                                                  channelId: group.channelId,
+                                                  modelId: model.id,
+                                                  modelName: model.name,
+                                                },
+                                              }))
+                                            }
+                                            className="flex items-center justify-between text-xs py-1.5 px-2 cursor-pointer"
+                                          >
+                                            <span className={isModelSelected ? 'font-medium text-white' : ''}>
+                                              {model.name}
+                                            </span>
+                                            {isModelSelected && (
+                                              <Check className="w-3.5 h-3.5 text-zinc-200 ml-2 shrink-0" />
+                                            )}
+                                          </DropdownMenuItem>
+                                        )
+                                      })}
+                                    </React.Fragment>
+                                  ))
+                                )}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -336,6 +465,7 @@ export function DshGroupChatCreateDialog(): React.ReactElement {
             size="sm"
             onClick={handleCreate}
             disabled={!name.trim() || selectedAgentIds.length === 0 || loading}
+            className="bg-white/[0.15] hover:bg-white/[0.22] text-white border border-white/[0.1] shadow-sm cursor-pointer"
           >
             {loading ? '创建中...' : `创建协作群聊 (${selectedAgentIds.length} Agent)`}
           </Button>

@@ -101,7 +101,6 @@ struct WorkerControl {
     child: Arc<Mutex<Child>>,
     owner_token: u64,
     owner_id: Option<String>,
-    is_chatroom: bool,
     file_api_token: String,
     worker_capability_token: Option<String>,
     working_model_capability_token: Option<String>,
@@ -136,7 +135,6 @@ pub struct PiWorkerManager {
     file_policies: Arc<AgentFilePolicyStore>,
     payment_capabilities: Arc<PaymentCapabilityStore>,
     working_model_proxy: Mutex<Option<Arc<WorkingModelProxy>>>,
-    chatroom_execution: Arc<super::chatroom_execution::ChatroomExecutionRegistry>,
 }
 
 struct StartupReservations {
@@ -273,10 +271,6 @@ fn is_copis_working_channel_id(channel_id: &str) -> bool {
     channel_id.starts_with("copis-working")
 }
 
-pub fn is_supported_permission_mode_for_profile(mode: &str, profile: Option<&str>) -> bool {
-    is_supported_permission_mode(mode) || (mode == "default" && profile == Some("chatroom"))
-}
-
 impl PiWorkerManager {
     pub fn new() -> Self {
         Self {
@@ -289,16 +283,7 @@ impl PiWorkerManager {
             file_policies: Arc::new(AgentFilePolicyStore::new()),
             payment_capabilities: Arc::new(PaymentCapabilityStore::new()),
             working_model_proxy: Mutex::new(None),
-            chatroom_execution: Arc::new(
-                super::chatroom_execution::ChatroomExecutionRegistry::default(),
-            ),
         }
-    }
-
-    pub fn chatroom_execution_registry(
-        &self,
-    ) -> Arc<super::chatroom_execution::ChatroomExecutionRegistry> {
-        Arc::clone(&self.chatroom_execution)
     }
 
     pub fn file_policies(&self) -> Arc<AgentFilePolicyStore> {
@@ -369,23 +354,6 @@ impl PiWorkerManager {
                 owner_id: owner_id.clone(),
             })
         };
-        if let Some(owner) = owner_id.as_deref() {
-            if self.chatroom_execution.owner_is_revoked(session_id, owner) {
-                return Err("聊天室执行已撤销".to_string());
-            }
-            if let Some(binding) = self.chatroom_execution.binding_for_owner(session_id, owner) {
-                return self
-                    .chatroom_execution
-                    .with_live_binding(
-                        &binding.room_id,
-                        &binding.invocation_id,
-                        session_id,
-                        owner,
-                        reserve,
-                    )
-                    .unwrap_or_else(|| Err("聊天室执行已撤销".to_string()));
-            }
-        }
         reserve()
     }
 
@@ -409,13 +377,6 @@ impl PiWorkerManager {
             .by_session
             .get(&reservation.session_id)
             .is_some_and(|owner| owner.token == reservation.token)
-    }
-
-    pub fn revoke_chatroom_binding(
-        &self,
-        binding: &super::chatroom_execution::ChatroomExecutionBinding,
-    ) -> Result<bool, String> {
-        self.stop_owned(&binding.session_id, Some(&binding.worker_run_id))
     }
 
     #[cfg(test)]
@@ -675,16 +636,15 @@ impl PiWorkerManager {
         if !self.startup_is_current(reservation) {
             return Err("Pi worker startup 已取消".to_string());
         }
-        let (permission_mode, triggered_by, automation_enabled, is_chatroom, file_api_token) = {
+        let (permission_mode, triggered_by, automation_enabled, file_api_token) = {
             let query = config
                 .get_mut("query")
                 .and_then(Value::as_object_mut)
                 .ok_or_else(|| "Pi worker 配置缺少 query".to_string())?;
-            let capability_profile = query.get("capabilityProfile").and_then(Value::as_str);
             let permission_mode = query
                 .get("permissionMode")
                 .and_then(Value::as_str)
-                .filter(|mode| is_supported_permission_mode_for_profile(mode, capability_profile))
+                .filter(|mode| is_supported_permission_mode(mode))
                 .ok_or_else(|| "Pi worker 配置缺少有效 permissionMode".to_string())?
                 .to_string();
             let triggered_by = query
@@ -695,8 +655,6 @@ impl PiWorkerManager {
                 .to_string();
             let automation_enabled =
                 query.get("automationEnabled").and_then(Value::as_bool) != Some(false);
-            let is_chatroom =
-                query.get("capabilityProfile").and_then(Value::as_str) == Some("chatroom");
             let mut register_file_capability = || {
                 self.with_current_startup(reservation, |owner| {
                     let token = self.file_policies.register_from_query(session_id, query)?;
@@ -706,29 +664,11 @@ impl PiWorkerManager {
                     Ok(token)
                 })
             };
-            let file_api_token = if is_chatroom {
-                let binding = reservation
-                    .owner_id
-                    .as_deref()
-                    .and_then(|owner| self.chatroom_execution.binding_for_owner(session_id, owner))
-                    .ok_or_else(|| "聊天室运行缺少 Native execution binding".to_string())?;
-                self.chatroom_execution
-                    .with_live_binding(
-                        &binding.room_id,
-                        &binding.invocation_id,
-                        session_id,
-                        &binding.worker_run_id,
-                        register_file_capability,
-                    )
-                    .ok_or_else(|| "聊天室执行已撤销".to_string())??
-            } else {
-                register_file_capability()?
-            };
+            let file_api_token = register_file_capability()?;
             (
                 permission_mode,
                 triggered_by,
                 automation_enabled,
-                is_chatroom,
                 file_api_token,
             )
         };
@@ -942,7 +882,6 @@ impl PiWorkerManager {
             child: Arc::clone(&child),
             owner_token: reservation.token,
             owner_id: reservation.owner_id.clone(),
-            is_chatroom,
             file_api_token: file_api_token.clone(),
             worker_capability_token: worker_capability_token.clone(),
             working_model_capability_token: working_model_capability_token.clone(),
@@ -974,25 +913,7 @@ impl PiWorkerManager {
             startups.by_session.remove(session_id);
             Ok(())
         };
-        let activated = if is_chatroom {
-            let binding = reservation
-                .owner_id
-                .as_deref()
-                .and_then(|owner| self.chatroom_execution.binding_for_owner(session_id, owner))
-                .ok_or_else(|| "聊天室运行缺少 Native execution binding".to_string())?;
-            self.chatroom_execution
-                .with_live_binding(
-                    &binding.room_id,
-                    &binding.invocation_id,
-                    session_id,
-                    &binding.worker_run_id,
-                    activate_worker,
-                )
-                .unwrap_or_else(|| Err("聊天室执行已撤销".to_string()))
-        } else {
-            activate_worker()
-        };
-        if let Err(error) = activated {
+        if let Err(error) = activate_worker() {
             let _ = terminate_child(&child);
             return Err(error);
         }
@@ -1163,13 +1084,8 @@ impl PiWorkerManager {
             .cloned()
             .filter(|control| match owner_id {
                 Some(requested) => control.owner_id.as_deref() == Some(requested),
-                None => !control.is_chatroom,
+                None => true,
             });
-        if owner_id.is_some() || control.as_ref().is_some_and(|control| control.is_chatroom) {
-            if let Some(control) = control.as_ref() {
-                self.cleanup_control_capabilities(control);
-            }
-        }
         drop(startups);
         let Some(control) = control else {
             return Ok(pending_matches);
@@ -1187,9 +1103,7 @@ impl PiWorkerManager {
             }
             return Ok(true);
         }
-        if owner_id.is_none() {
-            self.cleanup_control_capabilities(&control);
-        }
+        self.cleanup_control_capabilities(&control);
         terminate_child(&control.child)?;
         let _startups = self.startup_reservations.lock().unwrap();
         let mut workers = self.workers.lock().unwrap();

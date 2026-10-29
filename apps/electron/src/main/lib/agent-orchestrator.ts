@@ -117,7 +117,6 @@ import { filterAttachedPaths, getAttachedFileDirectories } from './attached-path
 import { getBrowserAgentPlanToolDenial, resolveBrowserAgentPermissionMode, resolveBrowserAgentSkillMentions } from './browser-agent-skill'
 import { agentSessionRewindService } from './agent-session-rewind-service'
 import { getTrustedAgentExternalSource } from './agent-rpc-source-context'
-import { getTrustedAgentRuntimeContext } from './agent-rpc-runtime-context'
 
 // ===== 类型定义 =====
 
@@ -142,7 +141,6 @@ type RecoverableAgentQueryOptions = {
   prompt: string
   resumeSessionId?: string
   resumeSessionAt?: string
-  capabilityProfile?: 'default' | 'chatroom'
 }
 
 // ===== 工具函数 =====
@@ -754,10 +752,7 @@ export class AgentOrchestrator {
     }
     queryOptions.resumeSessionId = undefined
     queryOptions.resumeSessionAt = undefined
-    queryOptions.prompt = buildRecoveryPrompt(sessionId, contextualMessage, {
-      agentCwd,
-      ...(queryOptions.capabilityProfile === 'chatroom' ? { disableHistoryGuide: true } : { workspaceSlug }),
-    })
+    queryOptions.prompt = buildRecoveryPrompt(sessionId, contextualMessage, { agentCwd, workspaceSlug })
     return retryReason
   }
 
@@ -873,24 +868,12 @@ export class AgentOrchestrator {
     let userMessagePersisted = false
     let sessionMeta = getAgentSessionMeta(sessionId)
     const trustedSource = getTrustedAgentExternalSource(sessionId)
-    const trustedRuntimeContext = getTrustedAgentRuntimeContext(sessionId)
-    if (trustedRuntimeContext && trustedSource !== 'chatroom') {
-      callbacks.onError('trustedRuntimeContext 仅允许聊天室来源使用')
-      callbacks.onComplete([], { startedAt: streamStartedAt })
-      return
-    }
-    if (trustedSource === 'chatroom' && !trustedRuntimeContext) {
-      callbacks.onError('聊天室运行缺少可信 runtimeContext')
-      callbacks.onComplete([], { startedAt: streamStartedAt })
-      return
-    }
-    const isChatroomRun = trustedSource === 'chatroom' && trustedRuntimeContext !== undefined
     const workingMode = channelId === COPIS_WORKING_CHANNEL_ID
       ? normalizeWorkingMode(input.workingMode ?? sessionMeta?.workingMode)
       : undefined
-    const browserContext = isChatroomRun ? undefined : getBrowserAgentContext(sessionId)
+    const browserContext = getBrowserAgentContext(sessionId)
     const hasBrowserContext = browserContext !== undefined
-    const effectiveSkillMentions = isChatroomRun ? undefined : resolveBrowserAgentSkillMentions(mentionedSkills, hasBrowserContext)
+    const effectiveSkillMentions = resolveBrowserAgentSkillMentions(mentionedSkills, hasBrowserContext)
     let chromeDesktopControl: PiWorkerChromeDesktopCapability | undefined
 
     // 兼容旧会话和非 UI 触发路径：首次运行时把实际使用的模式补回会话索引。
@@ -1004,14 +987,12 @@ export class AgentOrchestrator {
         return
       }
 
-      const projectRootStatus = getLocalProjectRootStatus(
-        isChatroomRun ? trustedRuntimeContext!.executionWorkspace.projectRoot : workspace.projectRootPath,
-      )
+      const projectRootStatus = getLocalProjectRootStatus(workspace.projectRootPath)
       if (projectRootStatus && projectRootStatus !== 'available') {
         reportPreflightError({
           code: 'local_project_root_unavailable',
           title: '本地项目根目录不可用',
-          message: `本地项目根目录不存在或无法访问：${isChatroomRun ? trustedRuntimeContext!.executionWorkspace.projectRoot : workspace.projectRootPath}。请在 Copis 中重新选择项目文件夹。`,
+          message: `本地项目根目录不存在或无法访问：${workspace.projectRootPath}。请在 Copis 中重新选择项目文件夹。`,
           details: [`目录状态: ${projectRootStatus}`],
           actions: [],
           canRetry: false,
@@ -1239,11 +1220,7 @@ export class AgentOrchestrator {
     // 3. 构建 Pi runtime 环境变量（仅自定义模型接入代理，其他模型保持直连）。
     const isCustomModel = isWorkingCustomModelChannelId(channelId)
     const proxyUrl = isCustomModel ? await getEffectiveProxyUrl() : undefined
-    const runtimeEnv = this.buildRuntimeEnv(
-      proxyUrl,
-      isCustomModel,
-      isChatroomRun ? trustedRuntimeContext!.executionWorkspace.root : undefined,
-    )
+    const runtimeEnv = this.buildRuntimeEnv(proxyUrl, isCustomModel)
 
     // 4. 读取已有的 SDK session ID（用于 resume）
     let existingSdkSessionId = sessionMeta?.sdkSessionId
@@ -1277,19 +1254,13 @@ export class AgentOrchestrator {
         if (!ws) {
           throw new Error(`指定的 Agent 项目不存在或已删除: ${workspaceId}`)
         }
-        agentCwd = isChatroomRun
-          ? trustedRuntimeContext!.executionWorkspace.projectRoot
-          : resolveAgentCwd(ws, sessionId, sessionMeta?.agentCwdMode) ?? homedir()
-        workspaceSlug = isChatroomRun ? trustedRuntimeContext!.memorySource?.workspaceSlug : ws.slug
+        agentCwd = resolveAgentCwd(ws, sessionId, sessionMeta?.agentCwdMode) ?? homedir()
+        workspaceSlug = ws.slug
         workspace = ws
         workspaceWriteRestricted = true
-        workspaceWriteRoot = isChatroomRun
-          ? trustedRuntimeContext!.executionWorkspace.projectRoot
-          : ensureAgentWorkspaceWritableRoot(ws)
-        workspaceProjectRoot = isChatroomRun
-          ? trustedRuntimeContext!.executionWorkspace.projectRoot
-          : getProjectFilesPath(ws.slug)
-        if (!isChatroomRun) ensureAgentWorkspaceContextDir(ws)
+        workspaceWriteRoot = ensureAgentWorkspaceWritableRoot(ws)
+        workspaceProjectRoot = getProjectFilesPath(ws.slug)
+        ensureAgentWorkspaceContextDir(ws)
         console.log(`[Agent 编排] 使用 ${getAgentCwdMode(sessionMeta)} cwd: ${agentCwd} (${ws.name}/${sessionId})`)
 
         if (existingSdkSessionId) {
@@ -1302,13 +1273,13 @@ export class AgentOrchestrator {
       // 9.4.1 Fork session JSONL 迁移已在 forkAgentSession 中完成；fork 的 cwd 语义
       // 从源会话继承并持久化，避免历史相对路径在恢复时切换到另一文件根。
 
-      const isAppConnector = !isChatroomRun && isAppConnectorSession(
+      const isAppConnector = isAppConnectorSession(
         sessionMeta,
         (input as { source?: string }).source ?? (input.triggeredBy as string),
       )
 
       // 必须与 runtime 接收的附加目录保持一致；视觉助手据此限制允许外发的图片路径。
-      const allAdditionalDirectories = isChatroomRun ? [] : collectAttachedDirectories({
+      const allAdditionalDirectories = collectAttachedDirectories({
         extraDirs: additionalDirectories,
         sessionMeta,
         workspaceSlug,
@@ -1325,7 +1296,7 @@ export class AgentOrchestrator {
       }
 
       // 10. 构建 MCP 服务器配置 + 记忆工具 + 生图工具 + 自定义工具
-      const mcpServers = this.buildMcpServers(isChatroomRun ? undefined : workspaceSlug)
+      const mcpServers = this.buildMcpServers(workspaceSlug)
       let piBuiltinTools: unknown[] = []
       let piMcpTools: unknown[] = []
       const piSdk = await import('@earendil-works/pi-coding-agent')
@@ -1334,19 +1305,14 @@ export class AgentOrchestrator {
         channelId,
         modelId: selectedModelId,
         agentRuntime,
-        workspaceId: isChatroomRun ? undefined : workspaceId,
+        workspaceId,
         workspaceSlug,
-        capabilityProfile: isChatroomRun ? 'chatroom' : 'default',
         allowedRoots: allAdditionalDirectories,
-        permissionMode: isChatroomRun
-          ? 'bypassPermissions'
-          : resolveBrowserAgentPermissionMode(
-            hasBrowserContext,
-            permissionModeOverride ?? sessionMeta?.permissionMode,
-          ),
-        memoryPolicy: isChatroomRun
-          ? (trustedRuntimeContext!.memorySource ? 'visible' : 'off')
-          : workspace?.memoryPolicy ?? appSettings.defaultMemoryPolicy ?? 'writable',
+        permissionMode: resolveBrowserAgentPermissionMode(
+          hasBrowserContext,
+          permissionModeOverride ?? sessionMeta?.permissionMode,
+        ),
+        memoryPolicy: workspace?.memoryPolicy ?? appSettings.defaultMemoryPolicy ?? 'writable',
         triggeredBy: input.triggeredBy,
         requestSingleApproval: async (approval) => {
           const result = await permissionService.requestSingleApproval(
@@ -1360,22 +1326,18 @@ export class AgentOrchestrator {
               description: approval.description,
             },
             (request) => {
-              if (isChatroomRun && trustedRuntimeContext?.requestPermission) {
-                trustedRuntimeContext.requestPermission(request)
-              } else {
-                this.eventBus.emit(sessionId, { kind: 'copis_event', event: { type: 'permission_request', request } })
-              }
+              this.eventBus.emit(sessionId, { kind: 'copis_event', event: { type: 'permission_request', request } })
             },
           )
           return result.behavior === 'allow'
         },
       })
       piBuiltinTools = builtinMcpResult.tools
-      const collaborationAvailable = !isChatroomRun && builtinMcpResult.collaborationAvailable
-      const expertTeamAvailable = !isChatroomRun && builtinMcpResult.expertTeamAvailable
+      const collaborationAvailable = builtinMcpResult.collaborationAvailable
+      const expertTeamAvailable = builtinMcpResult.expertTeamAvailable
 
       // 合并外部注入的自定义 MCP 服务器（如飞书群聊工具）
-      if (!isChatroomRun && customMcpServers) {
+      if (customMcpServers) {
         Object.assign(mcpServers, customMcpServers)
         console.log(`[Agent 编排] 已合并 ${Object.keys(customMcpServers).length} 个自定义 MCP 服务器`)
       }
@@ -1389,7 +1351,7 @@ export class AgentOrchestrator {
         }
       }
 
-      // 10.5 解析 Chrome 桌面控制 capability（仅限 macOS、用户交互、非自动化/远程/聊天室，且模型支持图片）
+      // 10.5 解析 Chrome 桌面控制 capability（仅限 macOS、用户交互、非自动化/远程，且模型支持图片）
       const isAutomationRun = Boolean(automationContext) || input.triggeredBy === 'automation'
       const isRemoteBotRun = Boolean(
         isAppConnector
@@ -1405,7 +1367,6 @@ export class AgentOrchestrator {
       chromeDesktopControl = issueChromeDesktopWorkerCapability({
         sessionId,
         triggeredBy: input.triggeredBy,
-        isChatroomRun,
         isAutomationRun,
         isDelegationRun: input.triggeredBy === 'delegation',
         isRemoteBotRun,
@@ -1417,23 +1378,23 @@ export class AgentOrchestrator {
       // 11. 构建动态上下文和最终 prompt
       const dynamicCtx = buildDynamicContext({
         workspaceName: workspace?.name,
-        workspaceSlug: isChatroomRun ? undefined : workspaceSlug,
+        workspaceSlug,
         agentCwd,
       })
 
       // 11.5 注入 mention 引用指令（Skill/MCP/会话）— 仅影响 prompt，不影响持久化
       let enrichedMessage = userMessage
-      const referencedSessionsBlock = isChatroomRun ? undefined : buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, workspaceSlug)
+      const referencedSessionsBlock = buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, workspaceSlug)
       if (referencedSessionsBlock) {
         enrichedMessage = `${referencedSessionsBlock}\n\n${enrichedMessage}`
         console.log(`[Agent 编排] 注入 referenced_sessions: ${mentionedSessionIds?.length ?? 0} sessions`)
       }
-      const mentionedToolsPrompt = isChatroomRun ? undefined : buildMentionedToolsPrompt(mentionedSkills, mentionedMcpServers)
+      const mentionedToolsPrompt = buildMentionedToolsPrompt(mentionedSkills, mentionedMcpServers)
       if (mentionedToolsPrompt) {
         enrichedMessage = `${mentionedToolsPrompt}\n\n${enrichedMessage}`
         console.log(`[Agent 编排] 注入 mentioned_tools: ${mentionedSkills?.length ?? 0} skills, ${mentionedMcpServers?.length ?? 0} MCP`)
       }
-      const referencedPlanningBlock = isChatroomRun ? undefined : buildReferencedPlanningPrompt(
+      const referencedPlanningBlock = buildReferencedPlanningPrompt(
         mentionedTodoIds,
         mentionedCalendarEventIds,
         { requireToolRead: agentRuntime === 'pi' },
@@ -1444,9 +1405,7 @@ export class AgentOrchestrator {
       }
 
       const isCompactCommand = userMessage.trim() === '/compact'
-      const memoryPolicy = isChatroomRun
-        ? (trustedRuntimeContext!.memorySource ? 'visible' : 'off')
-        : workspace?.memoryPolicy ?? appSettings.defaultMemoryPolicy ?? 'writable'
+      const memoryPolicy = workspace?.memoryPolicy ?? appSettings.defaultMemoryPolicy ?? 'writable'
       const baseContextualMessage = `${dynamicCtx}\n\n${enrichedMessage}`
       const contextualMessage = isCompactCommand
         ? baseContextualMessage
@@ -1459,10 +1418,7 @@ export class AgentOrchestrator {
         ? '/compact'
         : existingSdkSessionId
           ? contextualMessage
-          : buildContextPrompt(sessionId, contextualMessage, {
-            agentCwd,
-            ...(isChatroomRun ? { disableHistoryGuide: true } : { workspaceSlug }),
-          })
+          : buildContextPrompt(sessionId, contextualMessage, { agentCwd, workspaceSlug })
 
       if (existingSdkSessionId) {
         console.log(`[Agent 编排] 使用 resume 模式，SDK session ID: ${existingSdkSessionId}`)
@@ -1472,9 +1428,7 @@ export class AgentOrchestrator {
 
       // 12. 读取应用设置并确定权限模式
       // 权限模式只属于当前 session；新会话默认完全自动模式。
-      const initialPermissionMode: CopisPermissionMode = isChatroomRun
-        ? 'bypassPermissions'
-        : resolveBrowserAgentPermissionMode(hasBrowserContext, permissionModeOverride)
+      const initialPermissionMode: CopisPermissionMode = resolveBrowserAgentPermissionMode(hasBrowserContext, permissionModeOverride)
       // 注册到 Map，支持运行中动态切换
       this.sessionPermissionModes.set(sessionId, initialPermissionMode)
       console.log(`[Agent 编排] 权限模式: ${initialPermissionMode}${permissionModeOverride ? '（外部覆盖）' : ''}`)
@@ -1497,9 +1451,7 @@ export class AgentOrchestrator {
         this.sessionPermissionModes.get(sessionId) ?? initialPermissionMode
 
       const restrictedWriteRoots = workspaceWriteRestricted && workspaceWriteRoot && workspaceProjectRoot
-        ? (isChatroomRun
-          ? [workspaceProjectRoot]
-          : [workspaceWriteRoot, workspaceProjectRoot, getAgentSessionWorkspacePath(workspaceSlug!, sessionId)])
+        ? [workspaceWriteRoot, workspaceProjectRoot, getAgentSessionWorkspacePath(workspaceSlug!, sessionId)]
         : []
       const resolveToolFilePath = (filePath: string): string => {
         const baseDir = agentCwd ?? process.cwd()
@@ -1596,8 +1548,7 @@ export class AgentOrchestrator {
       const canUseTool = async (toolName: string, input: Record<string, unknown>, options: CanUseToolOptions): Promise<PermissionResult> => {
         const currentMode = getPermissionMode()
         const currentSession = getAgentSessionMeta(sessionId)
-        const advancedAuthorization = !isChatroomRun
-          && (runTriggeredBy ?? 'user') === 'user'
+        const advancedAuthorization = (runTriggeredBy ?? 'user') === 'user'
           && !currentSession?.sourceAutomationId
           && !currentSession?.sourceDelegationId
           && currentSession?.advancedAuthorization === true
@@ -1617,26 +1568,6 @@ export class AgentOrchestrator {
               behavior: 'deny' as const,
               message: 'Git/SSH/curl/Python 命令需要先在 Composer 开启高级授权。',
             }
-          }
-        }
-
-        if (isChatroomRun && ['RealPath', 'BrowserPageObserve', 'BrowserPageClick', 'BrowserPageType', 'BrowserPageNavigate', 'WebSearch', 'WebFetch', 'VisionRelay', 'generate_image', 'mcp__alipay_bot', 'mcp__agent_mail', 'mcp__working_payment'].includes(toolName)) {
-          return { behavior: 'deny' as const, message: '聊天室运行时未授予该敏感能力。' }
-        }
-
-        // 聊天室只自动放行隔离 project 内的基础文件操作和只读 Memory；
-        // 其它能力即使当前模式是 bypass，也必须经过主理人单次审批。
-        if (isChatroomRun) {
-          const filePath = typeof input.file_path === 'string' ? input.file_path : typeof input.path === 'string' ? input.path : ''
-          const projectRoot = trustedRuntimeContext!.executionWorkspace.projectRoot
-          const relativePath = filePath ? relative(projectRoot, resolve(projectRoot, filePath)) : '..'
-          const insideProject = relativePath !== '' && relativePath !== '..' && !relativePath.startsWith('..') && !isAbsolute(relativePath)
-          const safeFileTool = ['Read', 'Edit', 'Write', 'MultiEdit'].includes(toolName) && insideProject
-          const safeMemoryTool = ['memory_recall', 'memory_read'].includes(toolName)
-          if (!safeFileTool && !safeMemoryTool) {
-            return permissionService.requestSingleApproval(sessionId, toolName, input, options, (request) => {
-              if (trustedRuntimeContext?.requestPermission) trustedRuntimeContext.requestPermission(request)
-            })
           }
         }
 
@@ -1749,11 +1680,7 @@ export class AgentOrchestrator {
         }
         if (planningDeletionPermission === 'require-single-approval') {
           return permissionService.requestSingleApproval(sessionId, toolName, input, options, (request) => {
-            if (isChatroomRun && trustedRuntimeContext?.requestPermission) {
-              trustedRuntimeContext.requestPermission(request)
-            } else {
-              this.eventBus.emit(sessionId, { kind: 'copis_event', event: { type: 'permission_request', request } })
-            }
+            this.eventBus.emit(sessionId, { kind: 'copis_event', event: { type: 'permission_request', request } })
           })
         }
 
@@ -1814,7 +1741,7 @@ export class AgentOrchestrator {
         ? resolvePiThinkingLevel(appSettings, sessionMeta, channel.provider, selectedModelId, piReasoningCapability)
         : undefined
       const browserTab = browserContext ? getWebTabState(browserContext.tabId) : undefined
-      const expertTeamContext = !isChatroomRun && expertTeamAvailable && (input.triggeredBy ?? 'user') === 'user' && workspace
+      const expertTeamContext = expertTeamAvailable && (input.triggeredBy ?? 'user') === 'user' && workspace
         ? await resolveExpertTeamPromptContext({
           workspace,
           reader: new HttpExpertTeamContextReader(),
@@ -1823,13 +1750,13 @@ export class AgentOrchestrator {
       const systemPromptAppend = buildSystemPrompt({
         agentRuntime,
         workspaceName: workspace?.name,
-        workspaceSlug: isChatroomRun ? undefined : workspaceSlug,
+        workspaceSlug,
         sessionId,
         agentCwd,
         workspaceWriteRoot,
         permissionMode: initialPermissionMode,
         collaborationAvailable,
-        expertTeamAvailable: !isChatroomRun && expertTeamAvailable,
+        expertTeamAvailable,
         currentModelId: selectedModelId,
         workingMode,
         memoryPolicy,
@@ -1838,10 +1765,10 @@ export class AgentOrchestrator {
         ...(sessionMeta?.expertTeamSession ? { expertTeamSession: sessionMeta.expertTeamSession } : {}),
         ...(sessionMeta?.expertTeamSetup ? { expertTeamSetup: true } : {}),
         ...(expertTeamContext ? { expertTeamContext } : {}),
-        browserContext: !isChatroomRun && browserTab
+        browserContext: browserTab
           ? { tabId: browserTab.id, title: browserTab.title, url: sanitizeBrowserWorkflowUrl(browserTab.url) }
           : undefined,
-      }) + (!isChatroomRun && automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
+      }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
       const startAutoTitleGeneration = (): void => {
         if (titleGenerationStarted) return
         titleGenerationStarted = true
@@ -1929,18 +1856,15 @@ export class AgentOrchestrator {
         : undefined
       const allSkillPaths: string[] = []
       const effectiveSlug = workspaceSlug || 'default'
-      const workspaceSkillsDir = isChatroomRun ? undefined : getWorkspaceSkillsDir(effectiveSlug)
+      const workspaceSkillsDir = getWorkspaceSkillsDir(effectiveSlug)
       if (workspaceSkillsDir && !allSkillPaths.includes(workspaceSkillsDir)) {
         allSkillPaths.push(workspaceSkillsDir)
       }
-      if (isChatroomRun && trustedRuntimeContext!.skillSnapshotPath) {
-        allSkillPaths.push(trustedRuntimeContext!.skillSnapshotPath)
-      }
       const defaultSkillsDir = getDefaultSkillsDir()
-      if (!isChatroomRun && existsSync(defaultSkillsDir) && !allSkillPaths.includes(defaultSkillsDir)) {
+      if (existsSync(defaultSkillsDir) && !allSkillPaths.includes(defaultSkillsDir)) {
         allSkillPaths.push(defaultSkillsDir)
       }
-      if (!isChatroomRun && isAppConnector) {
+      if (isAppConnector) {
         let allWs: AgentWorkspace[] = []
         try {
           allWs = listAgentWorkspacesByUpdatedAt()
@@ -1970,23 +1894,21 @@ export class AgentOrchestrator {
         runtimeEnv,
         ...(maxTurns != null && { maxTurns }),
         ...(chromeDesktopControl ? { chromeDesktopControl } : {}),
-        permissionMode: isChatroomRun ? 'default' : initialPermissionMode,
+        permissionMode: initialPermissionMode,
         canUseTool,
         systemPrompt: systemPromptAppend + buildPiAdditionalDirectoriesPrompt(
           allAdditionalDirectories,
           workspaceWriteRestricted && workspaceWriteRoot && workspaceProjectRoot
-            ? (isChatroomRun ? [workspaceProjectRoot] : [workspaceWriteRoot, workspaceProjectRoot])
+            ? [workspaceWriteRoot, workspaceProjectRoot]
             : undefined,
         ),
         resumeSessionId: existingSdkSessionId,
-        piAgentDir: isChatroomRun ? trustedRuntimeContext!.executionWorkspace.sessionRoot : getSdkConfigDir(),
-        piSessionDir: isChatroomRun ? join(trustedRuntimeContext!.executionWorkspace.sessionRoot, 'sessions') : join(getSdkConfigDir(), 'sessions'),
+        piAgentDir: getSdkConfigDir(),
+        piSessionDir: join(getSdkConfigDir(), 'sessions'),
         ...(allAdditionalDirectories.length > 0 && { additionalDirectories: allAdditionalDirectories }),
         ...(allSkillPaths.length > 0 && { additionalSkillPaths: allSkillPaths }),
         ...(effectiveSkillMentions?.length ? { skillMentions: effectiveSkillMentions } : {}),
-        ...(isChatroomRun ? { capabilityProfile: 'chatroom' as const } : {}),
-        ...(!isChatroomRun && workspaceSlug ? { workspaceSlug } : {}),
-        ...(isChatroomRun && workspaceSlug ? { memoryWorkspaceSlug: workspaceSlug } : {}),
+        ...(workspaceSlug ? { workspaceSlug } : {}),
         memoryPolicy,
         ...(memoryTokenMaintenanceRunner ? { memoryMaintenanceRunner: memoryTokenMaintenanceRunner } : {}),
         ...(isCompactCommand ? { compactRequest: true } : {}),

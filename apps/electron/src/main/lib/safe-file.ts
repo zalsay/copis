@@ -68,7 +68,7 @@ export function writeJsonFileAtomic(
 	if (mode !== undefined) chmodSync(filePath, mode)
 }
 
-/** 聊天室提交摘要使用的持久化写入：临时文件和父目录均显式 fsync。 */
+/** 持久化 JSON 写入：临时文件和父目录均显式 fsync。 */
 export function writeJsonFileAtomicDurable(
   filePath: string,
   data: object,
@@ -88,7 +88,7 @@ export function writeJsonFileAtomicDurable(
   try {
     const current = readRegularIdentity(filePath, true)
     assertParentChainStable(parentChain)
-    tempIdentity = writeDurableTemp(tempPath, bytes, mode, parentChain, noFollow, '聊天室配置临时文件')
+    tempIdentity = writeDurableTemp(tempPath, bytes, mode, parentChain, noFollow, 'JSON 配置临时文件')
     assertParentChainStable(parentChain)
 
     let needsRecoveryBackup = false
@@ -128,23 +128,23 @@ export function writeJsonFileAtomicDurable(
     replacePathWithoutDelete(tempPath, filePath, parentChain, tempIdentity, current)
     tempIdentity = undefined
     const committed = readRegularIdentity(filePath, false)
-    if (!committed) throw new Error('聊天室配置主文件不可用')
+    if (!committed) throw new Error('JSON 配置主文件不可用')
     chmodSync(filePath, mode)
     assertParentChainStable(parentChain)
     syncParentDurable(filePath)
   } catch (error) {
     cleanupOwnedTemp(tempPath, tempIdentity)
     cleanupOwnedTemp(backupTempPath, backupIdentity)
-    throw new Error('聊天室配置持久化失败', { cause: error })
+    throw new Error('JSON 配置持久化失败', { cause: error })
   }
 }
 
 const RECOVERY_SLOT_SUFFIXES = ['a', 'b'] as const
 const RECOVERY_VERSION = 1
-/** 通用 JSON 索引不设 4 MiB 上限；聊天室 room.json 单独使用此边界。 */
-export const CHATROOM_CONFIG_MAX_BYTES = 2 * 1024 * 1024
+/** 通用 JSON 索引不设 4 MiB 上限；受限 JSON 文件 单独使用此边界。 */
+export const JSON_RECOVERY_PAYLOAD_MAX_BYTES = 2 * 1024 * 1024
 /** envelope 需要容纳 payload 的 JSON 转义和 envelope 字段本身。 */
-export const CHATROOM_RECOVERY_ENVELOPE_MAX_BYTES = CHATROOM_CONFIG_MAX_BYTES * 6 + 4096
+export const JSON_RECOVERY_ENVELOPE_MAX_BYTES = JSON_RECOVERY_PAYLOAD_MAX_BYTES * 6 + 4096
 const RECOVERY_OWNER_MAX_BYTES = 1024
 
 interface RecoveryOwner {
@@ -236,10 +236,10 @@ function createRecoveryOwner(filePath: string, parentChain: readonly ParentIdent
     assertParentChainStable(parentChain)
     fd = openSync(ownerPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | noFollow, mode)
     const bytes = Buffer.from(JSON.stringify(owner), 'utf8')
-    writeAllSync(fd, bytes, '聊天室配置备份所有权文件')
+    writeAllSync(fd, bytes, 'JSON 配置备份所有权文件')
     fsyncSync(fd)
     const stats = fstatSync(fd)
-    if (!stats.isFile() || stats.nlink > 1 || stats.size !== bytes.length) throw new Error('聊天室配置备份所有权文件不可用')
+    if (!stats.isFile() || stats.nlink > 1 || stats.size !== bytes.length) throw new Error('JSON 配置备份所有权文件不可用')
     closeSync(fd)
     fd = -1
     assertParentChainStable(parentChain)
@@ -313,12 +313,12 @@ function installRecoveryBackup(
   maxBytes?: number,
 ): void {
   const owner = createRecoveryOwner(filePath, parentChain, mode, noFollow)
-  if (!owner) throw new Error('聊天室配置备份所有权不可验证')
+  if (!owner) throw new Error('JSON 配置备份所有权不可验证')
   const source = readRegularTextNoFollow(filePath, maxBytes)
-  if (!source) throw new Error('聊天室配置源文件不可用')
+  if (!source) throw new Error('JSON 配置源文件不可用')
   const envelopeMaxBytes = maxBytes === undefined
     ? Math.max(
-        CHATROOM_RECOVERY_ENVELOPE_MAX_BYTES,
+        JSON_RECOVERY_ENVELOPE_MAX_BYTES,
         Buffer.byteLength(JSON.stringify({
           version: RECOVERY_VERSION,
           ownerToken: owner.token,
@@ -336,7 +336,7 @@ function installRecoveryBackup(
   const target = missing ?? (owned.length === RECOVERY_SLOT_SUFFIXES.length
     ? owned.sort((left, right) => left.candidate!.envelope.generation - right.candidate!.envelope.generation)[0]
     : undefined)
-  if (!target) throw new Error('聊天室配置备份槽位不可用')
+  if (!target) throw new Error('JSON 配置备份槽位不可用')
 
   const envelope: RecoveryEnvelope = {
     version: RECOVERY_VERSION,
@@ -346,13 +346,13 @@ function installRecoveryBackup(
     digest: createHash('sha256').update(source.raw, 'utf8').digest('hex'),
   }
   const tempPath = `${target.path}.next-${randomUUID()}`
-  const tempIdentity = writeDurableTemp(tempPath, Buffer.from(JSON.stringify(envelope), 'utf8'), mode, parentChain, noFollow, '聊天室配置受控备份临时文件')
+  const tempIdentity = writeDurableTemp(tempPath, Buffer.from(JSON.stringify(envelope), 'utf8'), mode, parentChain, noFollow, 'JSON 配置受控备份临时文件')
   try {
     assertParentChainStable(parentChain)
     if (target.candidate) {
       const current = parseRecoveryEnvelope(target.path, envelopeMaxBytes)
       if (!current || current.envelope.ownerToken !== owner.token || current.identity.dev !== target.candidate.identity.dev
-        || current.identity.ino !== target.candidate.identity.ino) throw new Error('聊天室配置备份槽位发生变化')
+        || current.identity.ino !== target.candidate.identity.ino) throw new Error('JSON 配置备份槽位发生变化')
       unlinkSync(target.path)
       syncParentDurable(target.path)
     }
@@ -360,18 +360,18 @@ function installRecoveryBackup(
       linkSync(tempPath, target.path)
     } catch (error) {
       // O_EXCL 等价的 hard link 失败时不覆盖后来出现的外部文件。
-      throw new Error('聊天室配置备份槽位不可用', { cause: error })
+      throw new Error('JSON 配置备份槽位不可用', { cause: error })
     }
     const installed = lstatSync(target.path)
     if (installed.isSymbolicLink() || !installed.isFile() || installed.nlink < 2
       || installed.dev !== tempIdentity.dev || installed.ino !== tempIdentity.ino) {
-      throw new Error('聊天室配置备份槽位发生变化')
+      throw new Error('JSON 配置备份槽位发生变化')
     }
     unlinkSync(tempPath)
     const committed = parseRecoveryEnvelope(target.path, envelopeMaxBytes)
     if (!committed || committed.identity.dev !== tempIdentity.dev || committed.identity.ino !== tempIdentity.ino
       || committed.envelope.generation !== generation || committed.envelope.ownerToken !== owner.token) {
-      throw new Error('聊天室配置备份槽位发生变化')
+      throw new Error('JSON 配置备份槽位发生变化')
     }
     syncParentDurable(target.path)
   } catch (error) {
@@ -408,7 +408,7 @@ function captureParentChain(filePath: string): ParentIdentity[] {
   let current = realpathSync.native(requestedParent)
   for (;;) {
     const stats = lstatSync(current)
-    if (stats.isSymbolicLink() || !stats.isDirectory()) throw new Error('聊天室配置父目录不可用')
+    if (stats.isSymbolicLink() || !stats.isDirectory()) throw new Error('JSON 配置父目录不可用')
     chain.unshift({ path: current,
       dev: stats.dev, ino: stats.ino, size: stats.size, mtimeMs: stats.mtimeMs })
     const parent = dirname(current)
@@ -420,26 +420,26 @@ function captureParentChain(filePath: string): ParentIdentity[] {
 }
 
 function assertParentChainStable(chain: readonly ParentIdentity[]): void {
-  if (chain.length === 0) throw new Error('聊天室配置父目录不可用')
+  if (chain.length === 0) throw new Error('JSON 配置父目录不可用')
   const immediate = chain[chain.length - 1]!
   const requestedParent = immediate.requestedPath
   if (requestedParent) {
     let actualRequestedParent: string
     try { actualRequestedParent = realpathSync.native(requestedParent) } catch {
-      throw new Error('聊天室配置父目录发生变化')
+      throw new Error('JSON 配置父目录发生变化')
     }
-    if (actualRequestedParent !== immediate.path) throw new Error('聊天室配置父目录发生变化')
+    if (actualRequestedParent !== immediate.path) throw new Error('JSON 配置父目录发生变化')
   }
   const expectedParent = immediate.path
   let actualParent: string
   try { actualParent = realpathSync.native(expectedParent) } catch {
-    throw new Error('聊天室配置父目录发生变化')
+    throw new Error('JSON 配置父目录发生变化')
   }
-  if (actualParent !== expectedParent) throw new Error('聊天室配置父目录发生变化')
+  if (actualParent !== expectedParent) throw new Error('JSON 配置父目录发生变化')
   for (const expected of chain) {
     const stats = lstatSync(expected.path)
     if (stats.isSymbolicLink() || !stats.isDirectory() || stats.dev !== expected.dev || stats.ino !== expected.ino) {
-      throw new Error('聊天室配置父目录发生变化')
+      throw new Error('JSON 配置父目录发生变化')
     }
   }
 }
@@ -452,14 +452,14 @@ function readRegularIdentity(path: string, allowMissing: boolean): FileIdentity 
     if (allowMissing && (error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
     throw error
   }
-  if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink > 1) throw new Error('聊天室配置文件不可用')
+  if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink > 1) throw new Error('JSON 配置文件不可用')
   return { dev: stats.dev, ino: stats.ino, size: stats.size, mtimeMs: stats.mtimeMs }
 }
 
 function assertSameFileIdentity(path: string, expected: FileIdentity): void {
   const actual = readRegularIdentity(path, false)
   if (!actual || actual.dev !== expected.dev || actual.ino !== expected.ino || actual.size !== expected.size
-    || actual.mtimeMs !== expected.mtimeMs) throw new Error('聊天室配置临时文件发生变化')
+    || actual.mtimeMs !== expected.mtimeMs) throw new Error('JSON 配置临时文件发生变化')
 }
 
 function writeDurableTemp(
@@ -501,7 +501,7 @@ function copyRegularToTemp(
   noFollow: number,
 ): FileIdentity {
   const sourceIdentity = readRegularIdentity(sourcePath, false)
-  if (!sourceIdentity) throw new Error('聊天室配置源文件不可用')
+  if (!sourceIdentity) throw new Error('JSON 配置源文件不可用')
   let sourceFd = -1
   let destinationFd = -1
   try {
@@ -509,26 +509,26 @@ function copyRegularToTemp(
     sourceFd = openSync(sourcePath, constants.O_RDONLY | noFollow)
     const sourceOpened = fstatSync(sourceFd)
     if (sourceOpened.dev !== sourceIdentity.dev || sourceOpened.ino !== sourceIdentity.ino
-      || sourceOpened.size !== sourceIdentity.size || sourceOpened.nlink > 1) throw new Error('聊天室配置源文件发生变化')
+      || sourceOpened.size !== sourceIdentity.size || sourceOpened.nlink > 1) throw new Error('JSON 配置源文件发生变化')
     destinationFd = openSync(destinationPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | noFollow, mode)
     const destinationOpened = fstatSync(destinationFd)
-    if (!destinationOpened.isFile() || destinationOpened.nlink > 1) throw new Error('聊天室配置备份文件不可用')
+    if (!destinationOpened.isFile() || destinationOpened.nlink > 1) throw new Error('JSON 配置备份文件不可用')
     const buffer = Buffer.allocUnsafe(64 * 1024)
     let offset = 0
     while (offset < sourceOpened.size) {
       const count = readSync(sourceFd, buffer, 0, Math.min(buffer.length, sourceOpened.size - offset), offset)
-      if (count <= 0) throw new Error('聊天室配置源文件读取失败')
-      writeAllSync(destinationFd, buffer.subarray(0, count), '聊天室配置备份文件')
+      if (count <= 0) throw new Error('JSON 配置源文件读取失败')
+      writeAllSync(destinationFd, buffer.subarray(0, count), 'JSON 配置备份文件')
       offset += count
     }
     fsyncSync(destinationFd)
     const destinationClosed = fstatSync(destinationFd)
     if (destinationClosed.dev !== destinationOpened.dev || destinationClosed.ino !== destinationOpened.ino
-      || destinationClosed.size !== sourceOpened.size) throw new Error('聊天室配置备份文件发生变化')
+      || destinationClosed.size !== sourceOpened.size) throw new Error('JSON 配置备份文件发生变化')
     const sourceClosed = fstatSync(sourceFd)
     if (sourceClosed.dev !== sourceOpened.dev || sourceClosed.ino !== sourceOpened.ino
       || sourceClosed.size !== sourceOpened.size || sourceClosed.mtimeMs !== sourceOpened.mtimeMs) {
-      throw new Error('聊天室配置源文件发生变化')
+      throw new Error('JSON 配置源文件发生变化')
     }
     closeSync(destinationFd)
     destinationFd = -1
@@ -543,7 +543,7 @@ function copyRegularToTemp(
     })
     assertParentChainStable(parentChain)
     const result = readRegularIdentity(destinationPath, false)
-    if (!result) throw new Error('聊天室配置备份文件不可用')
+    if (!result) throw new Error('JSON 配置备份文件不可用')
     return result
   } finally {
     if (destinationFd >= 0) closeSync(destinationFd)
@@ -605,7 +605,7 @@ function installBackupWithoutReplacing(
     if (installed.isSymbolicLink() || !installed.isFile() || installed.dev !== identity.dev
       || installed.ino !== identity.ino || installed.size !== identity.size
       || installed.mtimeMs !== identity.mtimeMs) {
-      throw new Error('聊天室配置备份文件发生变化')
+      throw new Error('JSON 配置备份文件发生变化')
     }
     assertParentChainStable(parentChain)
     unlinkSync(sourcePath)

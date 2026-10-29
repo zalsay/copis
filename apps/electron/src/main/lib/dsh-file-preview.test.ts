@@ -7,6 +7,7 @@ import {
   isBinaryBuffer,
   readDshFile,
   listDshDirectory,
+  getActiveDshWorkspacePath,
   MAX_DSH_TEXT_FILE_SIZE,
 } from './dsh-file-service'
 
@@ -177,6 +178,23 @@ describe('DSH 文件预览与定位服务 (dsh-file-service)', () => {
     expect(entries.length).toBe(1)
     expect(entries[0]!.name).toBe('Button.vue')
     expect(entries[0]!.isDirectory).toBe(false)
+  })
+
+  test('Given 未传入 cwd When 查询有效工作区路径 Then 返回非空的有效目录且 listDshDirectory 正常工作', () => {
+    const defaultWorkspace = getActiveDshWorkspacePath()
+    expect(typeof defaultWorkspace).toBe('string')
+    expect(defaultWorkspace.length).toBeGreaterThan(0)
+    expect(existsSync(defaultWorkspace)).toBe(true)
+
+    // 当未显式传参时，listDshDirectory 自动以有效工作区为根进行扫描
+    const entries = listDshDirectory()
+    expect(Array.isArray(entries)).toBe(true)
+  })
+
+  test('Given 传入存在目录作为 cwd When 查询有效工作区路径 Then 优先返回传入目录', () => {
+    mkdirSync(testDir, { recursive: true })
+    const resolved = getActiveDshWorkspacePath(testDir)
+    expect(resolved).toBe(testDir)
   })
 })
 

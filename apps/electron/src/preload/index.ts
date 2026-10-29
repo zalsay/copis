@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, WEB_PASSWORD_IPC_CHANNELS, WEB_SYNC_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, DSH_CORDIS_IPC_CHANNELS, DSH_GROUP_CHAT_IPC_CHANNELS, CHATROOM_IPC_CHANNELS, CHROME_DESKTOP_IPC_CHANNELS, type ChromeDesktopSystemStatus, type ChromeDesktopWindowInfo, type ChromeDesktopErrorCode, type ChromeDesktopSessionState, type ChatRoomElectronAPI, type DshGroupChatSummary, type DshGroupChatDetail, type DshGroupChatMessage, type DshGroupTaskBoard, type DshGroupInvocation, type DshCreateGroupInput, type DshUpdateGroupInput, type DshPostMessageInput, type DshCreateTaskInput, type DshUpdateTaskInput, type DshDecomposeTaskInput, type DshGroupChatAgent, type DshGroupChatRealtimeEvent, type DshCreationWorkspace } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, WEB_PASSWORD_IPC_CHANNELS, WEB_SYNC_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, DSH_CORDIS_IPC_CHANNELS, DSH_GROUP_CHAT_IPC_CHANNELS, CHROME_DESKTOP_IPC_CHANNELS, type ChromeDesktopSystemStatus, type ChromeDesktopWindowInfo, type ChromeDesktopErrorCode, type ChromeDesktopSessionState, type DshGroupChatSummary, type DshGroupChatDetail, type DshGroupChatMessage, type DshGroupTaskBoard, type DshGroupInvocation, type DshCreateGroupInput, type DshUpdateGroupInput, type DshPostMessageInput, type DshCreateTaskInput, type DshUpdateTaskInput, type DshDecomposeTaskInput, type DshGroupChatAgent, type DshGroupChatRealtimeEvent, type DshCreationWorkspace, type DshUpdateAgentModelInput, type DshAvailableModelGroup } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, CODEX_IPC_CHANNELS, type CodexAppServerStatus, type CodexCliStatus } from '../types'
 import { agentHttpStreamClient } from '../renderer/lib/agent-http-stream'
 import { setHttpApiWebToken } from '../renderer/lib/http-api-web-token'
@@ -243,7 +243,6 @@ import { QUICK_TASK_IPC_CHANNELS, TRAY_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNEL
  * 暴露给渲染进程的 API 接口定义
  */
 export interface ElectronAPI {
-  chatrooms: ChatRoomElectronAPI
   chromeDesktop: {
     checkStatus: () => Promise<ChromeDesktopSystemStatus>
     listWindows: () => Promise<ChromeDesktopWindowInfo[]>
@@ -1394,6 +1393,8 @@ export interface ElectronAPI {
     addAgent: (groupId: string, agent: Omit<DshGroupChatAgent, 'addedAt'>) => Promise<DshGroupChatDetail | null>
     removeAgent: (groupId: string, agentId: string) => Promise<DshGroupChatDetail | null>
     updateAgentResponsibility: (groupId: string, agentId: string, responsibility: string) => Promise<DshGroupChatDetail | null>
+    updateAgentModel: (input: DshUpdateAgentModelInput) => Promise<DshGroupChatDetail | null>
+    getAvailableModels: () => Promise<DshAvailableModelGroup[]>
     getMessages: (groupId: string, limit?: number, beforeSeq?: number) => Promise<DshGroupChatMessage[]>
     postMessage: (input: DshPostMessageInput) => Promise<DshGroupChatMessage>
     markRead: (groupId: string, readSeq: number) => Promise<boolean>
@@ -1419,32 +1420,6 @@ interface MigrationExportResult {
  * 实现 ElectronAPI 接口
  */
 const electronAPI: ElectronAPI = {
-  chatrooms: {
-    listLocalRooms: () => ipcRenderer.invoke(CHATROOM_IPC_CHANNELS.LIST_LOCAL_ROOMS),
-    provisionAgent: (input) => ipcRenderer.invoke(CHATROOM_IPC_CHANNELS.PROVISION_AGENT, input),
-    updateAgent: (input) => ipcRenderer.invoke(CHATROOM_IPC_CHANNELS.UPDATE_AGENT, input),
-    removeAgent: (input) => ipcRenderer.invoke(CHATROOM_IPC_CHANNELS.REMOVE_AGENT, input),
-    syncAgentSkills: (input) => ipcRenderer.invoke(CHATROOM_IPC_CHANNELS.SYNC_AGENT_SKILLS, input),
-    respondPermission: (input) => ipcRenderer.invoke(CHATROOM_IPC_CHANNELS.RESPOND_PERMISSION, input),
-    onPermissionRequested: (callback) => {
-      const listener = (_event: Electron.IpcRendererEvent, payload: Parameters<ChatRoomElectronAPI['onPermissionRequested']>[0] extends (value: infer T) => void ? T : never) => callback(payload)
-      ipcRenderer.on(CHATROOM_IPC_CHANNELS.PERMISSION_REQUESTED, listener)
-      return () => ipcRenderer.removeListener(CHATROOM_IPC_CHANNELS.PERMISSION_REQUESTED, listener)
-    },
-    onLocalConfigChanged: (callback) => {
-      const listener = (_event: Electron.IpcRendererEvent, payload: Parameters<ChatRoomElectronAPI['onLocalConfigChanged']>[0] extends (value: infer T) => void ? T : never) => callback(payload)
-      ipcRenderer.on(CHATROOM_IPC_CHANNELS.LOCAL_CONFIG_CHANGED, listener)
-      return () => ipcRenderer.removeListener(CHATROOM_IPC_CHANNELS.LOCAL_CONFIG_CHANGED, listener)
-    },
-    startUpload: (input) => ipcRenderer.invoke(CHATROOM_IPC_CHANNELS.SELECT_AND_UPLOAD, input),
-    startDownload: (input) => ipcRenderer.invoke(CHATROOM_IPC_CHANNELS.START_DOWNLOAD, input),
-    cancelTransfer: (transferId) => ipcRenderer.invoke(CHATROOM_IPC_CHANNELS.CANCEL_TRANSFER, transferId),
-    onTransferProgress: (callback) => {
-      const listener = (_event: Electron.IpcRendererEvent, payload: Parameters<ChatRoomElectronAPI['onTransferProgress']>[0] extends (value: infer T) => void ? T : never) => callback(payload)
-      ipcRenderer.on(CHATROOM_IPC_CHANNELS.TRANSFER_PROGRESS, listener)
-      return () => ipcRenderer.removeListener(CHATROOM_IPC_CHANNELS.TRANSFER_PROGRESS, listener)
-    },
-  },
   // 运行时
   getHttpApiWebToken: () => {
     const argument = process.argv.find((value) =>
@@ -3073,6 +3048,10 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.REMOVE_AGENT, groupId, agentId),
     updateAgentResponsibility: (groupId: string, agentId: string, responsibility: string): Promise<DshGroupChatDetail | null> =>
       ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.UPDATE_AGENT_RESPONSIBILITY, groupId, agentId, responsibility),
+    updateAgentModel: (input: DshUpdateAgentModelInput): Promise<DshGroupChatDetail | null> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.UPDATE_AGENT_MODEL, input),
+    getAvailableModels: (): Promise<DshAvailableModelGroup[]> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.GET_AVAILABLE_MODELS),
     getMessages: (groupId: string, limit?: number, beforeSeq?: number): Promise<DshGroupChatMessage[]> =>
       ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.GET_MESSAGES, groupId, limit, beforeSeq),
     postMessage: (input: DshPostMessageInput): Promise<DshGroupChatMessage> =>

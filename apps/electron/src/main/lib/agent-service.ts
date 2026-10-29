@@ -42,8 +42,6 @@ import { getHeadlessAgentRunTarget } from './agent-headless-run-target'
 import { sendAgentStreamComplete } from './agent-completion-payload'
 import { getHttpApiInternalToken } from './http-api-server'
 import { registerTrustedAgentExternalSource, registerTrustedAgentRpcRun } from './agent-rpc-source-context'
-import { registerTrustedAgentRuntimeContext } from './agent-rpc-runtime-context'
-import type { TrustedChatRoomAgentRuntimeContext } from './agent-rpc-runtime-context'
 
 // ===== 实例创建 =====
 
@@ -298,11 +296,7 @@ export interface HeadlessAgentRunOptions {
   onTitleUpdated: (title: string) => void
   source?: AgentExternalRunSource
   originSessionId?: string
-  trustedRuntimeContext?: TrustedChatRoomAgentRuntimeContext
   signal?: AbortSignal
-  /** Main-only ownership/liveness input; it is never serialized into AgentSendInput. */
-  trustedRunId?: string
-  isTrustedRunCurrent?: () => Promise<boolean>
 }
 
 /**
@@ -315,12 +309,6 @@ export async function runAgentHeadless(
   input: AgentSendInput,
   callbacks: HeadlessAgentRunOptions,
 ): Promise<void> {
-  if (callbacks.trustedRuntimeContext && callbacks.source !== 'chatroom') {
-    throw new Error('trustedRuntimeContext 仅允许聊天室来源使用')
-  }
-  if (callbacks.source === 'chatroom' && !callbacks.trustedRuntimeContext) {
-    throw new Error('聊天室运行缺少可信 runtimeContext')
-  }
   // 委派子会话优先回到父会话所在 renderer，外部无界面运行才回退任意主窗口。
   const wc = getHeadlessAgentRunTarget(
     sessionWebContents,
@@ -330,22 +318,16 @@ export async function runAgentHeadless(
   const runInput: AgentSendInput = input.startedAt != null ? input : { ...input, startedAt: Date.now() }
   const startedAt = runInput.startedAt!
   const owner: HeadlessRunOwner = { sessionId: runInput.sessionId, token: Symbol('headless-agent-run'), signal: callbacks.signal, claimed: false }
-  const trustedRunId = callbacks.trustedRunId ?? randomUUID()
+  const trustedRunId = randomUUID()
   const releaseTrustedRun = registerTrustedAgentRpcRun(runInput.sessionId, trustedRunId, callbacks.signal)
   let webContentsOwner: symbol | undefined
 
   let releaseTrustedSource: (() => void) | undefined
-  let releaseTrustedRuntimeContext: (() => void) | undefined
   let errorSent = false
   let completeSent = false
   try {
-    // 两个 trusted registry 必须在同一事务边界内建立；runtime context 校验失败时
-    // 不能留下可被后续同 session 调用读取的 source 标签。
     releaseTrustedSource = callbacks.source
       ? registerTrustedAgentExternalSource(runInput.sessionId, callbacks.source, { runId: trustedRunId, signal: callbacks.signal })
-      : undefined
-    releaseTrustedRuntimeContext = callbacks.trustedRuntimeContext
-      ? registerTrustedAgentRuntimeContext(runInput.sessionId, callbacks.trustedRuntimeContext, { runId: trustedRunId, signal: callbacks.signal, isCurrent: callbacks.isTrustedRunCurrent })
       : undefined
     await agentRpcGateway.run(runInput, {
       onEvent: ({ sessionId, payload }) => { if (isHeadlessRunOwnerCurrent(owner)) eventBus.emit(sessionId, payload) },
@@ -432,7 +414,6 @@ export async function runAgentHeadless(
   } finally {
     releaseTrustedRun()
     releaseTrustedSource?.()
-    releaseTrustedRuntimeContext?.()
     if (headlessRunOwners.get(runInput.sessionId) === owner) headlessRunOwners.delete(runInput.sessionId)
     releaseWebContents(runInput.sessionId, webContentsOwner)
   }
@@ -449,8 +430,8 @@ export async function generateAgentTitle(input: AgentGenerateTitleInput): Promis
 /**
  * 中止指定会话的 Agent 执行
  */
-export async function stopAgent(sessionId: string, trustedRunId?: string): Promise<void> {
-  await agentRpcGateway.stop(sessionId, trustedRunId)
+export async function stopAgent(sessionId: string): Promise<void> {
+  await agentRpcGateway.stop(sessionId)
 }
 
 setHeadlessAgentRunner(runAgentHeadless)

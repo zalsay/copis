@@ -5,12 +5,7 @@ import { getDshCordisStatus, reloadDshCordisPlugins } from '../lib/dsh-cordis-se
 import { getWorkingModelCatalogAccess } from '../lib/working-model-catalog-access'
 import { getWebSyncCoordinator } from '../lib/web-sync-coordinator'
 
-export interface WorkingAccountIpcOptions {
-  stopChatRoomAgents?: (reason: 'logout') => Promise<void>
-  resumeChatRoomAgentsAfterAuthentication?: () => Promise<void>
-}
-
-export function registerWorkingAccountIpcHandlers(options: WorkingAccountIpcOptions = {}): void {
+export function registerWorkingAccountIpcHandlers(): void {
   const webSyncCoordinator = getWebSyncCoordinator()
   const client = getWorkingApiClient()
   const cachedUser = client.getCachedUser()
@@ -48,7 +43,6 @@ export function registerWorkingAccountIpcHandlers(options: WorkingAccountIpcOpti
     const authGeneration = webSyncCoordinator.getAuthGeneration()
     const state = await client.getAuthState()
     webSyncCoordinator.setAuthStateIfCurrent({ ...state, backendUrl: client.baseUrl }, authGeneration)
-    await options.resumeChatRoomAgentsAfterAuthentication?.()
     if (getDshCordisStatus().running) await reloadDshCordisPlugins({ startIfNeeded: false })
     return {
       ...state,
@@ -65,7 +59,6 @@ export function registerWorkingAccountIpcHandlers(options: WorkingAccountIpcOpti
       user: result.user ?? client.getCachedUser(),
       backendUrl: client.baseUrl,
     }, authGeneration)
-    await options.resumeChatRoomAgentsAfterAuthentication?.()
     if (getDshCordisStatus().running) await reloadDshCordisPlugins({ startIfNeeded: false })
     return {
       authenticated: true,
@@ -105,7 +98,6 @@ export function registerWorkingAccountIpcHandlers(options: WorkingAccountIpcOpti
   ipcMain.handle(WORKING_IPC_CHANNELS.LOGOUT, async () => {
     const client = getWorkingApiClient()
     const authGeneration = webSyncCoordinator.getAuthGeneration()
-    if (options.stopChatRoomAgents) await options.stopChatRoomAgents('logout')
     if (webSyncCoordinator.getAuthGeneration() !== authGeneration) {
       const currentUser = client.getCachedUser()
       return { authenticated: currentUser !== null, user: currentUser, backendUrl: client.baseUrl }

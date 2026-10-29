@@ -17,7 +17,6 @@ describe('chrome-desktop-capability matrix and lifecycle', () => {
       sessionId: 's-valid',
       platform: 'darwin',
       triggeredBy: 'user' as const,
-      isChatroomRun: false,
       isAutomationRun: false,
       isDelegationRun: false,
       isRemoteBotRun: false,
@@ -39,10 +38,6 @@ describe('chrome-desktop-capability matrix and lifecycle', () => {
       expect(isEligibleForChromeDesktopControl({ ...baseValid, triggeredBy: 'automation' as any })).toBe(false)
       expect(isEligibleForChromeDesktopControl({ ...baseValid, triggeredBy: 'cron' as any })).toBe(false)
       expect(isEligibleForChromeDesktopControl({ ...baseValid, triggeredBy: 'system' as any })).toBe(false)
-    })
-
-    it('rejects chatroom run', () => {
-      expect(isEligibleForChromeDesktopControl({ ...baseValid, isChatroomRun: true })).toBe(false)
     })
 
     it('rejects automation run', () => {

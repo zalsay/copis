@@ -21,10 +21,6 @@ mock.module('./config-paths', () => ({
 const {
   getOrCreateClientDeviceId,
   getClientDevicePath,
-  getChatRoomsRootPath,
-  getChatRoomPath,
-  getChatRoomConfigPath,
-  getChatRoomAgentSessionMessagesPath,
   __clientDeviceIdTestHooks,
 } = await import('./client-device-id')
 
@@ -41,7 +37,7 @@ function writeLegacyLockOwner(lockPath: string, owner: { token: string; pid: num
   writeFileSync(join(lockPath, 'owner.json'), JSON.stringify({ version: 1, ...owner }))
 }
 
-describe('客户端设备 ID 与聊天室路径', () => {
+describe('客户端设备 ID', () => {
   beforeEach(() => {
     rmSync(testDir, { recursive: true, force: true })
     mkdirSync(testDir, { recursive: true })
@@ -65,7 +61,6 @@ describe('客户端设备 ID 与聊天室路径', () => {
   })
 
   test('client-device.json 优先于 web-sync-state.json 且权限收紧', () => {
-    mkdirSync(join(testDir, 'agent-workspaces', 'chatrooms'), { recursive: true })
     writeFileSync(webSyncPath, JSON.stringify({ deviceId: LEGACY_DEVICE_ID }))
     writeFileSync(getClientDevicePath(), JSON.stringify({ version: 1, deviceId: LEGACY_DEVICE_ID, createdAt: Date.now() }))
 
@@ -235,23 +230,6 @@ describe('客户端设备 ID 与聊天室路径', () => {
     expect(__clientDeviceIdTestHooks.removeIfOwner(newHandle!)).toBe(true)
   })
 
-  test('工作区或聊天室根是符号链接时路径 helper 直接拒绝', () => {
-    if (process.platform === 'win32') return
-    const workspacesPath = actualConfigPaths.getAgentWorkspacesDir()
-    const externalPath = join(testDir, 'external-workspaces')
-    mkdirSync(externalPath, { recursive: true })
-    rmSync(workspacesPath, { recursive: true, force: true })
-    symlinkSync(externalPath, workspacesPath)
-    expect(() => getChatRoomsRootPath()).toThrow('Agent 工作区路径不是目录')
-
-    rmSync(workspacesPath, { force: true })
-    mkdirSync(workspacesPath, { recursive: true })
-    const externalRoomsPath = join(testDir, 'external-chatrooms')
-    mkdirSync(externalRoomsPath, { recursive: true })
-    symlinkSync(externalRoomsPath, join(workspacesPath, 'chatrooms'))
-    expect(() => getChatRoomsRootPath()).toThrow('聊天室根路径不是目录')
-  })
-
   test('client-device.json 缺少或错误 createdAt 时视为坏文件并重建', () => {
     for (const file of [
       { version: 1, deviceId: 'missing-created-at' },
@@ -296,17 +274,4 @@ describe('客户端设备 ID 与聊天室路径', () => {
     expect(new Set(ids).size).toBe(1)
   })
 
-  test('聊天室路径校验组件并拒绝目录穿越', () => {
-    const roomsRoot = getChatRoomsRootPath()
-    expect(getChatRoomPath('room-1')).toBe(join(roomsRoot, 'room-1'))
-    expect(getChatRoomConfigPath('room-1')).toBe(join(roomsRoot, 'room-1', 'room.json'))
-    expect(getChatRoomAgentSessionMessagesPath('room-1', 'agent-a')).toBe(
-      join(roomsRoot, 'room-1', 'agents', 'agent-a', 'sessions', 'messages.jsonl'),
-    )
-    expect(() => getChatRoomPath('../escape')).toThrow('roomId 参数不正确')
-    expect(() => getChatRoomPath('room/escape')).toThrow('roomId 参数不正确')
-    expect(() => getChatRoomAgentSessionMessagesPath('room-1', '../escape')).toThrow('roomAgentId 参数不正确')
-    expect(getChatRoomPath('room-1').startsWith(roomsRoot)).toBe(true)
-    expect(existsSync(roomsRoot)).toBe(true)
-  })
 })

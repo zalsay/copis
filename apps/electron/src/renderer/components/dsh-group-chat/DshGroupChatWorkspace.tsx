@@ -19,6 +19,14 @@ import {
   Smile,
   ArrowDown,
   AtSign,
+  Search,
+  AlertCircle,
+  Zap,
+  ArrowUp,
+  Bell,
+  ChevronDown,
+  Plus,
+  Cpu,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -57,7 +65,7 @@ function renderMessageContent(text: string, agents?: { name: string }[]) {
         return (
           <span
             key={i}
-            className="inline-flex items-center font-semibold text-primary bg-primary/10 rounded px-1.5 py-0.2 mx-0.5 text-[11px]"
+            className="inline-flex items-center font-medium text-zinc-200 bg-white/[0.1] border border-white/[0.08] rounded px-1.5 py-0.2 mx-0.5 text-[11px]"
           >
             {part}
           </span>
@@ -342,78 +350,107 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
 
   if (!activeGroupId || !groupDetail) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground p-8 text-xs select-none">
-        <UsersRound className="w-12 h-12 opacity-30 mb-3" />
-        <p>请在左侧选择一个群聊开始协同</p>
+      <div className="flex-1 flex flex-col items-center justify-center text-zinc-500 bg-[#0c0d10] p-8 text-xs select-none">
+        <UsersRound className="w-10 h-10 opacity-20 mb-3" />
+        <p className="tracking-wide">请在左侧选择一个群聊开始协同</p>
       </div>
     )
   }
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-background relative overflow-hidden">
-      {/* 顶部 Header */}
-      <div className="h-13 border-b border-border/60 px-4 flex items-center justify-between shrink-0 bg-background/80 backdrop-blur-xs select-none">
-        <div className="flex items-center gap-3 min-w-0">
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold text-foreground truncate">{groupDetail.name}</h2>
-              <span className="text-[10px] px-1.5 py-0.2 rounded bg-muted text-muted-foreground font-medium">
-                {groupDetail.agents.length} Agent 协作
-              </span>
-            </div>
-            {groupDetail.description && (
-              <p className="text-[11px] text-muted-foreground truncate max-w-md mt-0.5">
-                {groupDetail.description}
-              </p>
-            )}
-          </div>
+    <div className="flex-1 flex flex-col h-full bg-[#0c0d10] text-zinc-100 relative overflow-hidden select-none">
+      {/* 顶部 Header（WorkBuddy 极简导航栏） */}
+      <div className="h-12 border-b border-white/[0.06] px-4 flex items-center justify-between shrink-0 bg-[#0c0d10]/90 backdrop-blur-md z-10">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <h2 className="text-sm font-semibold text-white/95 truncate tracking-tight">{groupDetail.name}</h2>
+
+          {/* Agent 协作成员与模型配置入口 */}
+          <button
+            type="button"
+            onClick={() => setActiveDrawer(activeDrawer === 'agents' ? 'none' : 'agents')}
+            className="text-[11px] px-2.5 py-0.5 rounded-full bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.08] text-zinc-300 hover:text-white font-medium transition-all cursor-pointer flex items-center gap-1.5"
+            title="点击配置智能体与推理模型"
+          >
+            <Bot className="w-3 h-3 text-zinc-300" />
+            <span>{groupDetail.agents.length} Agent 协作</span>
+          </button>
         </div>
 
-        {/* 顶部操作工具栏 */}
-        <div className="flex items-center gap-1.5 shrink-0">
+        {/* 顶部操作工具栏（WorkBuddy 极简浅灰图标按钮） */}
+        <div className="flex items-center gap-1 shrink-0">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 p-0 text-zinc-400 hover:text-white hover:bg-white/[0.06] rounded-md"
+            title="搜索群聊内容"
+          >
+            <Search className="w-3.5 h-3.5" />
+          </Button>
+
           <Button
             variant={activeDrawer === 'tasks' ? 'secondary' : 'ghost'}
             size="sm"
-            className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+            className={`h-7 px-2 text-xs rounded-md gap-1.5 transition-all ${
+              activeDrawer === 'tasks'
+                ? 'bg-white/[0.12] text-white border border-white/[0.1] shadow-xs'
+                : 'text-zinc-400 hover:text-white hover:bg-white/[0.06] border border-transparent'
+            }`}
             onClick={() => setActiveDrawer(activeDrawer === 'tasks' ? 'none' : 'tasks')}
             title="任务看板"
           >
-            <Kanban className="w-3.5 h-3.5 text-primary" />
-            <span>任务看板</span>
+            <Kanban className="w-3.5 h-3.5 text-zinc-300" />
+            <span className="hidden sm:inline">任务看板</span>
           </Button>
 
           <Button
             variant={activeDrawer === 'invocation' ? 'secondary' : 'ghost'}
             size="sm"
-            className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+            className={`h-7 px-2 text-xs rounded-md gap-1.5 transition-all ${
+              activeDrawer === 'invocation'
+                ? 'bg-white/[0.12] text-white border border-white/[0.1] shadow-xs'
+                : 'text-zinc-400 hover:text-white hover:bg-white/[0.06] border border-transparent'
+            }`}
             onClick={() => setActiveDrawer(activeDrawer === 'invocation' ? 'none' : 'invocation')}
             title="执行轨迹下钻"
           >
-            <Activity className="w-3.5 h-3.5 text-amber-500" />
-            <span>执行轨迹</span>
+            <Activity className="w-3.5 h-3.5 text-zinc-300" />
+            <span className="hidden sm:inline">执行轨迹</span>
+          </Button>
+
+          <Button
+            variant={activeDrawer === 'agents' ? 'secondary' : 'ghost'}
+            size="sm"
+            className={`h-7 w-7 p-0 text-xs rounded-md transition-all ${
+              activeDrawer === 'agents'
+                ? 'bg-white/[0.12] text-white border border-white/[0.1] shadow-xs'
+                : 'text-zinc-400 hover:text-white hover:bg-white/[0.06] border border-transparent'
+            }`}
+            onClick={() => setActiveDrawer(activeDrawer === 'agents' ? 'none' : 'agents')}
+            title="智能体成员与模型配置"
+          >
+            <Bot className="w-3.5 h-3.5 text-zinc-300" />
           </Button>
 
           {onClose && (
             <Button
               variant="ghost"
               size="sm"
-              className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground ml-1"
+              className="h-7 w-7 p-0 text-zinc-400 hover:text-white hover:bg-white/[0.06] rounded-md ml-1"
               onClick={onClose}
               title="关闭子视图"
             >
-              <X className="w-4 h-4" />
+              <X className="w-3.5 h-3.5" />
             </Button>
           )}
         </div>
       </div>
 
       {/* 消息流主区域 */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
         {messages.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-muted-foreground text-xs gap-2 py-12">
-            <Sparkles className="w-8 h-8 text-primary/40 animate-pulse" />
-            <p className="font-medium text-foreground/80">协同空间已就绪</p>
-            <p className="text-[11px]">发送消息并 @ 架构总监或专业 Agent 开始分工落地</p>
+          /* WorkBuddy 风格纯粹极简空状态：居中无冗杂，极度舒适沉浸 */
+          <div className="h-full flex flex-col items-center justify-center text-zinc-500 py-16 select-none">
+            <span className="text-sm font-normal text-zinc-500/80 tracking-wide">暂无对话记录</span>
           </div>
         ) : (
           messages.map((msg) => {
@@ -422,48 +459,71 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
             return (
               <div
                 key={msg.id}
-                className={`group flex items-start gap-2.5 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}
+                className={`group flex items-start gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}
               >
                 {/* 头像 */}
                 <div
-                  className={`w-8 h-8 rounded-lg flex items-center justify-center font-medium text-xs shrink-0 ${
-                    isUser ? 'bg-primary text-primary-foreground' : 'bg-muted border border-border/80 text-foreground'
+                  className={`w-7 h-7 rounded-full flex items-center justify-center font-medium text-xs shrink-0 ${
+                    isUser
+                      ? 'bg-white/[0.12] text-zinc-100 border border-white/[0.14] font-medium shadow-xs'
+                      : 'bg-white/[0.08] text-zinc-300 border border-white/[0.08]'
                   }`}
                 >
-                  {isUser ? '我' : <Bot className="w-4 h-4" />}
+                  {isUser ? '我' : <Bot className="w-3.5 h-3.5 text-zinc-300" />}
                 </div>
 
                 {/* 气泡主体 */}
-                <div className={`flex flex-col max-w-[75%] ${isUser ? 'items-end' : 'items-start'}`}>
+                <div className={`flex flex-col max-w-[76%] ${isUser ? 'items-end' : 'items-start'}`}>
                   {/* 发送者名称与角色 */}
-                  <div className="flex items-center gap-1.5 mb-1 px-1 text-[11px] text-muted-foreground">
-                    <span className="font-medium text-foreground/80">
+                  <div className="flex items-center gap-2 mb-1 px-1 text-[11px] text-zinc-400">
+                    <span className="font-medium text-zinc-200">
                       {isUser ? '我' : msg.agentName || 'Agent'}
                     </span>
-                    <span className="text-[10px]">
+                    {!isUser && (() => {
+                      const matchedAgent = groupDetail.agents.find(
+                        (a) => a.agentId === msg.agentId || a.name === msg.agentName,
+                      )
+                      const modelText =
+                        (msg.metadata?.modelName as string | undefined) ||
+                        matchedAgent?.modelName ||
+                        matchedAgent?.modelId ||
+                        '默认模型'
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => setActiveDrawer('agents')}
+                          className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-full bg-white/[0.05] hover:bg-white/10 border border-white/[0.08] text-[10px] font-mono text-zinc-400 hover:text-zinc-200 transition-all cursor-pointer"
+                          title="点击在右侧配置群智能体模型"
+                        >
+                          <Cpu className="w-2.5 h-2.5 text-zinc-400 shrink-0" />
+                          <span className="truncate max-w-[120px]">{modelText}</span>
+                        </button>
+                      )
+                    })()}
+                    <span className="text-[10px] text-zinc-500 font-mono">
                       {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>
                   </div>
 
                   {/* 引用卡片预览 */}
                   {msg.quotes && msg.quotes.length > 0 && (
-                    <div className="mb-1.5 p-2 rounded-lg bg-muted/60 border border-border/60 text-xs text-muted-foreground flex items-start gap-2 w-full">
-                      <Quote className="w-3.5 h-3.5 shrink-0 opacity-60 mt-0.5" />
+                    <div className="mb-1.5 p-2 rounded-lg bg-white/[0.03] border border-white/[0.08] text-xs text-zinc-400 flex items-start gap-2 w-full">
+                      <Quote className="w-3 h-3 shrink-0 opacity-60 mt-0.5 text-zinc-500" />
                       <div className="min-w-0">
-                        <span className="font-medium text-foreground/80 block text-[11px]">
+                        <span className="font-medium text-zinc-300 block text-[11px]">
                           {msg.quotes[0]?.authorName}
                         </span>
-                        <p className="line-clamp-2 text-[11px] mt-0.5">{msg.quotes[0]?.text}</p>
+                        <p className="line-clamp-2 text-[11px] mt-0.5 text-zinc-400">{msg.quotes[0]?.text}</p>
                       </div>
                     </div>
                   )}
 
                   {/* 消息内容气泡 */}
                   <div
-                    className={`relative p-3 rounded-2xl text-xs leading-relaxed break-words shadow-xs select-text ${
+                    className={`relative p-3 rounded-2xl text-[13px] leading-relaxed break-words select-text ${
                       isUser
-                        ? 'bg-primary text-primary-foreground rounded-tr-xs'
-                        : 'bg-card border border-border/70 text-card-foreground rounded-tl-xs'
+                        ? 'bg-[#27282e] text-zinc-100 border border-white/[0.1] rounded-tr-xs shadow-xs'
+                        : 'bg-[#181a20] border border-white/[0.08] text-zinc-100 rounded-tl-xs shadow-md'
                     }`}
                   >
                     <p className="whitespace-pre-wrap">{renderMessageContent(msg.text, groupDetail?.agents)}</p>
@@ -477,7 +537,7 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
                           text: msg.text,
                         })
                       }
-                      className="absolute -top-3 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-background border border-border/80 shadow-md p-1 rounded-md text-muted-foreground hover:text-foreground text-[10px] flex items-center gap-1 cursor-pointer"
+                      className="absolute -top-3 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-[#22242b] border border-white/10 shadow-lg p-1 rounded-md text-zinc-400 hover:text-white text-[10px] flex items-center gap-1 cursor-pointer"
                       title="引用这条消息"
                     >
                       <Quote className="w-3 h-3" />
@@ -491,45 +551,45 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
         <div ref={messagesEndRef} />
       </div>
 
-      {/* 底部输入框与操作栏 */}
-      <div className="p-3 border-t border-border/60 bg-background/90 backdrop-blur-xs flex flex-col gap-2 shrink-0">
+      {/* 底部悬浮输入区域（WorkBuddy 签名级 Floating Input Capsule） */}
+      <div className="p-4 pt-1 w-full max-w-4xl mx-auto flex flex-col items-center shrink-0 relative">
         {/* 引用暂存回显条 */}
         {pendingQuote && (
-          <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-muted/60 border border-border/60 text-xs text-muted-foreground animate-in fade-in duration-100">
+          <div className="w-full mb-2 flex items-center justify-between px-3 py-1.5 rounded-xl bg-white/[0.05] border border-white/[0.08] text-xs text-zinc-300 backdrop-blur-md animate-in fade-in duration-100">
             <div className="flex items-center gap-2 truncate">
-              <CornerDownRight className="w-3.5 h-3.5 text-primary shrink-0" />
-              <span className="font-medium text-foreground/90 shrink-0">引用 {pendingQuote.authorName}:</span>
-              <span className="truncate text-[11px]">{pendingQuote.text}</span>
+              <CornerDownRight className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+              <span className="font-medium text-white shrink-0">引用 {pendingQuote.authorName}:</span>
+              <span className="truncate text-[11px] text-zinc-400">{pendingQuote.text}</span>
             </div>
             <button
               onClick={() => setPendingQuote(null)}
-              className="text-muted-foreground hover:text-foreground ml-2"
+              className="text-zinc-500 hover:text-zinc-200 ml-2 cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
 
-        {/* 消息输入区域与 Mention 浮层 */}
-        <div className="relative flex flex-col bg-muted/30 border border-border/60 rounded-xl focus-within:border-primary/50 focus-within:ring-1 focus-within:ring-primary/20 transition-all">
+        {/* 悬浮输入胶囊本体 */}
+        <div className="w-full relative flex flex-col rounded-2xl bg-[#181a20]/95 border border-white/10 shadow-[0_16px_48px_-8px_rgba(0,0,0,0.6),inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-xl transition-all focus-within:border-white/20 focus-within:ring-1 focus-within:ring-white/10">
           {/* Mention 浮动候选菜单 */}
           {mentionSuggestions.length > 0 && (
             <div
               ref={suggestionsListRef}
-              className="absolute bottom-full left-0 mb-2 w-80 max-h-64 rounded-xl border border-border/80 bg-popover/95 text-popover-foreground shadow-xl backdrop-blur-md z-50 p-1 flex flex-col animate-in fade-in slide-in-from-bottom-2 duration-150"
+              className="absolute bottom-full left-0 mb-3 w-80 max-h-64 rounded-xl border border-white/10 bg-[#1e2027]/98 text-zinc-200 shadow-2xl backdrop-blur-xl z-50 p-1 flex flex-col animate-in fade-in slide-in-from-bottom-2 duration-150"
               role="listbox"
               aria-label="提及智能体"
             >
-              <div className="px-2.5 py-1.5 text-[10px] font-medium text-muted-foreground flex items-center justify-between border-b border-border/40 mb-1">
-                <span className="flex items-center gap-1.5 font-semibold text-foreground/80">
-                  <AtSign className="w-3.5 h-3.5 text-primary" />
+              <div className="px-2.5 py-1.5 text-[10px] font-medium text-zinc-400 flex items-center justify-between border-b border-white/[0.06] mb-1">
+                <span className="flex items-center gap-1.5 font-semibold text-white/90">
+                  <AtSign className="w-3.5 h-3.5 text-zinc-300" />
                   提及智能体或角色
                 </span>
-                <span className="text-[9px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground">
+                <span className="text-[9px] bg-white/[0.06] px-1.5 py-0.5 rounded text-zinc-400 font-mono">
                   ↑↓ 切换 · 回车选中
                 </span>
               </div>
-              <div className="flex flex-col gap-0.5 max-h-52 overflow-y-auto pr-0.5">
+              <div className="flex flex-col gap-0.5 max-h-52 overflow-y-auto pr-0.5 scrollbar-thin">
                 {mentionSuggestions.map((candidate, idx) => {
                   const isSelected = activeMentionIndex === idx
                   return (
@@ -545,35 +605,35 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
                       onMouseEnter={() => setActiveMentionIndex(idx)}
                       className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-colors flex items-center gap-2.5 cursor-pointer ${
                         isSelected
-                          ? 'bg-primary/10 text-primary font-medium'
-                          : 'hover:bg-muted/60 text-foreground'
+                          ? 'bg-white/[0.12] text-white font-medium'
+                          : 'hover:bg-white/[0.05] text-zinc-300'
                       }`}
                     >
-                      <div className="w-6 h-6 rounded-md bg-muted/80 flex items-center justify-center shrink-0">
+                      <div className="w-6 h-6 rounded-md bg-white/[0.08] flex items-center justify-center shrink-0">
                         {candidate.type === 'all' ? (
-                          <UsersRound className="w-3.5 h-3.5 text-indigo-500" />
+                          <UsersRound className="w-3.5 h-3.5 text-zinc-300" />
                         ) : candidate.isLeader ? (
-                          <Crown className="w-3.5 h-3.5 text-amber-500" />
+                          <Crown className="w-3.5 h-3.5 text-zinc-200" />
                         ) : (
-                          <Bot className="w-3.5 h-3.5 text-primary" />
+                          <Bot className="w-3.5 h-3.5 text-zinc-300" />
                         )}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5">
                           <span className="truncate text-xs font-medium">{candidate.name}</span>
                           {candidate.isLeader && (
-                            <span className="text-[9px] px-1 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 font-medium shrink-0">
+                            <span className="text-[9px] px-1 py-0.2 rounded bg-white/[0.08] text-zinc-300 font-medium shrink-0">
                               主控
                             </span>
                           )}
                           {candidate.type === 'all' && (
-                            <span className="text-[9px] px-1 py-0.2 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 font-medium shrink-0">
+                            <span className="text-[9px] px-1 py-0.2 rounded bg-white/[0.08] text-zinc-300 font-medium shrink-0">
                               全员
                             </span>
                           )}
                         </div>
                         {candidate.responsibility && (
-                          <p className="text-[10px] text-muted-foreground truncate max-w-full">
+                          <p className="text-[10px] text-zinc-400 truncate max-w-full">
                             {candidate.responsibility}
                           </p>
                         )}
@@ -585,6 +645,7 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
             </div>
           )}
 
+          {/* 文本输入框（带 WorkBuddy 专属 Placeholder） */}
           <Textarea
             ref={textareaRef}
             value={inputText}
@@ -598,43 +659,83 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
             onKeyDown={handleKeyDown}
             onCompositionStart={() => setIsComposing(true)}
             onCompositionEnd={() => setIsComposing(false)}
-            placeholder="输入消息，输入 @ 提及智能体进行委派... (Enter 发送，Shift+Enter 换行)"
+            placeholder="今天帮你想些什么？ @ 添加上下文，/调用技能与指令"
             rows={2}
-            className="border-0 focus-visible:ring-0 p-2.5 resize-none text-xs bg-transparent min-h-[48px] max-h-[140px]"
+            className="border-0 focus-visible:ring-0 px-3.5 pt-3 pb-1 resize-none text-[13px] bg-transparent text-zinc-100 placeholder:text-zinc-500 min-h-[50px] max-h-[140px]"
           />
 
-          <div className="flex items-center justify-between px-2 pb-2 pt-0.5 border-t border-border/30">
-            <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="sm"
+          {/* 胶囊底部操作栏 */}
+          <div className="flex items-center justify-between px-3 pb-2.5 pt-1 border-t border-white/[0.04]">
+            {/* 左侧：+ 附件按钮、(!) 允许完全访问 胶囊、@ 提及 */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="w-7 h-7 rounded-full bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.08] text-zinc-400 hover:text-white flex items-center justify-center transition-all cursor-pointer"
+                title="添加附件或文件"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+
+              <div
+                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-normal bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.08] text-zinc-300 hover:text-white cursor-pointer transition-all select-none"
+                title="创造模式完全访问权限"
+              >
+                <AlertCircle className="w-3 h-3 text-zinc-400" />
+                <span>允许完全访问</span>
+                <ChevronDown className="w-2.5 h-2.5 text-zinc-500" />
+              </div>
+
+              <button
                 type="button"
                 onClick={handleAtButtonClick}
-                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground rounded-lg gap-1"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.05] transition-all cursor-pointer"
                 title="提及智能体 (@)"
               >
-                <AtSign className="w-3.5 h-3.5 text-primary" />
-                <span className="text-[11px]">提及</span>
-              </Button>
+                <AtSign className="w-3 h-3 text-zinc-400" />
+                <span>提及</span>
+              </button>
             </div>
 
-            <div className="flex items-center gap-1.5 shrink-0">
-              <span className="text-[10px] text-muted-foreground mr-1 hidden sm:inline-block">
-                Enter 发送 · Shift+Enter 换行
-              </span>
-              <Button
-                size="sm"
+            {/* 右侧：⚡ 快速 胶囊、通知铃铛、圆形发送按钮 */}
+            <div className="flex items-center gap-2 shrink-0">
+              <div
+                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] text-zinc-300 bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] cursor-pointer transition-all"
+                title="切换执行模式 / 速度"
+              >
+                <Zap className="w-3 h-3 text-zinc-400" />
+                <span>快速</span>
+                <ChevronDown className="w-2.5 h-2.5 text-zinc-500" />
+              </div>
+
+              <button
+                type="button"
+                className="w-7 h-7 rounded-full flex items-center justify-center text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.05] transition-all cursor-pointer"
+                title="通知提醒"
+              >
+                <Bell className="w-3.5 h-3.5" />
+              </button>
+
+              <button
+                type="button"
                 disabled={!inputText.trim() || sending}
                 onClick={handleSend}
-                className="h-7 px-3 rounded-lg shrink-0 gap-1 text-xs"
+                className={`w-7 h-7 rounded-full flex items-center justify-center transition-all ${
+                  inputText.trim() && !sending
+                    ? 'bg-[#3f414a] hover:bg-[#4d505a] text-zinc-100 border border-white/[0.12] shadow-md cursor-pointer scale-105 active:scale-95'
+                    : 'bg-white/[0.06] text-zinc-600 border border-transparent cursor-not-allowed'
+                }`}
                 title="发送消息"
               >
-                <Send className="w-3.5 h-3.5" />
-                <span>发送</span>
-              </Button>
+                <ArrowUp className="w-3.5 h-3.5 stroke-[2.5]" />
+              </button>
             </div>
           </div>
         </div>
+
+        {/* 胶囊底部细字免责声明（WorkBuddy 标志性尾注） */}
+        <p className="text-[11px] text-zinc-500/70 text-center mt-2 font-normal select-none">
+          内容由 AI 生成，请核实重要信息
+        </p>
       </div>
     </div>
   )

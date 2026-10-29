@@ -46,3 +46,23 @@ ${bundledCode}
 
 writeFileSync(join(pluginDir, 'lib', 'client.js'), outputCode, 'utf8')
 console.log(`[build] Copis Creation Web 客户端插件已构建: ${pluginId}`)
+
+// 自动同步至当前用户本地活跃的 DSH profiles 目录（~/.copis 与 ~/.copis-dev）
+import { homedir } from 'node:os'
+import { copyFileSync, existsSync } from 'node:fs'
+
+const home = homedir()
+const targetProfileDirs = [
+  join(home, '.copis', 'dsh', 'profiles', 'copis', 'plugins', 'copis-creation-web'),
+  join(home, '.copis-dev', 'dsh', 'profiles', 'copis', 'plugins', 'copis-creation-web'),
+]
+
+for (const targetDir of targetProfileDirs) {
+  if (existsSync(dirname(targetDir))) {
+    mkdirSync(join(targetDir, 'lib'), { recursive: true })
+    writeFileSync(join(targetDir, 'lib', 'client.js'), outputCode, 'utf8')
+    copyFileSync(join(pluginDir, 'package.json'), join(targetDir, 'package.json'))
+    console.log(`[build] 已同步至运行时 Profile: ${targetDir}`)
+  }
+}
+

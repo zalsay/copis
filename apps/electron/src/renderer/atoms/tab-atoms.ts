@@ -44,8 +44,7 @@ export interface SessionTabItem {
   /** Chrome 桌面预览对应的控制会话 ID，仅 chrome-desktop Tab 使用。 */
   controlId?: string
 }
-export interface ChatRoomTabItem { id: string; type: 'chatroom'; roomId: string; title: string }
-export type TabItem = SessionTabItem | ChatRoomTabItem
+export type TabItem = SessionTabItem
 
 /** Tab 持久化数据（保存到 settings.json） */
 export interface PersistedTabState {
@@ -80,7 +79,6 @@ export interface OpenTabRestore {
 // ===== 核心 Atoms =====
 
 /** 顶部当前会话入口列表 */
-// 旧的 Agent 辅助函数仍消费三种会话 Tab；聊天室入口通过纯函数写入同一列表。
 export const tabsAtom = atom<TabItem[]>([])
 
 /** 当前激活的标签 ID */
@@ -128,7 +126,7 @@ export const activeTabAtom = atom<TabItem | null>((get) => {
  */
 export const activeSessionIdAtom = atom<string | null>((get) => {
   const activeTab = get(activeTabAtom)
-  return activeTab?.type === 'chatroom' ? null : activeTab?.sessionId ?? null
+  return activeTab?.sessionId ?? null
 })
 
 /** 标签是否在流式输出中（派生，从现有流式 atoms 计算） */
@@ -210,7 +208,6 @@ function getPersistentTabs(tabs: TabItem[]): TabItem[] {
   return tabs.filter((tab) => (
     tab.id !== LEGACY_SCRATCH_PAD_ID
     && tab.type !== 'tutorial'
-    && tab.type !== 'chatroom'
     && !isPreviewTab(tab)
     && !isChromeDesktopTab(tab)
   ))
@@ -241,7 +238,7 @@ export function getPersistableTabState(
   const persistentTabs = getPersistentTabs(tabs)
   const activeTab = activeTabId ? tabs.find((tab) => tab.id === activeTabId) : null
   const persistentActiveTabId = activeTab && isPreviewTab(activeTab)
-    ? persistentTabs.find((tab) => tab.type !== 'chatroom' && tab.sessionId === activeTab.sessionId && tab.type === 'agent')?.id
+    ? persistentTabs.find((tab) => tab.sessionId === activeTab.sessionId && tab.type === 'agent')?.id
       ?? persistentTabs.at(-1)?.id
       ?? null
     : activeTab && persistentTabs.some((tab) => tab.id === activeTab.id)
@@ -291,7 +288,7 @@ export function openTab(
     }
   }
 
-  const existingTab = tabs.find((t): t is SessionTabItem => t.type !== 'chatroom' && t.sessionId === item.sessionId && t.type === item.type)
+  const existingTab = tabs.find((t) => t.sessionId === item.sessionId && t.type === item.type)
   const sessionTab: TabItem = existingTab ?? {
     id: item.sessionId,
     type: item.type,
@@ -343,29 +340,6 @@ export function openChromeDesktopTab(
   }
 }
 
-/** 打开独立聊天室标签；不会替换现有 Agent、预览或教程标签。 */
-export function openChatRoomTab(
-  tabs: TabItem[],
-  room: { roomId: string; name: string },
-): { tabs: TabItem[]; activeTabId: string } {
-  const id = `chatroom:${room.roomId}`
-  const existing = tabs.find((tab): tab is ChatRoomTabItem => tab.type === 'chatroom' && tab.roomId === room.roomId)
-  if (existing) return { tabs, activeTabId: existing.id }
-  return {
-    tabs: [...tabs, { id, type: 'chatroom', roomId: room.roomId, title: room.name }],
-    activeTabId: id,
-  }
-}
-
-/** 删除聊天室后关闭其专属标签，并按关闭标签的相邻规则选择新的激活标签。 */
-export function closeChatRoomTab(
-  tabs: TabItem[],
-  activeTabId: string | null,
-  roomId: string,
-): { tabs: TabItem[]; activeTabId: string | null } {
-  return closeTab(tabs, activeTabId, `chatroom:${roomId}`)
-}
-
 /**
  * 从视图状态与预览文件 Map 构造 openTab 的 restore 提示。
  * 仅当该会话预览 Tab 处于打开状态且确实有预览文件时才返回提示，否则返回 undefined。
@@ -398,7 +372,7 @@ export function closeTab(
   const boundPreviewIds = isSessionTab(closingTab)
     ? new Set(
         tabs
-          .filter((tab) => tab.type !== 'chatroom' && tab.sessionId === closingTab.sessionId && (isPreviewTab(tab) || isChromeDesktopTab(tab)))
+          .filter((tab) => tab.sessionId === closingTab.sessionId && (isPreviewTab(tab) || isChromeDesktopTab(tab)))
           .map((tab) => tab.id),
       )
     : new Set<string>()

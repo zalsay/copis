@@ -12,6 +12,7 @@ describe('DSH Cordis 模式 IPC 与共享类型契约', () => {
     expect(DSH_CORDIS_IPC_CHANNELS.READ_FILE).toBe('dsh-cordis:read-file')
     expect(DSH_CORDIS_IPC_CHANNELS.SHOW_ITEM_IN_FOLDER).toBe('dsh-cordis:show-item-in-folder')
     expect(DSH_CORDIS_IPC_CHANNELS.LIST_DIRECTORY).toBe('dsh-cordis:list-directory')
+    expect(DSH_CORDIS_IPC_CHANNELS.GET_ACTIVE_WORKSPACE_PATH).toBe('dsh-cordis:get-active-workspace-path')
   })
 
   test('Given AgentRuntime 类型 When 声明运行时 Then 兼容 pi 与 dsh', () => {

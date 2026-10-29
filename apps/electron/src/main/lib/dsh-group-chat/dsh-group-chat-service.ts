@@ -34,6 +34,8 @@ import type {
   DshGroupChatAgent,
   DshGroupChatRealtimeEvent,
   DshCreationWorkspace,
+  DshUpdateAgentModelInput,
+  DshAvailableModelGroup,
 } from '@copis/shared'
 import type { ProviderHistoryMessage } from '@copis/core'
 
@@ -48,10 +50,12 @@ export interface DshGroupChatServiceDeps {
     signal?: AbortSignal
     onChunk: (text: string) => void
     onThinking?: (thoughts: string) => void
+    agent?: DshGroupChatAgent
   }) => Promise<string>
   getSettings?: () => any
   getHttpApiInternalToken?: () => string | null
   listCreationWorkspaces?: () => DshCreationWorkspace[]
+  getAvailableModels?: () => Promise<DshAvailableModelGroup[]>
 }
 
 export class DshGroupChatService {
@@ -60,10 +64,10 @@ export class DshGroupChatService {
   private eventListeners: Set<DshGroupChatEventListener> = new Set()
   private activeInvocations: Map<string, { abortController: AbortController }> = new Map()
 
-  constructor(storeOrDeps?: DshGroupChatStore | DshGroupChatServiceDeps) {
+  constructor(storeOrDeps?: DshGroupChatStore | DshGroupChatServiceDeps, maybeDeps?: DshGroupChatServiceDeps) {
     if (storeOrDeps instanceof DshGroupChatStore) {
       this.store = storeOrDeps
-      this.deps = {}
+      this.deps = maybeDeps || {}
     } else if (storeOrDeps && 'store' in storeOrDeps && storeOrDeps.store) {
       this.store = storeOrDeps.store
       this.deps = storeOrDeps
@@ -186,6 +190,9 @@ export class DshGroupChatService {
       responsibility: a.responsibility || '协作执行成员',
       isLeader: Boolean(a.isLeader),
       addedAt: now,
+      channelId: a.channelId,
+      modelId: a.modelId,
+      modelName: a.modelName,
     }))
 
     const group: DshGroupChatDetail = {
@@ -295,6 +302,75 @@ export class DshGroupChatService {
       this.broadcast({ type: 'group_updated', groupId, group })
     }
     return group
+  }
+
+  public updateAgentModel(input: DshUpdateAgentModelInput): DshGroupChatDetail | null {
+    const updated = this.store.updateAgentModel(input.groupId, input.agentId, {
+      channelId: input.channelId,
+      modelId: input.modelId,
+      modelName: input.modelName,
+    })
+    if (updated) {
+      this.broadcast({ type: 'group_updated', groupId: input.groupId, group: updated })
+    }
+    return updated
+  }
+
+  public async getAvailableModels(): Promise<DshAvailableModelGroup[]> {
+    if (this.deps.getAvailableModels) {
+      return this.deps.getAvailableModels()
+    }
+    try {
+      const { resolveDshUnifiedModelConfig } = await import('../dsh-model-config')
+      const unified = await resolveDshUnifiedModelConfig()
+      const result: DshAvailableModelGroup[] = []
+
+      if (unified.providerConfigs && unified.providerConfigs.length > 0) {
+        for (const p of unified.providerConfigs) {
+          if (p.models && p.models.length > 0) {
+            result.push({
+              channelId: p.providerRoute,
+              channelName: p.displayName,
+              models: p.models.map((m) => ({ id: m.id, name: m.name })),
+            })
+          }
+        }
+      }
+
+      if (result.length === 0 && unified.models && unified.models.length > 0) {
+        result.push({
+          channelId: unified.providerRoute,
+          channelName: unified.displayName,
+          models: unified.models.map((m) => ({ id: m.id, name: m.name })),
+        })
+      }
+
+      // 若未解析到任何可用模型分组，补充默认 DeepSeek 模型兜底，确保前端下拉框任何时刻都不为空
+      if (result.length === 0) {
+        result.push({
+          channelId: 'copis-working-deepseek',
+          channelName: 'DeepSeek',
+          models: [
+            { id: 'deepseek-v4-flash', name: '快速 (v4 Flash)' },
+            { id: 'deepseek-v4-pro', name: '专业 (v4 Pro)' },
+          ],
+        })
+      }
+
+      return result
+    } catch (err) {
+      console.warn('[DshGroupChatService] 获取模型列表失败，使用基础兜底:', err)
+      return [
+        {
+          channelId: 'copis-working-deepseek',
+          channelName: 'DeepSeek',
+          models: [
+            { id: 'deepseek-v4-flash', name: '快速 (v4 Flash)' },
+            { id: 'deepseek-v4-pro', name: '专业 (v4 Pro)' },
+          ],
+        },
+      ]
+    }
   }
 
   // ======================== 消息收发与未读管理 ========================
@@ -439,11 +515,15 @@ ${agent.isLeader ? '★ 你是当前群聊的主控 Leader，负责整体方案�
         signal,
         onChunk,
         onThinking,
+        agent: _agent,
       })
     }
 
     const { resolveDshUnifiedModelConfig } = await import('../dsh-model-config')
-    const config = await resolveDshUnifiedModelConfig()
+    const config = await resolveDshUnifiedModelConfig({
+      channelId: _agent.channelId,
+      modelId: _agent.modelId,
+    })
 
     let adapter: any
     if (config.protocol === 'openai-responses') {
@@ -607,6 +687,12 @@ ${agent.isLeader ? '★ 你是当前群聊的主控 Leader，负责整体方案�
           },
         ],
         mentions: [],
+        metadata: {
+          invocationId,
+          channelId: agent.channelId,
+          modelId: agent.modelId,
+          modelName: agent.modelName,
+        },
         createdAt: new Date().toISOString(),
       }
       const savedAgentMessage = this.store.appendMessage(group.id, agentMsg)
