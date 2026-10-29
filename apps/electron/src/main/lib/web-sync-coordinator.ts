@@ -38,10 +38,6 @@ import {
 
 export type WebSyncStateListener = (state: WebSyncState) => void
 
-const DEFAULT_DEBOUNCE_MS = 5000
-const DEFAULT_RETRY_MS = 30_000
-const DEFAULT_POLL_INTERVAL_MS = 15 * 60 * 1000
-
 interface PersistedWebSyncState extends WebSyncState {
   acknowledgedEntityFingerprints?: Record<string, string>
 }
@@ -225,10 +221,10 @@ export class WebSyncCoordinator {
     this.acknowledgedEntityFingerprints = {}
     this.loadActiveState()
 
-    this.unbindBookmarkListener = addBookmarkChangeListener(() => this.scheduleDebouncedSync())
-    this.unbindProfileListener = addPageProfileChangeListener(() => this.scheduleDebouncedSync())
+    this.unbindBookmarkListener = addBookmarkChangeListener(() => this.markLocalPendingChanges())
+    this.unbindProfileListener = addPageProfileChangeListener(() => this.markLocalPendingChanges())
 
-    if (options.autoStartInterval !== false) this.startPeriodicSync()
+    // 已关闭自动同步逻辑：不启动周期轮询与防抖后台网络同步
   }
 
   getState(): WebSyncState {
@@ -299,9 +295,7 @@ export class WebSyncCoordinator {
 
     this.persistState(this.state, this.acknowledgedEntityFingerprints)
     this.notifyStateChanged()
-    if (authState.authenticated && context.userId && (accountChanged || this.state.status === 'pending' || this.state.status === 'error')) {
-      this.scheduleSyncAttempt(this.state.status === 'error' && !accountChanged ? DEFAULT_RETRY_MS : 0)
-    }
+    // 已关闭自动同步逻辑：账号切换或登录时不自动发起网络同步请求，等待用户手动点击同步
   }
 
   private notifyStateChanged(): void {
@@ -398,17 +392,18 @@ export class WebSyncCoordinator {
     }, delayMs)
   }
 
-  /** 触发防抖增量同步调度。 */
-  scheduleDebouncedSync(delayMs = DEFAULT_DEBOUNCE_MS): void {
+  /** 标记本地待同步变更。因已关闭自动同步，仅持久化本地待同步状态并广播，不启动后台自动网络请求。 */
+  markLocalPendingChanges(): void {
     this.state.hasLocalChanges = true
     if (this.state.status !== 'syncing') this.state.status = 'pending'
     this.persistState(this.state, this.acknowledgedEntityFingerprints)
     this.notifyStateChanged()
     this.clearDebounceTimer()
-    this.debounceTimer = setTimeout(() => {
-      this.debounceTimer = null
-      void this.syncNow().catch(() => {})
-    }, delayMs)
+  }
+
+  /** 兼容方法：因已关闭自动同步，仅标记本地待同步状态，不启动防抖网络请求。 */
+  scheduleDebouncedSync(_delayMs?: number): void {
+    this.markLocalPendingChanges()
   }
 
   /** 立即执行一次同步；不同账号的在途请求彼此不阻塞。 */
@@ -546,7 +541,8 @@ export class WebSyncCoordinator {
       this.state = nextState
       this.notifyStateChanged()
 
-      if (pendingAfterSync || needsAnotherPage) this.scheduleSyncAttempt(0)
+      // 服务端若有未完成分页则继续拉取以完成当前同步；本地变更不自动触发网络请求
+      if (needsAnotherPage) this.scheduleSyncAttempt(0)
       return this.getState()
     } catch (error) {
       if (!this.isCurrentGeneration(generation)) return this.getState()
@@ -557,7 +553,7 @@ export class WebSyncCoordinator {
       this.state.lastSyncError = error instanceof Error ? error.message : String(error)
       this.persistState(this.state, acknowledgedBefore)
       this.notifyStateChanged()
-      this.scheduleSyncAttempt(DEFAULT_RETRY_MS)
+      // 已关闭自动同步逻辑：网络失败后不自动调度后台重试
       return this.getState()
     }
   }
@@ -569,12 +565,11 @@ export class WebSyncCoordinator {
     this.state.lastSyncError = error instanceof Error ? error.message : String(error)
     this.persistState(this.state, this.acknowledgedEntityFingerprints)
     this.notifyStateChanged()
-    this.scheduleSyncAttempt(DEFAULT_RETRY_MS)
+    // 已关闭自动同步逻辑：失败后不自动调度后台重试
   }
 
   private startPeriodicSync(): void {
-    if (this.pollIntervalTimer) return
-    this.pollIntervalTimer = setInterval(() => void this.syncNow().catch(() => {}), DEFAULT_POLL_INTERVAL_MS)
+    // 已关闭自动同步逻辑，不启动后台周期轮询定时器
   }
 
   destroy(): void {

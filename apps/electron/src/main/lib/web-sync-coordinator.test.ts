@@ -347,4 +347,40 @@ describe('WebSyncCoordinator 增量同步调度', () => {
 
     coordinator.destroy()
   })
+
+  test('Given 关闭自动同步逻辑 When 本地书签变更或网络失败 Then 仅记录状态且不启动后台自动同步或重试定时器', async () => {
+    accountStorage.setWebSyncAccountContext(accountStorage.createWebSyncAccountContext(true, { id: 'manual-user' }, 'https://working.example'))
+    let syncCalledCount = 0
+    const mockClient = {
+      baseUrl: 'https://working.example',
+      getAuthState: async () => ({ authenticated: true, user: { id: 'manual-user' } }),
+      syncBrowserData: async () => {
+        syncCalledCount += 1
+        throw new Error('网络异常')
+      },
+    } as any
+
+    const coordinator = new WebSyncCoordinator({ apiClient: mockClient })
+
+    // 本地书签变更触发监听
+    bookmarkService.saveWebBookmark({ title: '新手动书签', url: 'https://manual.example.com' })
+
+    expect(coordinator.getState().hasLocalChanges).toBe(true)
+    expect(coordinator.getState().status).toBe('pending')
+
+    // 等待 100ms，确认没有启动任何防抖自动同步
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(syncCalledCount).toBe(0)
+
+    // 手动调用 syncNow 触发同步
+    const errorState = await coordinator.syncNow()
+    expect(syncCalledCount).toBe(1)
+    expect(errorState.status).toBe('error')
+
+    // 失败后等待，确认不会自动后台重试
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(syncCalledCount).toBe(1)
+
+    coordinator.destroy()
+  })
 })
