@@ -90,3 +90,13 @@ export {
   workingModelCatalogToOptions,
 } from './working-model-catalog'
 export { isAppConnectorSession } from './agent-connector'
+export {
+  DEFAULT_WEB_TAB_URL,
+  DEFAULT_WEB_SEARCH_URL,
+  isAllowedWebUrl,
+  isLocalWebAddress,
+  isUnsupportedScheme,
+  shouldAutocompleteWebUrl,
+  autocompleteWebAddress,
+  normalizeWebTabUrl,
+} from './web-url'

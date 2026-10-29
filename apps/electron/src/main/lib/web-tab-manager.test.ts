@@ -197,6 +197,7 @@ const {
   subscribeWorkflowWebTabOpened,
   updateWebTabBounds,
   navigateWebTab,
+  normalizeWebTabUrl,
 } = await import('./web-tab-manager')
 
 function setupHost(): FakeHostWindow {
@@ -819,4 +820,36 @@ describe('网页页签 CDP 会话路由与按需 Lease 生命周期', () => {
     expect(view2.visible).toBe(true)
     expect(view2.bounds).toEqual({ x: 110, y: 70, width: 1400, height: 900 })
   })
+
+  describe('网页地址栏 URL 规范化与协议补齐', () => {
+    test('Given 用户输入域名 When 规范化 Then 自动补齐 https:// 前缀且不被错误拦截', () => {
+      expect(normalizeWebTabUrl('baidu.com')).toBe('https://baidu.com')
+      expect(normalizeWebTabUrl('www.baidu.com')).toBe('https://www.baidu.com')
+      expect(normalizeWebTabUrl('github.com/copis')).toBe('https://github.com/copis')
+      expect(normalizeWebTabUrl('a.co')).toBe('https://a.co')
+    })
+
+    test('Given 用户输入带端口的域名 When 规范化 Then 补齐 https:// 且不被当作未知协议拦截', () => {
+      expect(normalizeWebTabUrl('example.com:8080')).toBe('https://example.com:8080')
+      expect(normalizeWebTabUrl('dev.company.org:8443/api')).toBe('https://dev.company.org:8443/api')
+    })
+
+    test('Given 用户输入本地服务 When 规范化 Then 自动补齐 http:// 且不被错误拦截', () => {
+      expect(normalizeWebTabUrl('localhost:3000')).toBe('http://localhost:3000')
+      expect(normalizeWebTabUrl('localhost:3000/app')).toBe('http://localhost:3000/app')
+      expect(normalizeWebTabUrl('127.0.0.1:8080')).toBe('http://127.0.0.1:8080')
+      expect(normalizeWebTabUrl('0.0.0.0:5173')).toBe('http://0.0.0.0:5173')
+    })
+
+    test('Given 用户输入带空格的内容 When 规范化 Then 转为搜索引擎搜索', () => {
+      expect(normalizeWebTabUrl('hello world')).toBe('https://www.google.com/search?q=hello%20world')
+    })
+
+    test('Given 用户输入非法协议 Scheme When 规范化 Then 拒绝并提示仅支持 HTTP 或 HTTPS', () => {
+      expect(() => normalizeWebTabUrl('ftp://ftp.example.com')).toThrow('仅支持 HTTP 或 HTTPS 网页')
+      expect(() => normalizeWebTabUrl('file:///etc/hosts')).toThrow('仅支持 HTTP 或 HTTPS 网页')
+      expect(() => normalizeWebTabUrl('javascript:alert(1)')).toThrow('仅支持 HTTP 或 HTTPS 网页')
+    })
+  })
 })
+

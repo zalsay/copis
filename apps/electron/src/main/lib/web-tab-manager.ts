@@ -8,7 +8,13 @@
 import { BrowserWindow, shell, WebContentsView, type WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { WEB_IPC_CHANNELS, WEB_PASSWORD_IPC_CHANNELS, type BrowserPageSnapshot } from '@copis/shared'
+import {
+  WEB_IPC_CHANNELS,
+  WEB_PASSWORD_IPC_CHANNELS,
+  isAllowedWebUrl,
+  normalizeWebTabUrl,
+  type BrowserPageSnapshot,
+} from '@copis/shared'
 import { getPersistedWebTabs, savePersistedWebTabs } from './web-tab-session-service'
 import { getWebPasswordService } from './web-password-service'
 import { normalizeOrigin } from './web-password-database'
@@ -233,10 +239,6 @@ export function resolveWebTabFaviconUrl(
   }
 }
 
-function isAllowedWebUrl(url: string): boolean {
-  return /^https?:\/\//i.test(url) || url === DEFAULT_URL
-}
-
 function isHttpWebUrl(url: string): boolean {
   return /^https?:\/\//i.test(url)
 }
@@ -256,39 +258,8 @@ function getPublicState(record: WebTabRecord): WebTabState {
   }
 }
 
-/** 将地址栏输入转换成可导航的 HTTP(S) 地址。 */
-export function normalizeWebTabUrl(input: string): string {
-  const value = input.trim()
-  if (!value) return DEFAULT_URL
-  if (value === DEFAULT_URL) return value
-
-  if (/^https?:\/\//i.test(value)) {
-    const parsed = new URL(value)
-    if (!isAllowedWebUrl(parsed.toString())) {
-      throw new Error('仅支持 HTTP 或 HTTPS 网页')
-    }
-    return parsed.toString()
-  }
-
-  if (/^about:/i.test(value)) {
-    if (value.toLowerCase() === DEFAULT_URL) return DEFAULT_URL
-    throw new Error('仅支持 about:blank')
-  }
-
-  if (/^[a-z][a-z\d+.-]*:/i.test(value)) {
-    throw new Error('仅支持 HTTP 或 HTTPS 网页')
-  }
-
-  if (/\s/.test(value)) {
-    return `${SEARCH_URL}${encodeURIComponent(value)}`
-  }
-
-  if (/^(localhost|127(?:\.\d{1,3}){3})(:\d+)?(?:\/.*)?$/i.test(value)) {
-    return `http://${value}`
-  }
-
-  return `https://${value}`
-}
+/** 导出地址栏规范化函数供其它模块使用。 */
+export { normalizeWebTabUrl }
 
 function getSnapshot(): WebTabsSnapshot {
   return {

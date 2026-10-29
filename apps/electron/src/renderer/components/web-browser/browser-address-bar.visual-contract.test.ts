@@ -85,4 +85,35 @@ describe('浏览器地址栏视觉契约', () => {
     expect(syncButtonSource).toContain('aria-label={presentation.label}')
     expect(syncButtonSource).toContain('if (compact) return button')
   })
+
+  test('Given 地址栏输入域名 When 导航提交或失焦 Then 自动补齐 https 协议前缀并更新状态', () => {
+    // 必须从 @copis/shared 引入 URL 补齐与规范化能力
+    expect(surfaceSource).toContain('autocompleteWebAddress')
+    expect(surfaceSource).toContain('normalizeWebTabUrl')
+    expect(surfaceSource).toContain('shouldAutocompleteWebUrl')
+
+    // handleNavigate 导航时先规范化补齐并同步更新输入框状态，再发起 navigate
+    expect(surfaceSource).toContain('targetUrl = normalizeWebTabUrl(trimmed)')
+    expect(surfaceSource).toContain('setAddress(targetUrl)')
+    expect(surfaceSource).toContain('window.electronAPI.webTabs.navigate({ tabId: activeTabId, url: targetUrl })')
+
+    // handleAddressBlur 失焦时自动补齐域名为完整协议地址，清空时还原
+    expect(surfaceSource).toContain('if (shouldAutocompleteWebUrl(trimmed))')
+    expect(surfaceSource).toContain('setAddress(autocompleteWebAddress(trimmed))')
+    expect(surfaceSource).toContain("setAddress(activeTab?.url ?? '')")
+
+    // 支持 Escape 键还原输入内容
+    expect(surfaceSource).toContain("if (event.key === 'Escape')")
+    expect(surfaceSource).toContain('onKeyDown={handleAddressKeyDown}')
+  })
+
+  test('Given 打开新标签页 When 挂载或页签激活 Then 自动聚焦到地址栏并全选地址栏文本', () => {
+    // 追踪新打开标签页并在打开或为 about:blank 时自动聚焦并全选
+    expect(surfaceSource).toContain("isNewTab || activeTab?.url === 'about:blank'")
+    expect(surfaceSource).toContain('addressInputRef.current.focus()')
+    expect(surfaceSource).toContain('addressInputRef.current.select()')
+    expect(surfaceSource).toContain('isAddressFocusedRef.current = true')
+  })
 })
+
+

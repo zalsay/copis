@@ -342,7 +342,10 @@ export function WebTabBar(): React.ReactElement {
               type="button"
               aria-label="新建网页"
               className="titlebar-no-drag mb-1 ml-0.5 flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
-              onClick={() => void create()}
+              onClick={(event) => {
+                event.currentTarget.blur()
+                void create()
+              }}
               disabled={isCreating}
             >
               {isCreating ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}

@@ -1,7 +1,12 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { ArrowLeft, ArrowRight, CircleStop, ExternalLink, Glasses, Globe2, Languages, RotateCw, ShieldCheck, X } from 'lucide-react'
-import type { WebTabsSnapshot } from '@copis/shared'
+import {
+  autocompleteWebAddress,
+  normalizeWebTabUrl,
+  shouldAutocompleteWebUrl,
+  type WebTabsSnapshot,
+} from '@copis/shared'
 import { browserAgentPanelOpenAtom, browserAgentPanelWidthAtom, browserAgentSessionIdAtom, browserWorkflowStatusAtom } from '@/atoms/browser-agent'
 import { activeWebTabAtom, activeWebTabIdAtom, webTabsAtom } from '@/atoms/web-tabs'
 import { agentChannelIdAtom, agentModelIdAtom, agentSessionsAtom, agentStreamingStatesAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
@@ -59,7 +64,7 @@ interface BrowserAgentSessionBinding {
 export function WebBrowserSurface(): React.ReactElement {
   const activeTab = useAtomValue(activeWebTabAtom)
   const activeTabId = useAtomValue(activeWebTabIdAtom)
-  const setTabs = useSetAtom(webTabsAtom)
+  const [tabs, setTabs] = useAtom(webTabsAtom)
   const setActiveTabId = useSetAtom(activeWebTabIdAtom)
   const agentChannelId = useAtomValue(agentChannelIdAtom)
   const agentModelId = useAtomValue(agentModelIdAtom)
@@ -182,12 +187,60 @@ export function WebBrowserSurface(): React.ReactElement {
     }
   }, [activeTabId, setBrowserAgentSessionId])
 
+  const knownTabIdsRef = React.useRef<Set<string>>(new Set())
+  const shouldSelectAddressRef = React.useRef(false)
+
   React.useEffect(() => {
+    const currentIds = new Set(tabs.map((tab) => tab.id))
+    for (const id of knownTabIdsRef.current) {
+      if (!currentIds.has(id)) {
+        knownTabIdsRef.current.delete(id)
+      }
+    }
+  }, [tabs])
+
+  React.useEffect(() => {
+    const tabId = activeTab?.id
+    const isNewTab = tabId ? !knownTabIdsRef.current.has(tabId) : false
+    if (tabId) {
+      knownTabIdsRef.current.add(tabId)
+    }
+
     setAddress(activeTab?.url ?? '')
-    if (activeTab?.url === 'about:blank') {
-      requestAnimationFrame(() => addressInputRef.current?.focus())
+
+    if (isNewTab || activeTab?.url === 'about:blank') {
+      shouldSelectAddressRef.current = true
     }
   }, [activeTab?.id, activeTab?.url])
+
+  const selectAllAddressText = React.useCallback((): void => {
+    if (!addressInputRef.current) return
+    addressInputRef.current.focus()
+    addressInputRef.current.select()
+    addressInputRef.current.setSelectionRange(0, addressInputRef.current.value.length)
+    isAddressFocusedRef.current = true
+  }, [])
+
+  React.useLayoutEffect(() => {
+    if (!shouldSelectAddressRef.current) return
+
+    // 在 React commit DOM 属性 value 之后立即同步执行一次，确保选区在最新值上生效
+    selectAllAddressText()
+
+    // 随后在下一个动画帧与微延迟再次确认，彻底抵消受控组件 value 覆盖与原生 WebContentsView 挂载时的焦点竞争
+    const rafId = requestAnimationFrame(() => {
+      selectAllAddressText()
+    })
+    const timerId = setTimeout(() => {
+      selectAllAddressText()
+      shouldSelectAddressRef.current = false
+    }, 50)
+
+    return () => {
+      cancelAnimationFrame(rafId)
+      clearTimeout(timerId)
+    }
+  }, [address, activeTab?.id, selectAllAddressText])
 
   React.useLayoutEffect(() => {
     const host = hostRef.current
@@ -237,7 +290,23 @@ export function WebBrowserSurface(): React.ReactElement {
 
   const handleAddressBlur = React.useCallback((): void => {
     isAddressFocusedRef.current = false
-  }, [])
+    const trimmed = address.trim()
+    if (!trimmed) {
+      setAddress(activeTab?.url ?? '')
+      return
+    }
+    if (shouldAutocompleteWebUrl(trimmed)) {
+      setAddress(autocompleteWebAddress(trimmed))
+    }
+  }, [activeTab?.url, address])
+
+  const handleAddressKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setAddress(activeTab?.url ?? '')
+      event.currentTarget.select()
+    }
+  }, [activeTab?.url])
 
   const handleAddressContainerClick = React.useCallback((event: React.MouseEvent<HTMLDivElement>): void => {
     const target = event.target as HTMLElement | null
@@ -252,8 +321,22 @@ export function WebBrowserSurface(): React.ReactElement {
   const handleNavigate = React.useCallback(async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
     if (!activeTabId) return
+    const trimmed = address.trim()
+    if (!trimmed) return
+
+    let targetUrl: string
     try {
-      apply(await window.electronAPI.webTabs.navigate({ tabId: activeTabId, url: address }))
+      targetUrl = normalizeWebTabUrl(trimmed)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '网页地址无效'
+      toast.error(message)
+      return
+    }
+
+    setAddress(targetUrl)
+
+    try {
+      apply(await window.electronAPI.webTabs.navigate({ tabId: activeTabId, url: targetUrl }))
     } catch (error) {
       const message = error instanceof Error ? error.message : '网页地址无效'
       toast.error(message)
@@ -893,6 +976,7 @@ export function WebBrowserSurface(): React.ReactElement {
               onFocus={handleAddressFocus}
               onMouseUp={handleAddressMouseUp}
               onBlur={handleAddressBlur}
+              onKeyDown={handleAddressKeyDown}
               aria-label="网页地址"
               className="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
               placeholder="输入网址或搜索内容"
