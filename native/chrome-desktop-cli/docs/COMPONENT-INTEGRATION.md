@@ -1,5 +1,23 @@
 # 内置 Chrome Tool 组件化（2026-10-19）
 
+## 当前实现：MCC 0.3.6（2026-10-30）
+
+- Copis 的 `ChromeDesktopStart`、`ChromeDesktopObserve`、`ChromeDesktopClick`、`ChromeDesktopScroll`、`ChromeDesktopType`、`ChromeDesktopPress`、`ChromeDesktopSelectFile`、`ChromeDesktopStop` 工具名和参数不变；这些工具由受管 **MCC (`mcc`)** 执行，Agent 不需要通过 Bash 再运行 CLI。
+- 复用原 `chrome-desktop-cli` 功能模块标识，在“关于/更新”的现有功能模块管理中安装与更新，版本锁为 `0.3.6`，manifest 入口为 `copis-chrome-0.3.6-darwin-{arch}/mcc`。官方归档的 `module.json` 可仍标记兼容默认入口 `copis-chrome`；Copis 只执行同包内 `mcc`，并验证 `macos-chrome-helper`（兼容旧包内 `copis-chrome-helper`）。
+- `mcc` 按通用桌面协议工作，使用独占 `COPIS_DESKTOP_RUNTIME_DIR` 和受管 `COPIS_DESKTOP_HELPER`，不继承外部 `COPIS_DESKTOP_*` / `COPIS_CHROME_*` 覆盖。列窗显式传 `windows --app com.google.Chrome`，连接回执再次核实 bundleId、PID、窗口 ID；不把通用应用控制能力暴露给 Chrome 工具。
+- 截图原像素交付，不缩放或改变分辨率；接受 MCC 的最大 `1600×8192` 像素边界和 1 MiB JPEG 上限。权限、会话 capability、暂停、截图隔离、连接版本固定和私有 daemon 清理继续使用现有链路。
+- 老 `copis-chrome` active 入口只会触发现有安装器尝试升级，升级不可用时明确失败，不静默回退旧 CLI 或 PATH 中的 `mcc`。已建立连接继续固定原版本，下次新连接解析更新后的组件。
+
+发布准备继续使用 `--chrome-cli`，但必须提供 MCC 归档；需要从独立仓库构建时，显式设置 `COPIS_MCC_SOURCE_DIR`，不再编译本目录的历史 CLI 源码：
+
+```bash
+./deploy.sh --chrome-cli --platform darwin --arch arm64 \
+  --chrome-cli-archive /绝对路径/copis-chrome-0.3.6-darwin-arm64.tar.gz
+```
+
+以上是当前集成契约；下文保留最初组件化实现的历史记录。
+
+
 ## 目标与行为
 
 内置 ChromeDesktopStart/Observe/Click/Scroll/Type/Press/Stop 的工具名、会话 capability 与用户选择窗口保持兼容，实际截图和输入改为调用独立 chrome-desktop-cli 功能模块。模块仅支持 macOS 14+、可从功能模块设置按独立版本安装与更新；不要求更新 Electron。沿用 manifest 的版本、SHA256、下载、受管版本目录和 active.json，不创建另一套更新系统。

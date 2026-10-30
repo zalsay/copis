@@ -17,7 +17,7 @@ describe('功能模块版本锁', () => {
       'agently-cli': '1.0.17',
       dsh: '0.2.1',
       'codex-cli': '0.154.1',
-      'chrome-desktop-cli': '0.1.6',
+      'chrome-desktop-cli': '0.3.6',
     })
   })
 
@@ -111,6 +111,6 @@ describe('功能模块版本锁', () => {
 
 test('Given COS 的 Chrome 版本更高且顶层路径含版本 When deploy Then 不因 entrypoint 改变回退版本', () => {
   const modules = applyFunctionalModuleVersionLocks([{ module: 'chrome-desktop-cli', version: '0.1.0', platform: 'darwin', arch: 'arm64', binaryPath: '/chrome.tar.gz', format: 'tar.gz', entrypoint: 'copis-chrome-0.1.0-darwin-arm64/copis-chrome', required: false }], locks)
-  const manifest = { schema: 1, channel: 'stable', platforms: { 'darwin-arm64': { modules: { 'chrome-desktop-cli': { version: '0.2.0', url: 'https://example.invalid/chrome', sha256: 'a'.repeat(64), size: 1, format: 'tar.gz' as const, entrypoint: 'copis-chrome-0.2.0-darwin-arm64/copis-chrome', required: false } } } } }
+  const manifest = { schema: 1, channel: 'stable', platforms: { 'darwin-arm64': { modules: { 'chrome-desktop-cli': { version: '0.4.0', url: 'https://example.invalid/chrome', sha256: 'a'.repeat(64), size: 1, format: 'tar.gz' as const, entrypoint: 'copis-chrome-0.4.0-darwin-arm64/mcc', required: false } } } } }
   expect(excludeUnchangedLockedModules(modules, manifest, 'darwin', 'arm64', locks)).toEqual([])
 })

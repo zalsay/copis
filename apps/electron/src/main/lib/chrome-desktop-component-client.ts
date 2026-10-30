@@ -116,6 +116,7 @@ export class ChromeDesktopComponentClient implements ChromeDesktopBackend {
         }
         const result = await this.invoke(runtime, ['connect', '--window', String(windowId)])
         this.assertGeneration(generation)
+        if (parseObject(result.window).bundleId !== 'com.google.Chrome') throw componentError('CHROME_WINDOW_UNAVAILABLE', '连接窗口不属于 Google Chrome')
         const window = parseWindow(result.window)
         if (window.windowId !== windowId || window.pid !== pid) throw componentError('CHROME_WINDOW_UNAVAILABLE', '连接的 Chrome 窗口或进程已变化')
         if (result.connected !== true || typeof result.connectionId !== 'string' || !result.connectionId) throw helperFailure()
@@ -134,7 +135,7 @@ export class ChromeDesktopComponentClient implements ChromeDesktopBackend {
     const result = await this.invoke(connection.runtime, ['observe', '--connection', connection.id])
     this.assertConnection(connection)
     if (result.connectionId !== connection.id || typeof result.frameId !== 'string' || !result.frameId
-      || !dimension(result.width) || !dimension(result.height) || !Number.isSafeInteger(result.capturedAtMs) || (result.capturedAtMs as number) < 0) throw helperFailure()
+      || !dimension(result.width) || !dimension(result.height, 8192) || !Number.isSafeInteger(result.capturedAtMs) || (result.capturedAtMs as number) < 0) throw helperFailure()
     const bounds = parseBounds(result.bounds)
     const data = await readComponentImage(connection.runtime, result.imagePath, result.width as number, result.height as number)
     this.assertConnection(connection)
@@ -216,9 +217,9 @@ export class ChromeDesktopComponentClient implements ChromeDesktopBackend {
   }
 
   private async windows(runtime: ComponentRuntime): Promise<ChromeDesktopWindowInfo[]> {
-    const result = await this.invoke(runtime, ['windows'])
+    const result = await this.invoke(runtime, ['windows', '--app', 'com.google.Chrome'])
     if (!Array.isArray(result.windows)) throw helperFailure()
-    return result.windows.map(parseWindow)
+    return result.windows.filter(value => parseObject(value).bundleId === 'com.google.Chrome').map(parseWindow)
   }
 
   private requireConnection(): Connection {
@@ -254,7 +255,7 @@ export class ChromeDesktopComponentClient implements ChromeDesktopBackend {
     try {
       if (Buffer.byteLength(output.stdout) > MAX_COMPONENT_OUTPUT_BYTES) throw helperFailure()
       result = parseObject(JSON.parse(output.stdout))
-      if (result.protocolVersion !== 1 || typeof result.ok !== 'boolean') throw helperFailure()
+      if (result.protocolVersion !== 1 || result.scope !== 'desktop' || typeof result.ok !== 'boolean') throw helperFailure()
     } catch { throw helperFailure() }
     if (result.ok === false) {
       const error = parseObject(result.error)
@@ -296,7 +297,7 @@ function parseObject(value: unknown): JsonObject {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw helperFailure()
   return value as JsonObject
 }
-function dimension(value: unknown): boolean { return Number.isSafeInteger(value) && (value as number) > 0 && (value as number) <= 1600 }
+function dimension(value: unknown, maximum = 1600): boolean { return Number.isSafeInteger(value) && (value as number) > 0 && (value as number) <= maximum }
 function parseBounds(value: unknown): ChromeDesktopBounds {
   const bounds = parseObject(value)
   if (![bounds.x, bounds.y, bounds.width, bounds.height].every(value => typeof value === 'number' && Number.isFinite(value))
@@ -306,6 +307,6 @@ function parseBounds(value: unknown): ChromeDesktopBounds {
 function parseWindow(value: unknown): ChromeDesktopWindowInfo {
   const window = parseObject(value)
   if (!Number.isSafeInteger(window.windowId) || (window.windowId as number) <= 0
-    || !Number.isSafeInteger(window.pid) || (window.pid as number) <= 0 || typeof window.title !== 'string') throw helperFailure()
+    || !Number.isSafeInteger(window.pid) || (window.pid as number) <= 0 || typeof window.title !== 'string' || window.bundleId !== 'com.google.Chrome') throw helperFailure()
   return { windowId: window.windowId as number, pid: window.pid as number, title: window.title, bounds: parseBounds(window.bounds) }
 }

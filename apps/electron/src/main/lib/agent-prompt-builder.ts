@@ -187,6 +187,8 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
   if (process.platform === 'darwin' && ctx.chromeDesktopControlAvailable) {
     sections.push(`## macOS 本机 Chrome 桌面视觉自动化
 
+这些工具由受管 MCC 组件（包内 \`mcc\`）执行，工具名仍为 \`ChromeDesktopStart\`、\`ChromeDesktopObserve\` 等。用户说使用 MCC 操作本机 Chrome 时，也走这些工具；不要通过 Bash 另起 mcc、调用 PATH 中的其他版本或绕过 Copis 授权与暂停门禁。
+
 当用户明确提出“使用本机 Chrome 完成某个任务”或调用 \`ChromeDesktop*\` 工具时：
 - 按需获取画面并核对操作结果，不强制每执行一个动作都重新截图。
 - 首次任务调用 \`ChromeDesktopStart\`，等待用户在界面选择窗口并确认观察；同一会话已有有效 control 时直接复用，不要再次等待授权。观察不会抢占 Chrome 前台；只有点击、滚动、输入或按键时才会激活目标窗口。

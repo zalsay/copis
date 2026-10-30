@@ -192,8 +192,9 @@ export interface ChromeDesktopComponentMetadata {
   platform: 'darwin'
   arch: 'arm64' | 'x64'
   protocolVersion: 1
-  entrypoint: 'copis-chrome'
-  helper: 'copis-chrome-helper'
+  // 官方归档可保留兼容入口；Copis 的功能模块入口始终是包内 mcc。
+  entrypoint: 'mcc' | 'copis-chrome'
+  helper: 'macos-chrome-helper' | 'copis-chrome-helper'
 }
 
 export function isChromeDesktopComponentMetadata(
@@ -207,6 +208,6 @@ export function isChromeDesktopComponentMetadata(
     && metadata.platform === 'darwin'
     && metadata.arch === expected.arch
     && metadata.protocolVersion === 1
-    && metadata.entrypoint === 'copis-chrome'
-    && metadata.helper === 'copis-chrome-helper'
+    && (metadata.entrypoint === 'mcc' || metadata.entrypoint === 'copis-chrome')
+    && (metadata.helper === 'macos-chrome-helper' || metadata.helper === 'copis-chrome-helper')
 }

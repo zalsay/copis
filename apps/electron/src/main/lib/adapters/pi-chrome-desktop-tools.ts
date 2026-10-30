@@ -313,7 +313,7 @@ export function buildPiChromeDesktopTools(
   return CHROME_DESKTOP_TOOL_DEFINITIONS.map((def) => ({
     name: def.name,
     label: def.label,
-    description: def.description,
+    description: `${def.description} 底层由 Copis 受管 MCC（mcc）组件执行，无需通过 Bash 另行启动 CLI。`,
     parameters: def.parameters,
     // Spec 6: 统一采用 sequential 串行模式
     executionMode: 'sequential' as const,

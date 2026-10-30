@@ -296,7 +296,7 @@ export class ChromeDesktopService {
     try {
       const captured = await this.backend.observe()
       this.assertCurrentControlRecord(record)
-      if (!captured.frameId || !Number.isInteger(captured.width) || !Number.isInteger(captured.height) || captured.width <= 0 || captured.height <= 0 || Math.max(captured.width, captured.height) > 1600 || !captured.data || captured.data.length > 1_398_104 || !Number.isFinite(captured.capturedAt) || captured.capturedAt < 0) throw new Error('CHROME_CAPTURE_FAILED: 组件截图元数据不合法')
+      if (!captured.frameId || !Number.isInteger(captured.width) || !Number.isInteger(captured.height) || captured.width <= 0 || captured.height <= 0 || captured.width > 1600 || captured.height > 8192 || !captured.data || captured.data.length > 1_398_104 || !Number.isFinite(captured.capturedAt) || captured.capturedAt < 0) throw new Error('CHROME_CAPTURE_FAILED: 组件截图元数据不合法')
       if (!record.targetWindow || !sameBounds(record.targetWindow.bounds, captured.bounds)) record.geometryVersion++
       record.targetWindow!.bounds = captured.bounds
       const frame: ChromeDesktopFrameMeta = { controlId: record.controlId, frameId: captured.frameId, width: captured.width, height: captured.height, capturedAt: captured.capturedAt, geometryVersion: record.geometryVersion }

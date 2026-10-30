@@ -39,7 +39,7 @@ const MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[] = [
   { name: 'python-runtime', displayName: 'Python 3.12 运行环境', required: true },
   { name: 'agently-cli', displayName: 'Agent QQ 邮箱 CLI', required: false },
   { name: 'dsh', displayName: '创造模式', required: false },
-  { name: 'chrome-desktop-cli', displayName: 'Chrome 桌面自动化', required: false, platforms: ['darwin'] },
+  { name: 'chrome-desktop-cli', displayName: 'MCC · Chrome 桌面自动化', required: false, platforms: ['darwin'] },
   { name: 'codex-cli', displayName: '专业模式', required: false },
 ]
 
@@ -193,7 +193,7 @@ function ensureRequiredArtifact(
     throw new Error(`${definition.displayName} 必须是必选模块`)
   }
   if (definition.name === 'chrome-desktop-cli') {
-    const entrypoint = `copis-chrome-${artifact.version}-darwin-${arch}/copis-chrome`
+    const entrypoint = `copis-chrome-${artifact.version}-darwin-${arch}/mcc`
     if (artifact.platform !== 'darwin' || artifact.arch !== arch || artifact.required
       || artifact.format !== 'tar.gz' || artifact.entrypoint !== entrypoint) {
       throw new Error('Chrome 模块必须使用对应版本和架构的 macOS 可选归档与顶层入口')

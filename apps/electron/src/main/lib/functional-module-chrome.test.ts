@@ -36,8 +36,8 @@ function metadata(version: string): Record<string, unknown> {
     platform: 'darwin',
     arch: 'arm64',
     protocolVersion: 1,
-    entrypoint: 'copis-chrome',
-    helper: 'copis-chrome-helper',
+    entrypoint: 'mcc',
+    helper: 'macos-chrome-helper',
     minimumOsVersion: '14.0',
   }
 }
@@ -47,8 +47,8 @@ function chromeArchive(version = '0.1.0', contents: unknown = metadata(version))
   const top = `copis-chrome-${version}-darwin-arm64`
   const componentDir = join(source, top)
   mkdirSync(componentDir)
-  writeFileSync(join(componentDir, 'copis-chrome'), 'copis-chrome')
-  writeFileSync(join(componentDir, 'copis-chrome-helper'), 'copis-chrome-helper')
+  writeFileSync(join(componentDir, 'mcc'), 'mcc')
+  writeFileSync(join(componentDir, 'macos-chrome-helper'), 'macos-chrome-helper')
   writeFileSync(join(componentDir, 'module.json'), typeof contents === 'string' ? contents : JSON.stringify(contents))
   const archive = join(source, 'chrome.tar.gz')
   expect(spawnSync('tar', ['-czf', archive, '-C', source, top]).status).toBe(0)
@@ -62,7 +62,7 @@ function chromeArchive(version = '0.1.0', contents: unknown = metadata(version))
     sha256: createHash('sha256').update(bytes).digest('hex'),
     size: bytes.length,
     format: 'tar.gz',
-    entrypoint: `${top}/copis-chrome`,
+    entrypoint: `${top}/mcc`,
     required: false,
   }
   return { artifact, bytes }
@@ -109,7 +109,7 @@ describe('Chrome 功能模块平台边界', () => {
       expect(getFunctionalModuleStatuses(root, platform).some(status => status.name === MODULE_NAME)).toBe(false)
     }
     expect(getFunctionalModuleStatuses(root, 'darwin').find(status => status.name === MODULE_NAME))
-      .toMatchObject({ required: false, displayName: 'Chrome 桌面自动化' })
+      .toMatchObject({ required: false, displayName: 'MCC · Chrome 桌面自动化' })
   })
 
   test('Given 非 macOS When 安装或预备 Chrome Then 不下载并明确拒绝平台', async () => {
@@ -130,9 +130,9 @@ describe('Chrome 功能模块平台边界', () => {
     expect(status).toMatchObject({ installed: true, version: '0.1.0', required: false })
     expect(status.path).toEndWith(archive.artifact.entrypoint)
     const componentDir = dirname(status.path!)
-    expect(readFileSync(join(componentDir, 'copis-chrome-helper'), 'utf8')).toBe('copis-chrome-helper')
+    expect(readFileSync(join(componentDir, 'macos-chrome-helper'), 'utf8')).toBe('macos-chrome-helper')
     expect(JSON.parse(readFileSync(join(componentDir, 'module.json'), 'utf8'))).toEqual(metadata('0.1.0'))
-    expect(statSync(join(componentDir, 'copis-chrome-helper')).mode & 0o111).toBe(0o111)
+    expect(statSync(join(componentDir, 'macos-chrome-helper')).mode & 0o111).toBe(0o111)
   })
 
   test('Given Chrome manifest 不是可选归档或顶层入口不匹配 When 安装 Then 下载前拒绝', async () => {
@@ -210,7 +210,7 @@ describe('Chrome 元数据验证与原子激活', () => {
         await expect(install({ name: MODULE_NAME }, options)).rejects.toThrow('Chrome 模块元数据')
         expect(readFileSync(join(root, 'active.json'), 'utf8')).toBe(activeBefore)
         expect(getFunctionalModuleStatus(MODULE_NAME, root).path).toBe(previous.path)
-        const helper = join(installedComponentDir(root, archive.artifact), 'copis-chrome-helper')
+        const helper = join(installedComponentDir(root, archive.artifact), 'macos-chrome-helper')
         expect(statSync(helper).mode & 0o111).toBe(0)
       }
     })
@@ -223,10 +223,10 @@ describe('Chrome 元数据验证与原子激活', () => {
       const prepared = await prepareFunctionalModule({ name: MODULE_NAME }, installOptions(root, archive))
       const componentDir = dirname(join(prepared.versionDir, prepared.packageInfo.entrypoint))
       writeFileSync(join(componentDir, 'module.json'), typeof contents === 'string' ? contents : JSON.stringify(contents))
-      chmodSync(join(componentDir, 'copis-chrome-helper'), 0o600)
+      chmodSync(join(componentDir, 'macos-chrome-helper'), 0o600)
       await expect(activatePreparedFunctionalModule(prepared, root)).rejects.toThrow('Chrome 模块元数据')
       expect(readFileSync(join(root, 'active.json'), 'utf8')).toBe(activeBefore)
-      expect(statSync(join(componentDir, 'copis-chrome-helper')).mode & 0o111).toBe(0)
+      expect(statSync(join(componentDir, 'macos-chrome-helper')).mode & 0o111).toBe(0)
     })
   }
 
@@ -247,7 +247,7 @@ describe('Chrome 元数据验证与原子激活', () => {
         if (kind === 'symlink') symlinkSync(target, metadataPath)
         else linkSync(target, metadataPath)
       }
-      const helper = join(componentDir, 'copis-chrome-helper')
+      const helper = join(componentDir, 'macos-chrome-helper')
       chmodSync(helper, 0o600)
       await expect(activatePreparedFunctionalModule(prepared, root)).rejects.toThrow('Chrome 模块元数据')
       expect(readFileSync(join(root, 'active.json'), 'utf8')).toBe(activeBefore)
@@ -268,7 +268,7 @@ describe('Chrome 元数据验证与原子激活', () => {
     await installPreviousVersion(root)
     const prepared = await prepareFunctionalModule({ name: MODULE_NAME }, installOptions(root, chromeArchive('0.2.0')))
     expect(getFunctionalModuleStatus(MODULE_NAME, root).version).toBe('0.1.0')
-    const helper = join(dirname(join(prepared.versionDir, prepared.packageInfo.entrypoint)), 'copis-chrome-helper')
+    const helper = join(dirname(join(prepared.versionDir, prepared.packageInfo.entrypoint)), 'macos-chrome-helper')
     chmodSync(helper, 0o600)
     expect(await activatePreparedFunctionalModule(prepared, root)).toMatchObject({ installed: true, version: '0.2.0' })
     expect(statSync(helper).mode & 0o111).toBe(0o111)
@@ -285,10 +285,10 @@ describe('Chrome 元数据验证与原子激活', () => {
       onProgress: progress => {
         if (progress.phase !== 'activate') return
         writeFileSync(join(componentDir, 'module.json'), JSON.stringify({ ...metadata('0.2.0'), protocolVersion: 2 }))
-        chmodSync(join(componentDir, 'copis-chrome-helper'), 0o600)
+        chmodSync(join(componentDir, 'macos-chrome-helper'), 0o600)
       },
     })).rejects.toThrow('Chrome 模块元数据')
     expect(readFileSync(join(root, 'active.json'), 'utf8')).toBe(activeBefore)
-    expect(statSync(join(componentDir, 'copis-chrome-helper')).mode & 0o111).toBe(0)
+    expect(statSync(join(componentDir, 'macos-chrome-helper')).mode & 0o111).toBe(0)
   })
 })

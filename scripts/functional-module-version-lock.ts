@@ -57,7 +57,7 @@ export function applyFunctionalModuleVersionLocks(
     const version = locks[module.module]
     const locked = { ...module, version }
     if (module.module === 'chrome-desktop-cli') {
-      locked.entrypoint = `copis-chrome-${version}-darwin-${module.arch}/copis-chrome`
+      locked.entrypoint = `copis-chrome-${version}-darwin-${module.arch}/mcc`
     }
     return locked
   })
