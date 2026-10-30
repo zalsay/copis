@@ -470,7 +470,7 @@ function redactHttpApiSettings(
     isVip,
     ownerId,
   )
-  if (isVip && ownerId && !safeSettings.workingModelCatalog) {
+  if (ownerId && !safeSettings.workingModelCatalog) {
     const getCatalog = dependencies.getWorkingModelCatalog ?? getWorkingModelCatalog
     return {
       ...safeSettings,
@@ -1330,20 +1330,22 @@ export async function handleHttpApiRequest(
         isVip,
         ownerId,
       )
-      if (catalogValue !== undefined && !isVip) {
-        throw new HttpApiRequestError('仅 VIP 用户可使用模型管理', 403, 'vip_required')
-      }
       let updated = Object.keys(filteredOrdinaryUpdates).length > 0
         ? dependencies.updateAppSettings(filteredOrdinaryUpdates)
         : dependencies.getAppSettings()
+      let savedCatalog: import('@copis/shared').WorkingModelCatalog | undefined
       if (catalogValue !== undefined) {
         const saveCatalog = dependencies.saveWorkingModelCatalog ?? saveWorkingModelCatalog
-        const catalog = saveCatalog(catalogValue, isVip, ownerId)
-        updated = { ...updated, workingModelCatalog: catalog }
+        savedCatalog = saveCatalog(catalogValue, isVip, ownerId)
+        updated = { ...updated, workingModelCatalog: savedCatalog }
+      }
+      const responseBody = redactWorkingModelCatalog(sanitizeAppSettings(updated), isVip, ownerId)
+      if (savedCatalog !== undefined) {
+        responseBody.workingModelCatalog = savedCatalog
       }
       return {
         status: 200,
-        body: redactWorkingModelCatalog(sanitizeAppSettings(updated), isVip, ownerId),
+        body: responseBody,
       }
     }
 

@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useSetAtom } from 'jotai'
-import { Activity, CheckCircle2, Crown, Loader2, Plus, Save, Trash2, XCircle } from 'lucide-react'
+import { Activity, CheckCircle2, Loader2, Plus, Save, Trash2, XCircle } from 'lucide-react'
 import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
 import type {
   AgentThinkingLevel,
@@ -44,9 +44,9 @@ interface ModelTestState {
 }
 
 interface ModelManagementSettingsProps {
-  isVip: boolean
+  isVip?: boolean
   accountId?: string
-  onOpenVip: () => void
+  onOpenVip?: () => void
   onNotice: (message: string) => void
 }
 
@@ -292,32 +292,17 @@ export function ModelManagementSettings({
       <ProfessionalModeCard onNotice={onNotice} />
 
       {/* 自定义模型管理模块 */}
-      {!isVip ? (
-        <section className="flex min-h-[260px] flex-col items-center justify-center gap-4 rounded-lg border border-dashed border-primary/35 bg-card/70 p-8 text-center shadow-sm">
-          <span className="grid size-12 place-items-center rounded-full bg-primary/12 text-primary">
-            <Crown aria-hidden="true" className="size-6" />
-          </span>
-          <div className="space-y-1.5">
-            <h2 className="text-base font-semibold">自定义模型仅对 VIP 开放</h2>
-            <p className="max-w-md text-sm leading-6 text-muted-foreground">开通 VIP 会员后，可添加你的第三方模型 API Key，在对话与工作区中随心使用自定义大模型。</p>
+      <div className="space-y-5">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold">自定义模型</h2>
+            <p className="mt-1 text-xs text-muted-foreground">添加兼容 OpenAI 或 Anthropic 接口标准的第三方大模型，配置后可在对话模型选择器中直接调用。</p>
           </div>
-          <Button type="button" onClick={onOpenVip}>
-            <Crown aria-hidden="true" className="size-4" />
-            升级 VIP
+          <Button type="button" variant="outline" onClick={() => setModels((current) => [...current, createModelDraft()])}>
+            <Plus aria-hidden="true" className="size-4" />
+            添加模型
           </Button>
-        </section>
-      ) : (
-        <div className="space-y-5">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-sm font-semibold">自定义模型</h2>
-              <p className="mt-1 text-xs text-muted-foreground">添加兼容 OpenAI 或 Anthropic 接口标准的第三方大模型，配置后可在对话模型选择器中直接调用。</p>
-            </div>
-            <Button type="button" variant="outline" onClick={() => setModels((current) => [...current, createModelDraft()])}>
-              <Plus aria-hidden="true" className="size-4" />
-              添加模型
-            </Button>
-          </div>
+        </div>
 
           {loading ? (
             <div className="flex min-h-[180px] items-center justify-center text-sm text-muted-foreground">
@@ -467,7 +452,6 @@ export function ModelManagementSettings({
             </Button>
           </div>
         </div>
-      )}
     </div>
   )
 }

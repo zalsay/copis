@@ -34,47 +34,29 @@ const {
   testWorkingCustomModelConnection,
 } = await import('./working-model-catalog')
 
-describe('VIP 自定义模型目录主进程门禁', () => {
-  test('Given 非 VIP 用户 When 读取或保存目录 Then 统一返回 vip_required', () => {
-    expect(() => getWorkingModelCatalog(false)).toThrowError({
-      name: 'WorkingModelCatalogAccessError',
-      message: '仅 VIP 用户可使用模型管理',
-    })
-    expect(() => saveWorkingModelCatalog({ models: [], categories: [] }, false)).toThrowError({
-      name: 'WorkingModelCatalogAccessError',
-      message: '仅 VIP 用户可使用模型管理',
-    })
+describe('自定义模型目录主进程访问（全员可用）', () => {
+  test('Given 非 VIP 用户 When 读取或保存目录 Then 正常执行且不再抛出 vip_required', () => {
+    expect(getWorkingModelCatalog(false, 'test-non-vip')).toEqual({ models: [], categories: [] })
+    expect(saveWorkingModelCatalog({ models: [], categories: [] }, false, 'test-non-vip')).toEqual({ models: [], categories: [] })
   })
 
-  test('Given 未显式提供 VIP 状态 When 访问目录 Then 默认拒绝', () => {
-    expect(() => getWorkingModelCatalog(undefined as unknown as boolean)).toThrowError({
-      name: 'WorkingModelCatalogAccessError',
-      message: '仅 VIP 用户可使用模型管理',
-    })
+  test('Given 未提供 VIP 状态 When 访问目录 Then 仍正常允许访问', () => {
+    expect(getWorkingModelCatalog(undefined as unknown as boolean, 'test-non-vip')).toEqual({ models: [], categories: [] })
   })
 
-  test('Given 非 VIP 用户 When 使用自定义模型渠道运行 Then 在解析运行配置前拒绝', () => {
-    expect(() => getWorkingCustomModelRuntime('copis-custom-model-1', false)).toThrowError({
-      name: 'WorkingModelCatalogAccessError',
-      message: '仅 VIP 用户可使用模型管理',
-    })
+  test('Given 非 VIP 用户 When 使用自定义模型渠道运行且模型不存在 Then 在解析运行配置时提示不存在', () => {
+    expect(() => getWorkingCustomModelRuntime('copis-custom-model-1', false, 'account-1')).toThrow('自定义模型不存在')
   })
 
-  test('Given 非 VIP 用户 When 持久化自定义模型选择 Then 在写入前拒绝', () => {
-    expect(() => assertWorkingCustomModelSelection('copis-custom-ghost', 'ghost', false, 'account-1')).toThrowError({
-      name: 'WorkingModelCatalogAccessError',
-      message: '仅 VIP 用户可使用模型管理',
-    })
+  test('Given 用户持久化不存在的自定义模型选择 Then 在写入前校验并拒绝过期选择', () => {
+    expect(() => assertWorkingCustomModelSelection('copis-custom-ghost', 'ghost', false, 'account-1')).toThrow('自定义模型不存在')
     expect(() => filterWorkingModelCatalogUpdate({
       agentChannelId: 'copis-custom-ghost',
       agentModelId: 'ghost',
-    }, false, 'account-1')).toThrowError({
-      name: 'WorkingModelCatalogAccessError',
-      message: '仅 VIP 用户可使用模型管理',
-    })
+    }, false, 'account-1')).toThrow('自定义模型不存在')
   })
 
-  test('Given VIP 用户选择已不存在的自定义模型 When 持久化 Then 拒绝过期选择', () => {
+  test('Given VIP 用户选择已不存在的自定义模型 When 持久化 Then 同样拒绝过期选择', () => {
     expect(() => assertWorkingCustomModelSelection('copis-custom-ghost', 'ghost', true, 'account-1')).toThrow('自定义模型不存在')
   })
 
@@ -107,13 +89,15 @@ describe('VIP 自定义模型目录主进程门禁', () => {
     expect(redactWorkingModelCatalog(settings, true, 'account-1')).not.toHaveProperty('workingModelApiKeys')
   })
 
-  test('Given 非 VIP 用户 When 测试自定义模型连接 Then 统一抛出 vip_required', async () => {
-    await expect(testWorkingCustomModelConnection({
+  test('Given 非 VIP 用户 When 测试自定义模型连接 Then 正常允许测试且不拦截 VIP', async () => {
+    const result = await testWorkingCustomModelConnection({
       protocol: 'openai-responses',
       baseUrl: 'https://api.openai.com/v1',
       modelId: 'gpt-4o',
-      apiKey: 'sk-test',
-    }, false)).rejects.toThrow('仅 VIP 用户可使用模型管理')
+      apiKey: '',
+    }, false)
+    expect(result.success).toBe(false)
+    expect(result.message).toContain('请先填写 API 密钥')
   })
 
   test('Given 未提供 API Key 且未保存过密钥 When 测试连接 Then 返回提示错误', async () => {

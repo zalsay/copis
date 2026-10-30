@@ -360,12 +360,6 @@ function AgentSettingsInitializer(): null {
       })
     }
 
-    if (!workingAuthState?.authenticated || workingAuthState.user?.isVip !== true) {
-      setAgentChannelId(COPIS_WORKING_DEEPSEEK_CHANNEL_ID)
-      setAgentModelId(COPIS_WORKING_DEEPSEEK_FAST_MODEL_ID)
-      return
-    }
-
     void Promise.all([
       window.electronAPI.getSettings(),
       window.electronAPI.getWorkingModelCatalog(),

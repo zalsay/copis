@@ -276,17 +276,16 @@ async function resolveDshWorkingProviders(): Promise<DshWorkingProviderConfig[]>
 
 const CUSTOM_KEY_PREFIX = 'COPIS_DSH_CUSTOM_'
 
-/** 与 Agent 共用账号目录和 VIP 访问规则，每个模型保留独立协议及凭据。 */
+/** 与 Agent 共用账号目录模型配置，每个模型保留独立协议及凭据。 */
 function resolveDshCustomProviders(): DshWorkingProviderConfig[] {
   const user = getWorkingApiClient().getCachedUser()
   const ownerId = getWorkingModelCatalogOwnerId(user)
-  if (user?.isVip !== true || !ownerId) return []
   const catalog = getWorkingModelCatalog(true, ownerId)
   return catalog.models.filter((model) => model.apiKeyConfigured).flatMap((model) => {
     const providerRoute = workingCustomModelChannelIdFor(model.id)
     try {
       const runtime = getWorkingCustomModelRuntime(providerRoute, true, ownerId)
-      const apiKeyEnv = CUSTOM_KEY_PREFIX + createHash('sha256').update(`${ownerId}:${model.id}`).digest('hex').toUpperCase()
+      const apiKeyEnv = CUSTOM_KEY_PREFIX + createHash('sha256').update(`${ownerId ?? 'default'}:${model.id}`).digest('hex').toUpperCase()
       return [{
         providerRoute,
         displayName: catalog.categories.find((category) => category.id === model.categoryId)?.name ?? '自定义模型',

@@ -88,9 +88,9 @@ describe('dsh-model-config', () => {
     rmSync(tempHome, { recursive: true, force: true })
   })
 
-  test('Given VIP 自定义模型 When 同步 DSH Then 追加到末尾且非 VIP 同步后清除模型和凭据', async () => {
+  test('Given 自定义模型 When 同步 DSH Then 追加到末尾且非 VIP 也会保留模型，删除模型后清除凭据', async () => {
     const dir = join(tempHome, 'custom-models')
-    customVip = true
+    customVip = false
     try {
       const config = await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: COPIS_WORKING_CHANNEL_ID })
       modelConfigModule.applyDshModelConfig(config, dir)
@@ -104,11 +104,14 @@ describe('dsh-model-config', () => {
       expect(selected.defaultModelId).toBe('test-model')
       expect(selected.env.COPIS_DSH_WORKING_CAPABILITY).toBe('dsh-test-capability')
       expect(JSON.stringify(selected.env)).not.toContain('custom-test-key')
-      customVip = false
+
+      // 删除自定义模型后重新同步 DSH
+      customModels = []
       modelConfigModule.applyDshModelConfig(await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: COPIS_WORKING_CHANNEL_ID }), dir)
       expect(readFileSync(join(dir, 'settings.yaml'), 'utf8')).not.toContain('copis-custom-example')
       expect(readFileSync(join(dir, '.credentials.yaml'), 'utf8')).not.toContain('custom-test-key')
     } finally {
+      customModels = [customModel]
       customVip = false
     }
   })

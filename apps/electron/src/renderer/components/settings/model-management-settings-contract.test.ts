@@ -51,19 +51,19 @@ describe('模型管理用户友好、保存与测试连接功能契约', () => {
     expect(settingsSource).toContain('testWorkingModelConnection')
   })
 
-  test('Given 非 VIP 用户状态 When 渲染提示 Then 引导文案清晰友好', () => {
-    expect(settingsSource).toContain('自定义模型仅对 VIP 开放')
-    expect(settingsSource).toContain('升级 VIP')
-    expect(settingsSource).not.toContain('在 Composer 中使用')
+  test('Given 自定义模型向所有人开放 When 检查模型管理设置 Then 不再限制 VIP 门槛', () => {
+    expect(settingsSource).not.toContain('自定义模型仅对 VIP 开放')
+    expect(settingsSource).not.toContain('升级 VIP')
+    expect(settingsSource).toContain('h2 className="text-sm font-semibold">自定义模型</h2>')
   })
 
   test('Given 模型管理设置源码 When 检查模块构成 Then 包含网络代理设置模块 ProxySettingsCard 且置于顶部', () => {
     expect(settingsSource).toContain('ProxySettingsCard')
     expect(settingsSource).toContain('<ProxySettingsCard')
     const proxyIndex = settingsSource.indexOf('<ProxySettingsCard')
-    const vipPromptIndex = settingsSource.indexOf('自定义模型仅对 VIP 开放')
+    const customModelHeaderIndex = settingsSource.indexOf('h2 className="text-sm font-semibold">自定义模型</h2>')
     expect(proxyIndex).toBeGreaterThan(0)
-    expect(vipPromptIndex).toBeGreaterThan(proxyIndex)
+    expect(customModelHeaderIndex).toBeGreaterThan(proxyIndex)
   })
 })
 

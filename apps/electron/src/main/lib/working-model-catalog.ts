@@ -41,8 +41,9 @@ export class WorkingModelCatalogAccessError extends Error {
   }
 }
 
-export function assertWorkingModelCatalogVip(isVip: boolean): void {
-  if (!isVip) throw new WorkingModelCatalogAccessError()
+/** 兼容旧接口：自定义模型已对所有人开放，此函数不再抛出异常。 */
+export function assertWorkingModelCatalogVip(_isVip?: boolean): void {
+  // 自定义模型对所有人可用，不再校验 VIP
 }
 
 /** 将 Working 用户 ID 归一化为本地模型目录的归属键。 */
@@ -173,19 +174,18 @@ function readWorkingModelCatalogAccount(
   ownerId: string | undefined,
 ): { store: WorkingModelCatalogStore; account?: WorkingModelCatalogAccountRecord } {
   const store = readWorkingModelCatalogStore()
-  if (!ownerId) return { store }
+  const effectiveOwnerId = ownerId?.trim() || 'default'
 
-  const account = store.accounts[ownerId] ?? getLegacyAccountRecord(settings, ownerId)
+  const account = store.accounts[effectiveOwnerId] ?? getLegacyAccountRecord(settings, effectiveOwnerId)
   return { store, account }
 }
 
 function buildCatalogView(settings: AppSettings, ownerId?: string): WorkingModelCatalog | undefined {
-  return readWorkingModelCatalogAccount(settings, ownerId?.trim()).account?.catalog
+  return readWorkingModelCatalogAccount(settings, ownerId).account?.catalog
 }
 
-/** 获取 Renderer 可见的模型目录；调用方必须先完成 VIP 校验。 */
-export function getWorkingModelCatalog(isVip: boolean, ownerId?: string): WorkingModelCatalog {
-  assertWorkingModelCatalogVip(isVip)
+/** 获取 Renderer 可见的模型目录；自定义模型已对所有人开放。 */
+export function getWorkingModelCatalog(_isVip?: boolean, ownerId?: string): WorkingModelCatalog {
   return buildCatalogView(getSettings(), ownerId) ?? { models: [], categories: [] }
 }
 
@@ -195,12 +195,10 @@ export function getWorkingModelCatalog(isVip: boolean, ownerId?: string): Workin
  * apiKey 未提供表示保留原密钥；空字符串表示清除原密钥。删除模型时同步
  * 删除对应密钥，避免本地配置长期积累已失效凭据。
  */
-export function saveWorkingModelCatalog(value: unknown, isVip: boolean, ownerId?: string): WorkingModelCatalog {
-  assertWorkingModelCatalogVip(isVip)
-  if (!ownerId?.trim()) throw new Error('无法识别当前 Working 账号，无法保存模型配置')
+export function saveWorkingModelCatalog(value: unknown, _isVip?: boolean, ownerId?: string): WorkingModelCatalog {
   const input = normalizeWorkingModelCatalogInput(value)
   const currentSettings = getSettings()
-  const normalizedOwnerId = ownerId.trim()
+  const normalizedOwnerId = ownerId?.trim() || 'default'
   const { store, account: currentAccount } = readWorkingModelCatalogAccount(currentSettings, normalizedOwnerId)
   const legacyOwnerId = currentSettings.workingModelCatalogOwnerId
   const legacyAccount = getLegacyAccountRecord(currentSettings, legacyOwnerId)
@@ -239,7 +237,7 @@ export function saveWorkingModelCatalog(value: unknown, isVip: boolean, ownerId?
  */
 export function filterWorkingModelCatalogUpdate(
   updates: Partial<AppSettings>,
-  isVip: boolean,
+  _isVip?: boolean,
   ownerId?: string,
 ): Partial<AppSettings> {
   const record = updates as Record<string, unknown>
@@ -250,30 +248,30 @@ export function filterWorkingModelCatalogUpdate(
     throw new Error('模型目录归属只能由当前 Working 账号决定')
   }
   if (record.workingModelCatalog !== undefined) {
-    assertWorkingModelCatalogVip(isVip)
     throw new Error('模型目录只能通过模型管理保存')
   }
   assertWorkingCustomModelSelection(
     typeof record.agentChannelId === 'string' ? record.agentChannelId : undefined,
     typeof record.agentModelId === 'string' ? record.agentModelId : undefined,
-    isVip,
+    true,
     ownerId,
   )
   return updates
 }
 
 /**
- * 对外返回设置时移除密钥字段，并按 VIP 状态隐藏模型目录。
+ * 对外返回设置时移除密钥字段。
+ * 自定义模型已对所有人开放，向所有用户返回其对应的模型目录。
  * 该函数同时用于 Electron IPC 与浏览器 HTTP API，形成统一的脱敏边界。
  */
-export function redactWorkingModelCatalog(settings: AppSettings, isVip: boolean, ownerId?: string): AppSettings {
+export function redactWorkingModelCatalog(settings: AppSettings, _isVip?: boolean, ownerId?: string): AppSettings {
   const {
     workingModelApiKeys: _keys,
     workingModelCatalog: _catalog,
     workingModelCatalogOwnerId: _ownerId,
     ...safeSettings
   } = settings
-  const catalog = isVip ? buildCatalogView(settings, ownerId) : undefined
+  const catalog = buildCatalogView(settings, ownerId)
   if (!catalog) return safeSettings
   return {
     ...safeSettings,
@@ -293,10 +291,9 @@ export interface WorkingCustomModelRuntime {
  */
 export function getWorkingCustomModelRuntime(
   channelId: string,
-  isVip: boolean,
+  _isVip?: boolean,
   ownerId?: string,
 ): WorkingCustomModelRuntime {
-  assertWorkingModelCatalogVip(isVip)
   const customModelId = workingCustomModelIdFromChannelId(channelId)
   if (!customModelId) throw new Error(`自定义模型渠道不正确: ${channelId}`)
 
@@ -334,18 +331,18 @@ export function getWorkingCustomModelRuntime(
 /**
  * 校验会话/设置写入的自定义模型选择。
  *
- * 自定义渠道不能只在真正运行时校验，否则非 VIP 或过期 Model ID 仍会被
+ * 自定义渠道不能只在真正运行时校验，否则过期 Model ID 仍会被
  * 持久化到会话索引和 settings.json，下一次启动再恢复成无效状态。
  */
 export function assertWorkingCustomModelSelection(
   channelId: string | undefined,
   modelId: string | undefined,
-  isVip: boolean,
+  _isVip?: boolean,
   ownerId?: string,
 ): void {
   if (!isWorkingCustomModelChannelId(channelId)) return
 
-  const runtime = getWorkingCustomModelRuntime(channelId, isVip, ownerId)
+  const runtime = getWorkingCustomModelRuntime(channelId, true, ownerId)
   if (modelId !== undefined && modelId !== runtime.model.modelId) {
     throw new Error('自定义模型 ID 已更新，请刷新模型管理后重试')
   }
@@ -358,11 +355,9 @@ export function assertWorkingCustomModelSelection(
  */
 export async function testWorkingCustomModelConnection(
   input: WorkingTestCustomModelInput,
-  isVip: boolean,
+  _isVip?: boolean,
   ownerId?: string,
 ): Promise<ChannelTestResult> {
-  assertWorkingModelCatalogVip(isVip)
-
   let apiKey = input.apiKey?.trim()
   if (!apiKey && input.id && ownerId) {
     const settings = getSettings()

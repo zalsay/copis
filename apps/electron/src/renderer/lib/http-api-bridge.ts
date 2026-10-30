@@ -180,15 +180,13 @@ function createHttpMethods(): Record<string, HttpMethod> {
     },
     getWorkingModelCatalog: async () => {
       const settings = await request<{ workingModelCatalog?: WorkingModelCatalog }>('/api/settings')
-      if (!settings.workingModelCatalog) throw new Error('仅 VIP 用户可使用模型管理')
-      return settings.workingModelCatalog
+      return settings.workingModelCatalog ?? { models: [], categories: [] }
     },
     saveWorkingModelCatalog: async (args) => {
       const settings = await request<{ workingModelCatalog?: WorkingModelCatalog }>('/api/settings', 'PATCH', {
         workingModelCatalog: getArgument(args, 0),
       })
-      if (!settings.workingModelCatalog) throw new Error('仅 VIP 用户可使用模型管理')
-      return settings.workingModelCatalog
+      return settings.workingModelCatalog ?? { models: [], categories: [] }
     },
     // ===== 应用设置 =====
     getSettings: () => request('/api/settings'),

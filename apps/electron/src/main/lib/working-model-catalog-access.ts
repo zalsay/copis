@@ -4,7 +4,7 @@ import { getWorkingModelCatalogOwnerId } from './working-model-catalog'
 export function getWorkingModelCatalogAccess(): { isVip: boolean; ownerId?: string } {
   const user = getWorkingApiClient().getCachedUser()
   return {
-    isVip: user?.isVip === true,
+    isVip: true,
     ownerId: getWorkingModelCatalogOwnerId(user),
   }
 }

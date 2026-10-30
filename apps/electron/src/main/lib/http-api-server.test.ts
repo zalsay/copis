@@ -85,7 +85,7 @@ describe('Rust HTTP API 业务桥契约', () => {
     })
   })
 
-  test('Given 非 VIP 用户 When 读取或保存模型目录 Then 隐藏目录并返回 vip_required', async () => {
+  test('Given 非 VIP 用户 When 读取或保存模型目录 Then 正常返回模型目录且支持更新配置', async () => {
     const settings = {
       themeMode: 'dark' as const,
       workingModelCatalog: {
@@ -99,42 +99,36 @@ describe('Rust HTTP API 业务桥契约', () => {
       ...createDependencies(),
       getWorkingClient: (() => ({
         baseUrl: 'https://backend.example.test',
-        getCachedUser: () => ({ id: 1, isVip: false }),
+        getCachedUser: () => ({ id: 777, isVip: false }),
       })) as unknown as HttpApiDependencies['getWorkingClient'],
       getAppSettings: () => settings,
-      updateAppSettings: () => {
+      updateAppSettings: (updates) => {
         updateCalls += 1
-        return settings
+        return { ...settings, ...updates }
       },
+      getWorkingModelCatalog: () => ({ categories: [], models: [] }),
+      saveWorkingModelCatalog: () => ({ categories: [], models: [] }),
     }
 
     await expect(handleHttpApiRequest({ method: 'GET', path: '/api/settings' }, dependencies)).resolves.toEqual({
       status: 200,
-      body: { themeMode: 'dark' },
+      body: {
+        themeMode: 'dark',
+        workingModelCatalog: { categories: [], models: [] },
+      },
     })
     await expect(handleHttpApiRequest({
       method: 'PATCH',
       path: '/api/settings',
       body: JSON.stringify({ themeMode: 'light', workingModelCatalog: { categories: [], models: [] } }),
     }, dependencies)).resolves.toEqual({
-      status: 403,
-      body: { error: '仅 VIP 用户可使用模型管理', code: 'vip_required' },
+      status: 200,
+      body: {
+        themeMode: 'light',
+        workingModelCatalog: { categories: [], models: [] },
+      },
     })
-    expect(updateCalls).toBe(0)
-    expect(settings.themeMode).toBe('dark')
-
-    await expect(handleHttpApiRequest({
-      method: 'PATCH',
-      path: '/api/settings',
-      body: JSON.stringify({
-        agentChannelId: 'copis-custom-ghost',
-        agentModelId: 'ghost',
-      }),
-    }, dependencies)).resolves.toEqual({
-      status: 403,
-      body: { error: '仅 VIP 用户可使用模型管理', code: 'vip_required' },
-    })
-    expect(updateCalls).toBe(0)
+    expect(updateCalls).toBe(1)
   })
 
   test('Given VIP 用户尚未保存模型目录 When 通过 HTTP 读取设置 Then 返回空模型目录', async () => {
@@ -387,13 +381,13 @@ describe('Rust HTTP API 业务桥契约', () => {
         workspaceId: workspace.id,
       }),
     }, dependencies)).resolves.toEqual({
-      status: 403,
-      body: { error: '仅 VIP 用户可使用模型管理', code: 'vip_required' },
+      status: 500,
+      body: { error: '自定义模型不存在，请刷新模型管理', code: 'internal_error' },
     })
     expect(createCalls).toBe(0)
   })
 
-  test('Given 非 VIP 用户 When 浏览器持久化自定义模型选择 Then 在写入会话前拒绝', async () => {
+  test('Given 不存在的自定义模型 When 浏览器持久化自定义模型选择 Then 在写入会话前拒绝', async () => {
     const dependencies: HttpApiDependencies = {
       ...createDependencies(),
       getWorkingClient: (() => ({
@@ -416,8 +410,8 @@ describe('Rust HTTP API 业务桥契约', () => {
         modelId: 'provider-model-1',
       }),
     }, dependencies)).resolves.toEqual({
-      status: 403,
-      body: { error: '仅 VIP 用户可使用模型管理', code: 'vip_required' },
+      status: 500,
+      body: { error: '自定义模型不存在，请刷新模型管理', code: 'internal_error' },
     })
   })
 
