@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
-import { constants, createReadStream, existsSync } from 'node:fs'
+import { accessSync, constants, createReadStream, existsSync } from 'node:fs'
 import { chmod, lstat, mkdir, open, rename, rm, stat } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import type {
   FunctionalModuleArchitecture,
   FunctionalModuleArtifact,
@@ -12,13 +12,15 @@ import type {
   FunctionalModuleStatus,
 } from '@copis/shared'
 import { isChromeDesktopComponentMetadata } from '@copis/shared'
+import { inspectChromeDesktopComponent } from './chrome-desktop-component-client-runtime'
 import { getFunctionalModulesDir } from './config-paths'
-import { getFunctionalModuleManifestUrl, parseFunctionalModuleManifest } from './functional-module-manifest'
+import { FunctionalModuleNotPublishedError, getFunctionalModuleManifestUrl, parseFunctionalModuleManifest } from './functional-module-manifest'
 import {
   activateFunctionalModule,
   assembleFunctionalModule,
   cacheFunctionalModule,
   getFunctionalModulePaths,
+  hasActiveFunctionalModuleRecord,
   readActiveFunctionalModule,
   type FunctionalModulePackage,
 } from './functional-module-store'
@@ -70,6 +72,7 @@ export interface PreparedFunctionalModule {
 const activeInstalls = new Map<string, Promise<FunctionalModuleStatus>>()
 const activePrepares = new Map<string, Promise<PreparedFunctionalModule>>()
 
+
 export async function fetchFunctionalModuleManifest(
   options: FunctionalModuleManagerOptions = {},
 ): Promise<FunctionalModuleArtifact[]> {
@@ -106,19 +109,36 @@ export function getFunctionalModuleStatuses(
 export function getFunctionalModuleStatus(
   name: FunctionalModuleName,
   rootDir = getFunctionalModulesDir(),
+  arch = normalizeArchitecture(process.arch),
 ): FunctionalModuleStatus {
   const definition = getModuleDefinition(name)
-  const active = readActiveFunctionalModule(getFunctionalModulePaths(rootDir), name)
+  const paths = getFunctionalModulePaths(rootDir)
+  const active = readActiveFunctionalModule(paths, name)
+  let localIssue: FunctionalModuleStatus['localIssue']
+  if (name === 'chrome-desktop-cli') {
+    if (!active && hasActiveFunctionalModuleRecord(paths, name)) localIssue = 'invalid-installation'
+    if (active) {
+      if (basename(active.path) === 'copis-chrome') localIssue = 'upgrade-required'
+      else {
+        try {
+          const installation = inspectChromeDesktopComponent(rootDir, active, arch)
+          accessSync(installation.helperPath, constants.X_OK)
+        } catch { localIssue = 'invalid-installation' }
+      }
+    }
+  }
   return {
     name,
     displayName: definition.displayName,
-    installed: Boolean(active),
+    installed: Boolean(active) && !localIssue,
     version: active?.version ?? null,
     path: active?.path ?? null,
     availableVersion: null,
     updateAvailable: false,
     required: active?.required ?? definition.required,
-    error: null,
+    error: localIssue === 'upgrade-required' ? '旧版 Chrome 组件需要升级为 MCC'
+      : localIssue ? '本地 MCC 组件文件异常，暂不可用' : null,
+    ...(localIssue ? { localIssue } : {}),
   }
 }
 
@@ -136,25 +156,26 @@ export async function checkFunctionalModule(
 ): Promise<FunctionalModuleStatus> {
   const definition = getModuleDefinition(name)
   const rootDir = options.rootDir ?? getFunctionalModulesDir()
-  const current = getFunctionalModuleStatus(name, rootDir)
-
   try {
     const artifact = await resolveFunctionalModuleArtifact(name, options)
+    const current = getFunctionalModuleStatus(name, rootDir, options.arch)
     const active = readActiveFunctionalModule(getFunctionalModulePaths(rootDir), name)
     return {
       ...current,
       displayName: definition.displayName,
       required: artifact.required,
       availableVersion: artifact.version,
-      updateAvailable: !active
+      updateAvailable: !current.installed || !active
         || active.version !== artifact.version
         || active.sha256.toLowerCase() !== artifact.sha256.toLowerCase(),
-      error: null,
     }
   } catch (error) {
     return {
-      ...current,
-      error: toErrorMessage(error),
+      ...getFunctionalModuleStatus(name, rootDir, options.arch),
+      updateError: {
+        code: error instanceof FunctionalModuleNotPublishedError ? 'not-published' : 'check-failed',
+        message: toErrorMessage(error),
+      },
     }
   }
 }
@@ -174,7 +195,7 @@ export async function resolveFunctionalModuleArtifact(
   // DSH 和 Chrome 组件使用独立版本/协议，不默认受全平台主程序版本门槛拦截。
   const checkClientVersion = options.checkClientVersion ?? (name !== 'dsh' && name !== 'chrome-desktop-cli')
   const artifact = (await fetchFunctionalModuleManifest({ ...options, checkClientVersion })).find((item) => item.name === name)
-  if (!artifact) throw new Error(`当前平台没有功能模块: ${name}`)
+  if (!artifact) throw new FunctionalModuleNotPublishedError(`当前平台没有功能模块: ${name}`)
   return ensureRequiredArtifact(definition, artifact, options.arch ?? normalizeArchitecture(process.arch))
 }
 
@@ -249,7 +270,7 @@ export async function activatePreparedFunctionalModule(
   await validateChromeDesktopModule(prepared)
   const paths = getFunctionalModulePaths(rootDir)
   await activateFunctionalModule(paths, prepared.packageInfo, prepared.versionDir)
-  return statusWithArtifact(getFunctionalModuleStatus(prepared.artifact.name, rootDir), prepared.artifact)
+  return statusWithArtifact(getFunctionalModuleStatus(prepared.artifact.name, rootDir, prepared.artifact.arch), prepared.artifact)
 }
 
 async function installFunctionalModuleInner(
@@ -267,18 +288,18 @@ async function installFunctionalModuleInner(
     emit({ phase: 'manifest', detail: '正在获取组件版本信息', progress: 0.04 })
     const artifact = await resolveFunctionalModuleArtifact(input.name, options)
     const current = readActiveFunctionalModule(paths, input.name)
-    if (!input.force
+    if (!input.force && getFunctionalModuleStatus(input.name, rootDir, options.arch).installed
       && current?.version === artifact.version
       && current.sha256.toLowerCase() === artifact.sha256.toLowerCase()) {
       emit({ phase: 'done', detail: `已是最新版本 v${artifact.version}`, progress: 1, version: artifact.version })
-      return statusWithArtifact(getFunctionalModuleStatus(input.name, rootDir), artifact)
+      return statusWithArtifact(getFunctionalModuleStatus(input.name, rootDir, options.arch), artifact)
     }
 
     const prepared = await prepareFunctionalModuleInner(input, options, definition, emit, artifact)
     emit({ phase: 'activate', detail: `正在启用 ${definition.displayName}`, progress: 0.94, version: artifact.version })
     await activatePreparedFunctionalModule(prepared, rootDir)
     emit({ phase: 'done', detail: `${definition.displayName} v${artifact.version} 已就绪`, progress: 1, version: artifact.version })
-    return statusWithArtifact(getFunctionalModuleStatus(input.name, rootDir), artifact)
+    return statusWithArtifact(getFunctionalModuleStatus(input.name, rootDir, options.arch), artifact)
   } catch (error) {
     const detail = toErrorMessage(error)
     emit({ phase: 'error', detail, progress: 1 })
@@ -476,7 +497,6 @@ function statusWithArtifact(
     availableVersion: artifact.version,
     updateAvailable: false,
     required: artifact.required,
-    error: null,
   }
 }
 

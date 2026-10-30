@@ -62,7 +62,7 @@ export function FunctionalModulesCard(): React.ReactElement {
       updateStatus(await window.electronAPI.checkFunctionalModule(name))
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      updateStatus({ ...(statuses[name] ?? createEmptyFunctionalModuleStatus(definition)), error: message })
+      updateStatus({ ...(statuses[name] ?? createEmptyFunctionalModuleStatus(definition)), updateError: { code: 'check-failed', message } })
     } finally {
       setBusy((current) => ({ ...current, [name]: false }))
     }
@@ -139,6 +139,10 @@ export function FunctionalModulesCard(): React.ReactElement {
           const progress = progresses[definition.name]
           const isBusy = busy[definition.name] === true
           const progressPercent = Math.round((progress?.progress ?? 0) * 100)
+          const notPublished = status.updateError?.code === 'not-published'
+          const canInstall = !notPublished && (!status.installed || status.updateAvailable)
+          const canCheck = notPublished || (status.installed && !status.updateAvailable)
+          const issueColor = status.error ? 'text-destructive' : 'text-amber-600 dark:text-amber-400'
           const actionLabel = status.updateAvailable ? '更新' : status.installed ? '检查更新' : '安装'
           const ActionIcon = status.installed && !status.updateAvailable ? RefreshCw : Download
           const stateText = isBusy && progress
@@ -160,19 +164,19 @@ export function FunctionalModulesCard(): React.ReactElement {
                 <div className="flex min-w-0 flex-col items-end gap-2">
                   <div
                     className={`flex max-w-[15rem] items-start justify-end gap-1.5 text-right text-xs ${
-                      status.error && !isBusy ? 'text-destructive' : 'text-muted-foreground'
+                      !isBusy && (status.error || status.updateError) ? issueColor : 'text-muted-foreground'
                     }`}
                   >
                     {isBusy ? (
                       <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
-                    ) : status.error ? (
+                    ) : status.error || status.updateError ? (
                       <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     ) : null}
                     <span className="break-words">{stateText}</span>
                   </div>
 
                   <div className="flex min-h-7 items-center justify-end gap-2">
-                    {status.error?.includes('版本过低') && (
+                    {(status.error?.includes('版本过低') || status.updateError?.message.includes('版本过低')) && (
                       <Button
                         variant="outline"
                         size="sm"
@@ -187,13 +191,13 @@ export function FunctionalModulesCard(): React.ReactElement {
                         打开官网
                       </Button>
                     )}
-                    {!isBusy && !status.updateAvailable && status.installed && (
+                    {!isBusy && canCheck && (
                       <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => void runCheck(definition)}>
                         <RefreshCw className="mr-1.5 h-3 w-3" />
                         检查更新
                       </Button>
                     )}
-                    {!isBusy && (!status.installed || status.updateAvailable) && (
+                    {!isBusy && canInstall && (
                       <Button size="sm" className="h-7 text-xs" onClick={() => void runInstall(definition)}>
                         <ActionIcon className="mr-1.5 h-3 w-3" />
                         {actionLabel}

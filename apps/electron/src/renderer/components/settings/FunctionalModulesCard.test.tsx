@@ -131,7 +131,7 @@ describe('功能模块设置复用现有 Chrome 安装与更新交互', () => {
 
     expect(store.get(functionalModuleBusyAtom)['node-runtime']).toBe(false)
     expect(store.get(functionalModuleBusyAtom)['agently-cli']).toBe(false)
-    expect(store.get(functionalModuleStatusesAtom)['agently-cli']?.error).toBe('清单暂不可用')
+    expect(store.get(functionalModuleStatusesAtom)['agently-cli']?.updateError?.message).toBe('清单暂不可用')
     expect(store.get(functionalModuleStatusesAtom)['chrome-desktop-cli']?.availableVersion).toBe('1.1.0')
     expect(checkAll!.hasAttribute('disabled')).toBe(false)
   })
@@ -167,4 +167,29 @@ describe('功能模块设置复用现有 Chrome 安装与更新交互', () => {
     await act(async () => { resolveInstall({ ...chrome, installed: true, version: '0.2.0' }) })
     expect(chromeRow()!.textContent).toContain('已准备好（v0.2.0）')
   })
+})
+
+
+describe('组件卡片不混淆本地状态与更新检查', () => {
+  test('Given 已安装MCC When 检查IPC异常 Then 保留已准备并提供继续检查入口', async () => {
+    modules = [{ ...chrome, installed: true, version: '0.3.6' }]
+    api.checkFunctionalModule.mockImplementation(async () => { throw new Error('private-fixture-error') })
+    await renderCard(); await clickChromeAction('检查更新')
+    expect(chromeRow()!.textContent).toContain('已准备好（v0.3.6），更新检查失败')
+    expect(chromeRow()!.textContent).not.toContain('private-fixture-error')
+    expect(store.get(functionalModuleStatusesAtom)['chrome-desktop-cli']?.error).toBeNull()
+    expect(store.get(functionalModuleStatusesAtom)['chrome-desktop-cli']?.updateError?.code).toBe('check-failed')
+  })
+})
+
+
+test('Given 当前平台组件尚未发布 When 卡片展示 Then 只提供重新检查而不诱导反复安装', async () => {
+  modules = [{ ...chrome, updateError: { code: 'not-published', message: 'private-manifest-url' } }]
+  await renderCard()
+  expect(chromeRow()!.textContent).toContain('当前平台组件尚未发布，暂时无法安装')
+  const labels = [...chromeRow()!.querySelectorAll('button')].map(button => button.textContent)
+  expect(labels.some(label => label?.includes('检查更新'))).toBe(true)
+  expect(labels.some(label => label?.includes('安装'))).toBe(false)
+  expect(chromeRow()!.textContent).not.toContain('private-manifest-url')
+  expect(api.installFunctionalModule).not.toHaveBeenCalled()
 })

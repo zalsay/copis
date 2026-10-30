@@ -103,3 +103,24 @@ describe('Chrome 功能模块平台可见性', () => {
     expect(moduleUi.getVisibleFunctionalModuleDefinitions({ 'chrome-desktop-cli': chrome }, false).map(item => item.name)).not.toContain('chrome-desktop-cli')
   })
 })
+
+
+describe('组件本地就绪与更新错误文案', () => {
+  const empty = createEmptyFunctionalModuleStatus(FUNCTIONAL_MODULE_DEFINITIONS.find(item => item.name === 'chrome-desktop-cli')!)
+  test('Given 本地有效但网络检查失败 Then 不误报本地未准备', () => {
+    expect(getFunctionalModuleStateText({ ...empty, installed: true, version: '0.3.6', updateError: { code: 'check-failed', message: 'raw-secret-url' } }))
+      .toBe('已准备好（v0.3.6），更新检查失败')
+  })
+  test('Given 当前平台组件未发布 Then 区分已安装与未安装且不回显原始错误', () => {
+    const updateError = { code: 'not-published' as const, message: 'raw-secret-url' }
+    expect(getFunctionalModuleStateText({ ...empty, updateError })).toBe('当前平台组件尚未发布，暂时无法安装')
+    expect(getFunctionalModuleStateText({ ...empty, installed: true, version: '0.3.6', updateError })).toBe('已准备好（v0.3.6），线上暂无当前平台组件')
+  })
+  test('Given 本地组件不符合MCC契约 Then 展示升级或本地异常而不是启动失败', () => {
+    expect(getFunctionalModuleStateText({ ...empty, localIssue: 'upgrade-required', error: 'raw-path' })).toBe('旧版 Chrome 组件需要升级为 MCC')
+    expect(getFunctionalModuleStateText({ ...empty, localIssue: 'invalid-installation', error: 'raw-path' })).toBe('本地 MCC 组件文件异常，暂不可用')
+  })
+  test('Given 本地未安装但有可用版本 Then 显示可安装而不是已准备v-', () => {
+    expect(getFunctionalModuleStateText({ ...empty, updateAvailable: true, availableVersion: '0.3.6' })).toBe('可安装（v0.3.6）')
+  })
+})

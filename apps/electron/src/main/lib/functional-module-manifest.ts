@@ -12,6 +12,8 @@ const SUPPORTED_SCHEMA = 1
 const MANIFEST_ENV = 'COPIS_FUNCTIONAL_MODULE_MANIFEST_URL'
 declare const __COPIS_FUNCTIONAL_MODULE_MANIFEST_URL__: string | undefined
 
+export class FunctionalModuleNotPublishedError extends Error {}
+
 export class FunctionalModuleIncompatibleClientError extends Error {
   readonly clientVersion: string
   readonly minClientVersion: string
@@ -58,7 +60,7 @@ export function parseFunctionalModuleManifest(
 
   const platformKey = `${platform}-${arch}`
   const target = manifest.platforms[platformKey]
-  if (!target) throw new Error(`manifest 没有当前平台的功能模块: ${platformKey}`)
+  if (!target) throw new FunctionalModuleNotPublishedError(`manifest 没有当前平台的功能模块: ${platformKey}`)
   const minClientVersion = target.minClientVersion ?? manifest.client?.minVersion
   if (options.checkClientVersion !== false
     && minClientVersion

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { constants } from 'node:fs'
-import { access, chmod, lstat, mkdir, mkdtemp, open, realpath, rm } from 'node:fs/promises'
+import { accessSync, closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync } from 'node:fs'
+import { chmod, lstat, mkdir, mkdtemp, open, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { isChromeDesktopComponentMetadata } from '@copis/shared'
@@ -77,17 +77,44 @@ export async function resolveComponentInstallation(options: ChromeDesktopCompone
       active = await resolver(rootDir)
     }
     if (!active || active.name !== MODULE_NAME || basename(active.path) !== 'mcc' || !active.version) throw helperFailure()
-    const cliPath = await managedFile(managedRoot, active.path, true)
-    const metadataPath = await managedFile(managedRoot, join(dirname(active.path), 'module.json'))
-    const metadata: unknown = JSON.parse((await readBoundedFile(metadataPath, MAX_COMPONENT_OUTPUT_BYTES)).toString('utf8'))
-    if (!isChromeDesktopComponentMetadata(metadata, { version: active.version, arch: options.arch ?? process.arch })) throw helperFailure()
-    const helperPath = await managedFile(managedRoot, join(dirname(active.path), metadata.helper))
-    if (dirname(helperPath) !== dirname(cliPath)) throw helperFailure()
-    await prepareHelperExecutable(await realpath(managedRoot), helperPath)
-    return { path: cliPath, helperPath, version: active.version }
+    const installation = inspectChromeDesktopComponent(rootDir, active, options.arch ?? process.arch)
+    await prepareHelperExecutable(await realpath(managedRoot), installation.helperPath)
+    return installation
   } catch {
     throw helperFailure()
   }
+}
+
+/** 复用执行前的受管路径/元数据校验；仅静态读取，不安装、不启动、不 chmod。 */
+export function inspectChromeDesktopComponent(rootDir: string, active: ActiveFunctionalModule, arch: string): ComponentInstallation {
+  if (active.name !== MODULE_NAME || basename(active.path) !== 'mcc' || !active.version) throw helperFailure()
+  const managedRoot = join(resolve(rootDir), 'versions', MODULE_NAME)
+  const cliPath = managedFile(managedRoot, active.path, true)
+  const metadataPath = managedFile(managedRoot, join(dirname(active.path), 'module.json'))
+  const metadata: unknown = JSON.parse(readBoundedMetadata(metadataPath).toString('utf8'))
+  if (!isChromeDesktopComponentMetadata(metadata, { version: active.version, arch })) throw helperFailure()
+  const helperPath = managedFile(managedRoot, join(dirname(active.path), metadata.helper))
+  if (dirname(helperPath) !== dirname(cliPath) || lstatSync(helperPath).nlink !== 1) throw helperFailure()
+  return { path: cliPath, helperPath, version: active.version }
+}
+
+function readBoundedMetadata(path: string): Buffer {
+  const before = lstatSync(path)
+  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size <= 0 || before.size > MAX_COMPONENT_OUTPUT_BYTES) throw helperFailure()
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  try {
+    const opened = fstatSync(fd)
+    if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size) throw helperFailure()
+    const buffer = Buffer.alloc(MAX_COMPONENT_OUTPUT_BYTES + 1)
+    let length = 0
+    while (length < buffer.length) {
+      const count = readSync(fd, buffer, length, buffer.length - length, null)
+      if (!count) break
+      length += count
+    }
+    if (length === 0 || length > MAX_COMPONENT_OUTPUT_BYTES) throw helperFailure()
+    return buffer.subarray(0, length)
+  } finally { closeSync(fd) }
 }
 
 function isWithin(root: string, path: string): boolean {
@@ -95,21 +122,21 @@ function isWithin(root: string, path: string): boolean {
   return part !== '' && !isAbsolute(part) && part !== '..' && !part.startsWith(`..${sep}`)
 }
 
-async function managedFile(root: string, path: string, executable = false): Promise<string> {
+function managedFile(root: string, path: string, executable = false): string {
   if (!isAbsolute(path) || !isWithin(root, path)) throw helperFailure()
   // 连同 versions 与模块根目录逐级检查，拒绝在受管树中插入符号链接。
   const anchor = dirname(dirname(root))
-  const canonicalAnchor = await realpath(anchor)
+  const canonicalAnchor = realpathSync(anchor)
   let cursor = anchor
   for (const part of relative(anchor, path).split(sep)) {
     cursor = join(cursor, part)
-    const entry = await lstat(cursor)
+    const entry = lstatSync(cursor)
     if (entry.isSymbolicLink() || (cursor !== path && !entry.isDirectory())) throw helperFailure()
   }
-  if (!(await lstat(path)).isFile()) throw helperFailure()
-  const canonical = await realpath(path)
+  if (!lstatSync(path).isFile()) throw helperFailure()
+  const canonical = realpathSync(path)
   if (canonical !== join(canonicalAnchor, relative(anchor, path))) throw helperFailure()
-  if (executable) await access(canonical, constants.X_OK)
+  if (executable) accessSync(canonical, constants.X_OK)
   return canonical
 }
 

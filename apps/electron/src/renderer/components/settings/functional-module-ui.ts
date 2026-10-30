@@ -103,8 +103,15 @@ export function createEmptyFunctionalModuleStatus(
 }
 
 export function getFunctionalModuleStateText(status: FunctionalModuleStatus): string {
+  if (status.localIssue === 'upgrade-required') return '旧版 Chrome 组件需要升级为 MCC'
+  if (status.localIssue === 'invalid-installation') return '本地 MCC 组件文件异常，暂不可用'
   if (status.error) return '暂时无法准备，请重试'
+  if (status.updateError) {
+    if (status.installed) return `已准备好（v${status.version ?? '-'}），${status.updateError.code === 'not-published' ? '线上暂无当前平台组件' : '更新检查失败'}`
+    return status.updateError.code === 'not-published' ? '当前平台组件尚未发布，暂时无法安装' : '更新检查失败，请稍后重试'
+  }
   if (status.updateAvailable) {
+    if (!status.installed) return `可安装（v${status.availableVersion ?? '-'}）`
     return `已准备好（v${status.version ?? '-'}），可更新至 v${status.availableVersion ?? '-'}`
   }
   if (status.installed) return `已准备好（v${status.version ?? '-'}）`

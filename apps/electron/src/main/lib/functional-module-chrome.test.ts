@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -192,7 +192,7 @@ describe('Chrome 独立协议与 Electron 版本门槛', () => {
         })
       },
     }
-    expect((await checkFunctionalModule(MODULE_NAME, options)).error).toContain('Copis 版本过低')
+    expect((await checkFunctionalModule(MODULE_NAME, options)).updateError?.message).toContain('Copis 版本过低')
     await expect(installFunctionalModule({ name: MODULE_NAME }, options)).rejects.toThrow('Copis 版本过低')
     expect(calls).toEqual([MANIFEST_URL, MANIFEST_URL])
   })
@@ -290,5 +290,115 @@ describe('Chrome 元数据验证与原子激活', () => {
     })).rejects.toThrow('Chrome 模块元数据')
     expect(readFileSync(join(root, 'active.json'), 'utf8')).toBe(activeBefore)
     expect(statSync(join(componentDir, 'macos-chrome-helper')).mode & 0o111).toBe(0)
+  })
+})
+
+
+describe('MCC本地就绪与线上更新状态独立检测', () => {
+  test('Given 本地MCC有效 When 更新服务断网 Then 保留可用状态并单独记录更新错误', async () => {
+    const root = rootDir(); await installPreviousVersion(root)
+    const status = await checkFunctionalModule(MODULE_NAME, { rootDir: root, platform: 'darwin', arch: 'arm64', manifestUrl: MANIFEST_URL,
+      fetchImpl: async () => { throw new Error('fixture offline') },
+    })
+    expect(status.installed).toBe(true)
+    expect(status.error).toBeNull()
+    expect(status.updateError?.code).toBe('check-failed')
+    expect(status.updateError?.message).toContain('fixture offline')
+  })
+  test('Given 线上清单缺少当前组件 When 检查 Then 明确标记未发布而不是启动失败', async () => {
+    const root = rootDir()
+    const options: FunctionalModuleManagerOptions = { rootDir: root, platform: 'darwin', arch: 'arm64', manifestUrl: MANIFEST_URL,
+      fetchImpl: async () => new Response(JSON.stringify({ schema: 1, channel: 'stable', platforms: { 'darwin-arm64': { modules: {} } } })),
+    }
+    const absent = await checkFunctionalModule(MODULE_NAME, options)
+    expect(absent.installed).toBe(false)
+    expect(absent.error).toBeNull()
+    expect(absent.updateError?.code).toBe('not-published')
+    await installPreviousVersion(root)
+    const ready = await checkFunctionalModule(MODULE_NAME, options)
+    expect(ready.installed).toBe(true)
+    expect(ready.error).toBeNull()
+    expect(ready.updateError?.code).toBe('not-published')
+  })
+  for (const kind of ['missing-helper', 'helper-link', 'helper-mode', 'entry-mode', 'metadata-protocol', 'metadata-large', 'missing-entry'] as const) {
+    test(`Given MCC本地${kind} When 读取状态 Then 不误报已准备且不修改文件`, async () => {
+      const root = rootDir(); const archive = chromeArchive()
+      await installFunctionalModule({ name: MODULE_NAME }, installOptions(root, archive))
+      const dir = installedComponentDir(root, archive.artifact)
+      const helper = join(dir, 'macos-chrome-helper')
+      if (kind === 'missing-helper') rmSync(helper)
+      if (kind === 'helper-link') { rmSync(helper); symlinkSync('/bin/echo', helper) }
+      if (kind === 'helper-mode') chmodSync(helper, 0o644)
+      if (kind === 'entry-mode') chmodSync(join(dir, 'mcc'), 0o644)
+      if (kind === 'metadata-protocol') writeFileSync(join(dir, 'module.json'), JSON.stringify({ ...metadata('0.1.0'), protocolVersion: 2 }))
+      if (kind === 'metadata-large') writeFileSync(join(dir, 'module.json'), ' '.repeat(65537))
+      if (kind === 'missing-entry') rmSync(join(dir, 'mcc'))
+      const status = getFunctionalModuleStatus(MODULE_NAME, root, 'arm64')
+      expect(status.installed).toBe(false)
+      expect(status.localIssue).toBe('invalid-installation')
+      expect(status.error).toBeTruthy()
+      if (kind === 'helper-mode') expect(statSync(helper).mode & 0o777).toBe(0o644)
+    })
+  }
+  test('Given 本地旧copis-chrome入口 When 检测 Then 提示升级且不尝试启动或自动安装', async () => {
+    const root = rootDir(); const archive = chromeArchive()
+    await installFunctionalModule({ name: MODULE_NAME }, installOptions(root, archive))
+    const activePath = join(root, 'active.json'); const active = JSON.parse(readFileSync(activePath, 'utf8'))
+    const record = active.modules[MODULE_NAME]
+    const versionDir = join(root, record.versionDir)
+    const legacy = record.entrypoint.replace(/mcc$/, 'copis-chrome')
+    writeFileSync(join(versionDir, legacy), 'legacy', { mode: 0o755 })
+    record.entrypoint = legacy
+    const lockPath = join(versionDir, 'module-lock.json'); const lock = JSON.parse(readFileSync(lockPath, 'utf8'))
+    lock.package.entrypoint = legacy; writeFileSync(lockPath, JSON.stringify(lock)); writeFileSync(activePath, JSON.stringify(active))
+    const status = getFunctionalModuleStatus(MODULE_NAME, root, 'arm64')
+    expect(status.installed).toBe(false)
+    expect(status.version).toBe('0.1.0')
+    expect(status.localIssue).toBe('upgrade-required')
+  })
+  test('Given 本地MCC有效 When 刷新列表 Then 不执行CLI或创建daemon', async () => {
+    const root = rootDir(); const archive = chromeArchive()
+    await installFunctionalModule({ name: MODULE_NAME }, installOptions(root, archive))
+    const marker = join(root, 'unexpected-launch')
+    writeFileSync(join(installedComponentDir(root, archive.artifact), 'mcc'), `#!/bin/sh
+touch '${marker}'
+`, { mode: 0o755 })
+    expect(getFunctionalModuleStatus(MODULE_NAME, root, 'arm64').installed).toBe(true)
+    expect(existsSync(marker)).toBe(false)
+  })
+})
+
+
+describe('组件检查保留当前本地状态', () => {
+  test('Given 整个平台尚未发布 When 检查 Then 返回未发布而不是通用网络故障', async () => {
+    const status = await checkFunctionalModule(MODULE_NAME, { rootDir: rootDir(), platform: 'darwin', arch: 'arm64', manifestUrl: MANIFEST_URL,
+      fetchImpl: async () => Response.json({ schema: 1, channel: 'stable', platforms: {} }),
+    })
+    expect(status.updateError?.code).toBe('not-published')
+    expect(status.error).toBeNull()
+  })
+  for (const fail of [false, true]) {
+    test(`Given 检查期间helper失效 When 线上${fail ? '失败' : '成功'} Then 重新读取本地异常且不被远端状态覆盖`, async () => {
+      const root = rootDir(); const archive = chromeArchive()
+      await installFunctionalModule({ name: MODULE_NAME }, installOptions(root, archive))
+      const status = await checkFunctionalModule(MODULE_NAME, { rootDir: root, platform: 'darwin', arch: 'arm64', manifestUrl: MANIFEST_URL,
+        fetchImpl: async () => {
+          rmSync(join(installedComponentDir(root, archive.artifact), 'macos-chrome-helper'))
+          if (fail) throw new Error('fixture offline')
+          return Response.json({ schema: 1, channel: 'stable', platforms: { 'darwin-arm64': { modules: { [MODULE_NAME]: archive.artifact } } } })
+        },
+      })
+      expect(status.installed).toBe(false)
+      expect(status.localIssue).toBe('invalid-installation')
+      expect(status.error).toBeTruthy()
+      if (fail) expect(status.updateError?.code).toBe('check-failed')
+    })
+  }
+  test('Given 已安装版本helper损坏 When 安装同版本 Then 不因版本相等返回准备成功', async () => {
+    const root = rootDir(); const archive = chromeArchive(); const options = installOptions(root, archive)
+    await installFunctionalModule({ name: MODULE_NAME }, options)
+    rmSync(join(installedComponentDir(root, archive.artifact), 'macos-chrome-helper'))
+    await expect(installFunctionalModule({ name: MODULE_NAME }, options)).rejects.toThrow()
+    expect(getFunctionalModuleStatus(MODULE_NAME, root, 'arm64').installed).toBe(false)
   })
 })

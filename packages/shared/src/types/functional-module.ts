@@ -73,6 +73,10 @@ export interface FunctionalModuleStatus {
   updateAvailable: boolean
   required: boolean
   error: string | null
+  /** 本地 MCC 静态校验失败；刷新状态不启动进程或修改权限。 */
+  localIssue?: 'upgrade-required' | 'invalid-installation'
+  /** 更新检查失败独立记录，不能把本地可用组件降级为未准备。 */
+  updateError?: { code: 'not-published' | 'check-failed'; message: string }
 }
 
 export type FunctionalModuleProgressPhase =

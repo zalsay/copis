@@ -239,6 +239,11 @@ export async function deactivateFunctionalModule(
   await writeJsonAtomically(paths.activeFile, { modules } satisfies ActiveFunctionalModulesFile)
 }
 
+/** 只判断 active 中是否有记录，用于区分未安装与无法通过完整性检查的安装。 */
+export function hasActiveFunctionalModuleRecord(paths: FunctionalModulePaths, name: string): boolean {
+  return Boolean(readActiveFile(paths).modules[name])
+}
+
 export function readActiveFunctionalModule(
   paths: FunctionalModulePaths,
   name: string,
