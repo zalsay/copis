@@ -62,8 +62,12 @@ export async function resolveComponentInstallation(options: ChromeDesktopCompone
   try {
     const rootDir = options.moduleRootDir ?? (await import('./config-paths')).getFunctionalModulesDir()
     const resolver = options.resolveComponent ?? ((root: string) => readActiveFunctionalModule(getFunctionalModulePaths(root), MODULE_NAME))
+    const managedRoot = join(resolve(rootDir), 'versions', MODULE_NAME)
     let active = await resolver(rootDir)
-    if (!active) {
+    // 旧组件只允许经既有安装器升级，不能执行旧入口或从 PATH 寻找替代。
+    const legacy = active?.name === MODULE_NAME && basename(active.path) === 'copis-chrome'
+    if (legacy) await managedFile(managedRoot, active!.path, true)
+    if (!active || legacy) {
       if (options.installComponent) await options.installComponent(rootDir)
       else {
         const { installFunctionalModule } = await import('./functional-module-manager')
@@ -72,14 +76,13 @@ export async function resolveComponentInstallation(options: ChromeDesktopCompone
       // 安装器的返回值不提供信任边界，始终重读 module-store 的 active 指针。
       active = await resolver(rootDir)
     }
-    if (!active || active.name !== MODULE_NAME || basename(active.path) !== 'copis-chrome' || !active.version) throw helperFailure()
-    const managedRoot = join(resolve(rootDir), 'versions', MODULE_NAME)
+    if (!active || active.name !== MODULE_NAME || basename(active.path) !== 'mcc' || !active.version) throw helperFailure()
     const cliPath = await managedFile(managedRoot, active.path, true)
-    const helperPath = await managedFile(managedRoot, join(dirname(active.path), 'copis-chrome-helper'))
     const metadataPath = await managedFile(managedRoot, join(dirname(active.path), 'module.json'))
     const metadata: unknown = JSON.parse((await readBoundedFile(metadataPath, MAX_COMPONENT_OUTPUT_BYTES)).toString('utf8'))
-    if (!isChromeDesktopComponentMetadata(metadata, { version: active.version, arch: options.arch ?? process.arch })
-      || dirname(helperPath) !== dirname(cliPath)) throw helperFailure()
+    if (!isChromeDesktopComponentMetadata(metadata, { version: active.version, arch: options.arch ?? process.arch })) throw helperFailure()
+    const helperPath = await managedFile(managedRoot, join(dirname(active.path), metadata.helper))
+    if (dirname(helperPath) !== dirname(cliPath)) throw helperFailure()
     await prepareHelperExecutable(await realpath(managedRoot), helperPath)
     return { path: cliPath, helperPath, version: active.version }
   } catch {
@@ -145,8 +148,8 @@ export async function createComponentRuntime(installation: ComponentInstallation
 
 export function componentEnvironment(runtime: ComponentRuntime): NodeJS.ProcessEnv {
   const env = { ...process.env }
-  for (const key of Object.keys(env)) if (key.startsWith('COPIS_CHROME_')) delete env[key]
-  return { ...env, COPIS_CHROME_RUNTIME_DIR: runtime.directory, COPIS_CHROME_HELPER: runtime.helperPath }
+  for (const key of Object.keys(env)) if (key.startsWith('COPIS_CHROME_') || key.startsWith('COPIS_DESKTOP_')) delete env[key]
+  return { ...env, COPIS_DESKTOP_RUNTIME_DIR: runtime.directory, COPIS_DESKTOP_HELPER: runtime.helperPath }
 }
 
 /** stderr 丢弃，所有异常使用固定消息，避免把 argv 中的输入或连接凭据带出主进程。 */

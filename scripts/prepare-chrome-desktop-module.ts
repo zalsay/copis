@@ -2,17 +2,17 @@
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, mkdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import type { FunctionalModuleArchitecture, FunctionalModulePlatform } from '@copis/shared'
+import { isChromeDesktopComponentMetadata, type FunctionalModuleArchitecture, type FunctionalModulePlatform } from '@copis/shared'
 import { loadFunctionalModuleVersionLocks } from './functional-module-version-lock'
 
 const repoRoot = resolve(import.meta.dir, '..')
 
 export function chromeDesktopEntrypoint(version: string, arch: FunctionalModuleArchitecture): string {
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Chrome 模块版本必须是稳定三段式版本')
-  return `copis-chrome-${version}-darwin-${arch}/copis-chrome`
+  return `copis-chrome-${version}-darwin-${arch}/mcc`
 }
 
-/** 只读取归档，不执行待发布二进制；同时核对元数据与两个 Mach-O 的目标架构。 */
+/** 只读取归档，不执行待发布二进制；同时核对元数据及 MCC、helper 的 Mach-O 目标架构。 */
 export function validateChromeDesktopArchive(
   archive: string,
   platform: FunctionalModulePlatform,
@@ -37,12 +37,10 @@ export function validateChromeDesktopArchive(
     return tar(['-xOzf', archive, listing[index]!])
   }
   const metadata = JSON.parse(member('module.json').toString('utf8'))
-  if (metadata.name !== 'chrome-desktop-cli' || metadata.version !== version || metadata.platform !== platform
-    || metadata.arch !== arch || metadata.entrypoint !== 'copis-chrome' || metadata.helper !== 'copis-chrome-helper'
-    || metadata.protocolVersion !== 1 || metadata.minimumOsVersion !== '14.0') {
-    throw new Error('Chrome 归档 module.json 版本、平台、架构或双二进制元数据不匹配')
+  if (!isChromeDesktopComponentMetadata(metadata, { version, arch }) || metadata.minimumOsVersion !== '14.0') {
+    throw new Error('MCC 归档 module.json 版本、平台、架构或原生 helper 元数据不匹配')
   }
-  for (const name of ['copis-chrome', 'copis-chrome-helper']) {
+  for (const name of ['mcc', metadata.helper]) {
     const bytes = member(name)
     const cpu = arch === 'arm64' ? 0x0100000c : 0x01000007
     if (bytes.length < 32 || bytes.readUInt32LE(0) !== 0xfeedfacf || bytes.readUInt32LE(4) !== cpu) {
@@ -64,7 +62,9 @@ export function prepareChromeDesktopModule(options: {
   let archive = options.archive
   if (!archive) {
     if (process.platform !== platform || process.arch !== arch) throw new Error('Chrome 组件只能在本机 macOS 平台和架构构建；其他目标请提供已验证 archive')
-    const sourceDir = join(repoRoot, 'native/chrome-desktop-cli')
+    const configuredSource = process.env.COPIS_MCC_SOURCE_DIR
+    if (!configuredSource) throw new Error('请提供 MCC archive 或设置 COPIS_MCC_SOURCE_DIR；不再构建仓库内的旧 Chrome CLI')
+    const sourceDir = resolve(configuredSource)
     const result = spawnSync('bash', [join(sourceDir, 'build.sh')], { cwd: sourceDir, stdio: 'inherit' })
     if (result.status !== 0) throw new Error('Chrome 独立组件构建失败', { cause: result.error })
     archive = join(sourceDir, 'dist', `${dirname(chromeDesktopEntrypoint(version, arch))}.tar.gz`)

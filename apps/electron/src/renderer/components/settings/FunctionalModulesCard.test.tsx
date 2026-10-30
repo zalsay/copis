@@ -9,7 +9,7 @@ import { FunctionalModulesCard } from './FunctionalModulesCard'
 
 const act = (React as typeof React & { act: typeof import('react-dom/test-utils').act }).act
 const chrome: FunctionalModuleStatus = {
-  name: 'chrome-desktop-cli', displayName: 'Chrome 桌面自动化', installed: false,
+  name: 'chrome-desktop-cli', displayName: 'MCC · Chrome 桌面自动化', installed: false,
   version: null, path: null, availableVersion: null, updateAvailable: false, required: false, error: null,
 }
 const globals = { window: globalThis.window, document: globalThis.document, navigator: globalThis.navigator }
@@ -50,7 +50,7 @@ async function renderCard() {
 }
 
 function chromeRow() {
-  const title = [...document.querySelectorAll('h4')].find(item => item.textContent === 'Chrome 桌面自动化')
+  const title = [...document.querySelectorAll('h4')].find(item => item.textContent === 'MCC · Chrome 桌面自动化')
   return title?.closest('.rounded-lg') ?? null
 }
 

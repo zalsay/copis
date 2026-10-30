@@ -9,7 +9,7 @@ import { AboutUpdatesSettings } from './AboutUpdatesSettings'
 
 const act = (React as typeof React & { act: typeof import('react-dom/test-utils').act }).act
 const chrome: FunctionalModuleStatus = {
-  name: 'chrome-desktop-cli', displayName: 'Chrome 桌面自动化', installed: true,
+  name: 'chrome-desktop-cli', displayName: 'MCC · Chrome 桌面自动化', installed: true,
   version: '1.0.0', path: '/local/chrome', availableVersion: null,
   updateAvailable: false, required: false, error: null,
 }
@@ -53,7 +53,7 @@ async function renderAbout() {
 
 function chromeRow() {
   return [...document.querySelectorAll('h4')]
-    .find(item => item.textContent === 'Chrome 桌面自动化')?.closest('.rounded-lg') ?? null
+    .find(item => item.textContent === 'MCC · Chrome 桌面自动化')?.closest('.rounded-lg') ?? null
 }
 
 async function clickWithin(element: Element, label: string) {

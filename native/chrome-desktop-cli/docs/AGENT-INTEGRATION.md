@@ -1,5 +1,7 @@
 # 其他 Agent 接入 Copis Chrome CLI
 
+> **Copis 内置工具说明（MCC 0.3.6）**：在 Copis 中继续调用 `ChromeDesktopStart`、`ChromeDesktopObserve` 等工具；底层通过功能模块管理的 `mcc` 执行，不必也不应通过 Bash 另起 CLI 或绕过 Copis 授权。受管入口、版本、私有运行目录和发布约束见 [组件集成说明](COMPONENT-INTEGRATION.md)。本文其余直接 CLI 示例为历史独立入口说明，不代表 Copis 当前的底层执行入口。
+
 本文面向能够执行本机命令的 Agent，以及为 Agent 编写工具适配器的开发者。命令与响应按 `copis-chrome v0.1.6`、JSON 协议 `1` 核对。快速交给 Agent 使用时，提供 CLI 绝对路径并复制第 9 节的调用约定；程序化集成可参考第 7 节。
 
 接入方式是 **执行 CLI → 解析 JSON → 读取本地截图 → 决策 → 执行动作 → 观察确认**。CLI 提供原生窗口截图、鼠标和键盘输入；页面理解、操作决策和任务结果判断由调用方完成。它没有 DOM、CSS selector、按网页文字定位按钮或执行页面 JavaScript 的接口。

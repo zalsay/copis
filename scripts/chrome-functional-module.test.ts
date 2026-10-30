@@ -9,8 +9,8 @@ const base = { rustOnly: false, rustBinary: '/rust', rustVersion: '9.9.9', offic
 describe('Chrome 独立模块发布入口', () => {
   test('Given Chrome-only When 生成输入 Then 仅产生独立 macOS 可选归档并保留顶层入口', () => {
     const modules = buildFunctionalModuleBinaryInputs({ ...base, chromeDesktopCliOnly: true })
-    expect(modules).toEqual([{ module: 'chrome-desktop-cli', version: '0.1.0', platform: 'darwin', arch: 'arm64', binaryPath: '/chrome.tar.gz', format: 'tar.gz', entrypoint: 'copis-chrome-0.1.0-darwin-arm64/copis-chrome', required: false }])
-    expect(applyFunctionalModuleVersionLocks(modules, loadFunctionalModuleVersionLocks())[0]?.entrypoint).toBe('copis-chrome-0.1.6-darwin-arm64/copis-chrome')
+    expect(modules).toEqual([{ module: 'chrome-desktop-cli', version: '0.1.0', platform: 'darwin', arch: 'arm64', binaryPath: '/chrome.tar.gz', format: 'tar.gz', entrypoint: 'copis-chrome-0.1.0-darwin-arm64/mcc', required: false }])
+    expect(applyFunctionalModuleVersionLocks(modules, loadFunctionalModuleVersionLocks())[0]?.entrypoint).toBe('copis-chrome-0.3.6-darwin-arm64/mcc')
   })
   test('Given 全量发布 When darwin Then 包含 Chrome When win/linux Then 跳过', () => {
     expect(buildFunctionalModuleBinaryInputs(base).some(m => m.module === 'chrome-desktop-cli')).toBe(true)
@@ -26,7 +26,7 @@ describe('Chrome 独立模块发布入口', () => {
   test('Given Chrome 增量 manifest When 合并 Then 保留其他模块和平台', () => {
     const artifact = { version: '1.0.0', url: 'https://example.invalid/archive', sha256: 'a'.repeat(64), size: 1, format: 'tar.gz' as const, entrypoint: 'bin/node', required: true }
     const existing = { schema: 1, channel: 'stable', platforms: { 'darwin-arm64': { modules: { 'node-runtime': artifact } }, 'win32-x64': { modules: { 'node-runtime': artifact } } } }
-    const incoming = { schema: 1, channel: 'stable', platforms: { 'darwin-arm64': { modules: { 'chrome-desktop-cli': { ...artifact, version: '0.1.0', entrypoint: 'copis-chrome-0.1.0-darwin-arm64/copis-chrome', required: false } } } } }
+    const incoming = { schema: 1, channel: 'stable', platforms: { 'darwin-arm64': { modules: { 'chrome-desktop-cli': { ...artifact, version: '0.1.0', entrypoint: 'copis-chrome-0.1.0-darwin-arm64/mcc', required: false } } } } }
     const merged = mergeFunctionalModuleManifests(existing, incoming)
     expect(merged.platforms['darwin-arm64']?.modules['node-runtime']).toEqual(artifact)
     expect(merged.platforms['win32-x64']).toEqual(existing.platforms['win32-x64'])

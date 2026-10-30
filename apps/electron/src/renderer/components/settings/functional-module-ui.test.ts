@@ -43,7 +43,7 @@ describe('功能模块设置页模型', () => {
       'Agent QQ 邮箱 CLI',
       '创造模式',
       '专业模式',
-      'Chrome 桌面自动化',
+      'MCC · Chrome 桌面自动化',
     ])
     expect(FUNCTIONAL_MODULE_DEFINITIONS.every((item) => !/Rust|HTTP|API|Electron/.test(`${item.displayName} ${item.description}`))).toBe(true)
   })
@@ -91,7 +91,7 @@ describe('功能模块设置页模型', () => {
 describe('Chrome 功能模块平台可见性', () => {
   test('Given Chrome 组件定义 When 查看模块属性 Then 是 macOS 可选模块', () => {
     expect(FUNCTIONAL_MODULE_DEFINITIONS.find(item => item.name === 'chrome-desktop-cli')).toMatchObject({
-      displayName: 'Chrome 桌面自动化', required: false, platform: 'darwin',
+      displayName: 'MCC · Chrome 桌面自动化', required: false, platform: 'darwin',
     })
   })
 

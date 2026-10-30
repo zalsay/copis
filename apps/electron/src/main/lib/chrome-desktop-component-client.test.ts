@@ -21,11 +21,11 @@ const fakeCli = `#!${process.execPath}
 const fs = require('node:fs'); const path = require('node:path');
 const dir = __dirname, args = process.argv.slice(2), action = args[0];
 const config = JSON.parse(fs.readFileSync(path.join(dir, 'scenario.json'), 'utf8'));
-const runtime = process.env.COPIS_CHROME_RUNTIME_DIR;
+const runtime = process.env.COPIS_DESKTOP_RUNTIME_DIR;
 const get = flag => args[args.indexOf(flag) + 1];
-const event = { action, args, runtime, helper: process.env.COPIS_CHROME_HELPER };
+const event = { executable: process.argv[1], legacyRuntime: process.env.COPIS_CHROME_RUNTIME_DIR, legacyHelper: process.env.COPIS_CHROME_HELPER, action, args, runtime, helper: process.env.COPIS_DESKTOP_HELPER };
 fs.appendFileSync(path.join(dir, 'events.jsonl'), JSON.stringify(event) + '\\n');
-const reply = value => console.log(JSON.stringify({protocolVersion: 1, ok: true, ...value}));
+const reply = value => console.log(JSON.stringify({protocolVersion: 1, scope: 'desktop', ok: true, ...value}));
 (async () => {
  if (action === 'daemon') {
    if (args[1] !== 'stop') throw Error('错误 daemon 参数');
@@ -43,7 +43,7 @@ const reply = value => console.log(JSON.stringify({protocolVersion: 1, ok: true,
    else reply({ ...(config.response || {}), ...(config.code ? {ok: false, error: {code: config.code, ...(config.reason ? {reason: config.reason} : {}), message: config.stderr || 'native error'}} : {}) });
    process.exitCode = config.exitCode || 0; return;
  }
- const win = ${JSON.stringify(windowInfo)};
+ const win = {...${JSON.stringify(windowInfo)}, bundleId: 'com.google.Chrome'};
  if (action === 'permissions') {
    const requested = args.includes('--request');
    if (requested && !config.allowPermissionRequest) throw Error('禁止请求权限');
@@ -66,13 +66,14 @@ const reply = value => console.log(JSON.stringify({protocolVersion: 1, ok: true,
    fs.mkdirSync(path.join(runtime, 'frames'), {recursive: true, mode: 0o700});
    let image = path.join(runtime, 'frames', 'native-frame.jpg');
    const bytes = Buffer.from('${jpeg.toString('base64')}', 'base64');
+   if (config.frameMode === 'tall') bytes.writeUInt16BE(2400, 7);
    if (config.frameMode === 'outside') { image = path.join(dir, 'outside.jpg'); fs.writeFileSync(image, bytes); }
    else if (config.frameMode === 'symlink') { fs.writeFileSync(path.join(dir, 'outside.jpg'), bytes); fs.symlinkSync(path.join(dir, 'outside.jpg'), image); }
    else if (config.frameMode === 'directory-link') {
      fs.rmdirSync(path.join(runtime, 'frames')); fs.mkdirSync(path.join(dir, 'external-frames'));
      fs.symlinkSync(path.join(dir, 'external-frames'), path.join(runtime, 'frames')); fs.writeFileSync(image, bytes);
    } else fs.writeFileSync(image, config.frameMode === 'large' ? Buffer.alloc(1024 * 1024 + 1) : config.frameMode === 'not-jpeg' ? Buffer.from('not jpeg') : bytes);
-   reply({connectionId: 'native-connection', frameId: 'native-frame', imagePath: image, width: 2, height: 1,
+   reply({connectionId: 'native-connection', frameId: 'native-frame', imagePath: image, width: 2, height: config.frameMode === 'tall' ? 2400 : 1,
      capturedAtMs: 1234, bounds: win.bounds, ...(config.frame || {})});
  } else if (action === 'select-file') {
    if (get('--connection') !== 'native-connection' || !get('--path') || args.includes('--frame')) throw Error('错误 select-file 参数');
@@ -98,11 +99,11 @@ async function fixture(version = '0.1.0', useArchive = false) {
     const versionDir = useArchive ? join(root, 'source', nextVersion) : join(paths.versionsDir, 'chrome-desktop-cli', nextVersion)
     const binDir = join(versionDir, packageDir)
     await mkdir(binDir, { recursive: true })
-    const info = { name: 'chrome-desktop-cli', version: nextVersion, sha256: 'a'.repeat(64), size: 10, format: 'tar.gz' as const, entrypoint: `${packageDir}/copis-chrome`, required: false }
-    const active: ActiveFunctionalModule = { ...info, path: join(binDir, 'copis-chrome') }
+    const info = { name: 'chrome-desktop-cli', version: nextVersion, sha256: 'a'.repeat(64), size: 10, format: 'tar.gz' as const, entrypoint: `${packageDir}/mcc`, required: false }
+    const active: ActiveFunctionalModule = { ...info, path: join(binDir, 'mcc') }
     await writeFile(active.path, fakeCli, { mode: 0o755 })
-    await writeFile(join(binDir, 'copis-chrome-helper'), 'fixture', { mode: 0o755 })
-    await writeFile(join(binDir, 'module.json'), JSON.stringify({ name: info.name, version: nextVersion, platform: 'darwin', arch: process.arch, protocolVersion: 1, entrypoint: 'copis-chrome', helper: 'copis-chrome-helper' }))
+    await writeFile(join(binDir, 'macos-chrome-helper'), 'fixture', { mode: 0o755 })
+    await writeFile(join(binDir, 'module.json'), JSON.stringify({ name: info.name, version: nextVersion, platform: 'darwin', arch: process.arch, protocolVersion: 1, entrypoint: 'mcc', helper: 'macos-chrome-helper' }))
     await writeFile(join(binDir, 'scenario.json'), '{}')
     if (useArchive) {
       const archive = join(root, `component-${nextVersion}.tar.gz`)
@@ -126,7 +127,7 @@ async function fixture(version = '0.1.0', useArchive = false) {
   cleanups.push(() => client.cancel().catch(() => {}))
   return { root, paths, active, client, install,
     configure: (value: object, component = active) => writeFile(join(dirname(component.path), 'scenario.json'), JSON.stringify(value)),
-    events: async (component = active): Promise<Array<{ action: string; args: string[]; runtime: string; helper?: string }>> => {
+    events: async (component = active): Promise<Array<{ executable: string; legacyRuntime?: string; legacyHelper?: string; action: string; args: string[]; runtime: string; helper?: string }>> => {
       const file = join(dirname(component.path), 'events.jsonl')
       return existsSync(file) ? (await readFile(file, 'utf8')).trim().split('\n').map(line => JSON.parse(line)) : []
     },
@@ -146,9 +147,59 @@ async function rejectsCode(promise: Promise<unknown>, code: string) {
 }
 
 describeUnixIntegration('Chrome 组件：受管模块与 CLI 协议 BDD', () => {
+  test('Given MCC受管组件 When 列窗 Then 只执行包内mcc并显式限定Chrome', async () => {
+    const f = await fixture()
+    expect(await f.client.listWindows()).toHaveLength(1)
+    const event = (await f.events())[0]!
+    expect(event.executable).toBe(f.active.path)
+    expect(event.executable.endsWith('/mcc')).toBe(true)
+    expect(event.args).toEqual(['windows', '--app', 'com.google.Chrome', '--json'])
+  })
+  test('Given 通用MCC错误返回其他应用 When 连接 Then 不向其他应用connect', async () => {
+    const f = await fixture()
+    await f.configure({ windows: [{ ...windowInfo, bundleId: 'com.apple.finder' }] })
+    await rejectsCode(f.client.connectWindow(42, 123), 'CHROME_WINDOW_UNAVAILABLE')
+    expect((await f.events()).map(e => e.action)).not.toContain('connect')
+  })
+  test('Given 连接回执替换bundleId When 连接 Then 拒绝并清理', async () => {
+    const f = await fixture()
+    await f.configure({ connectWindow: { bundleId: 'com.apple.finder' } })
+    await rejectsCode(f.client.connectWindow(42, 123), 'CHROME_WINDOW_UNAVAILABLE')
+  })
+  test('Given MCC回执缺失或错用scope When 检查 Then 拒绝协议', async () => {
+    for (const scope of [null, 'chrome']) {
+      const f = await fixture()
+      await f.configure({ failAction: 'permissions', response: { scope, accessibility: true, screenRecording: true } })
+      await rejectsCode(f.client.checkPermissions(), 'CHROME_HELPER_FAILED')
+    }
+  })
+  test('Given 旧copis-chrome组件 When 准备 Then 经安装器升级到MCC而不执行旧入口', async () => {
+    const f = await fixture()
+    const legacyPath = join(dirname(f.active.path), 'copis-chrome')
+    await writeFile(legacyPath, fakeCli, { mode: 0o755 })
+    let active = { ...f.active, path: legacyPath }
+    let installs = 0
+    const client = new ChromeDesktopComponentClient({ platform: 'darwin', moduleRootDir: f.root,
+      resolveComponent: () => active,
+      installComponent: async () => { installs++; active = await f.install('0.3.6') },
+    })
+    cleanups.push(() => client.cancel())
+    expect((await client.checkPermissions()).componentVersion).toBe('0.3.6')
+    expect(installs).toBe(1)
+    expect(await f.events()).toEqual([])
+    expect((await f.events(active))[0]?.executable).toBe(active.path)
+  })
+  test('Given 官方MCC归档仍标记copis-chrome默认入口 When 准备 Then 仍执行受管mcc', async () => {
+    const f = await fixture()
+    const file = join(dirname(f.active.path), 'module.json')
+    const metadata = JSON.parse(await readFile(file, 'utf8'))
+    await writeFile(file, JSON.stringify({ ...metadata, entrypoint: 'copis-chrome' }))
+    await f.client.checkPermissions()
+    expect((await f.events())[0]?.executable.endsWith('/mcc')).toBe(true)
+  })
   test('Given active 组件 When 检查和列窗 Then 解析真实 JSON 且不连接或请求权限', async () => {
     const f = await fixture()
-    expect(await f.client.checkPermissions()).toEqual({ accessibility: true, screenRecording: true, helperPath: join(dirname(f.active.path), 'copis-chrome-helper'), componentVersion: '0.1.0' })
+    expect(await f.client.checkPermissions()).toEqual({ accessibility: true, screenRecording: true, helperPath: join(dirname(f.active.path), 'macos-chrome-helper'), componentVersion: '0.1.0' })
     expect(await f.client.listWindows()).toEqual([windowInfo])
     const events = await f.events()
     expect(events.map(e => e.action)).toEqual(['permissions', 'windows'])
@@ -190,7 +241,7 @@ describeUnixIntegration('Chrome 组件：受管模块与 CLI 协议 BDD', () => 
     })
   }
 
-  for (const target of ['copis-chrome', 'copis-chrome-helper', 'module.json', 'package-directory']) {
+  for (const target of ['mcc', 'macos-chrome-helper', 'module.json', 'package-directory']) {
     test(`Given ${target} 符号链接越界 When 检查 Then 拒绝受管路径污染`, async () => {
       const f = await fixture()
       const source = target === 'package-directory' ? dirname(f.active.path) : join(dirname(f.active.path), target)
@@ -244,17 +295,20 @@ describeUnixIntegration('Chrome 组件：受管模块与 CLI 协议 BDD', () => 
 
   test('Given 环境指定其他 helper/runtime When 检查 Then 实际使用独占目录和受管 helper', async () => {
     const f = await fixture()
-    const originalHelper = process.env.COPIS_CHROME_HELPER, originalRuntime = process.env.COPIS_CHROME_RUNTIME_DIR
+    const keys = ['COPIS_DESKTOP_HELPER', 'COPIS_DESKTOP_RUNTIME_DIR', 'COPIS_CHROME_HELPER', 'COPIS_CHROME_RUNTIME_DIR'] as const
+    const previous = keys.map(key => process.env[key])
     try {
-      process.env.COPIS_CHROME_HELPER = '/untrusted/helper'
-      process.env.COPIS_CHROME_RUNTIME_DIR = '/untrusted/runtime'
+      for (const key of keys) process.env[key] = '/untrusted/override'
       await f.client.checkPermissions()
       const event = (await f.events())[0]!
-      expect(event.runtime).not.toBe('/untrusted/runtime')
-      expect(event.helper).toBe(join(dirname(f.active.path), 'copis-chrome-helper'))
+      expect(event.runtime).not.toBe('/untrusted/override')
+      expect(event.helper).toBe(join(dirname(f.active.path), 'macos-chrome-helper'))
+      expect(event.legacyRuntime).toBeUndefined()
+      expect(event.legacyHelper).toBeUndefined()
     } finally {
-      if (originalHelper === undefined) delete process.env.COPIS_CHROME_HELPER; else process.env.COPIS_CHROME_HELPER = originalHelper
-      if (originalRuntime === undefined) delete process.env.COPIS_CHROME_RUNTIME_DIR; else process.env.COPIS_CHROME_RUNTIME_DIR = originalRuntime
+      keys.forEach((key, index) => {
+        if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index]
+      })
     }
   })
 })
@@ -288,9 +342,17 @@ describeUnixIntegration('Chrome 组件：连接、原生帧和取消 BDD', () =>
     expect((await f.events()).map(e => e.action)).toEqual(['permissions', 'windows', 'connect', 'observe'])
   })
 
+  test('Given MCC原像素长图 When 读取 Then 保留JPEG高度且不缩放', async () => {
+    const f = await fixture()
+    await f.client.connectWindow(42, 123)
+    await f.configure({ frameMode: 'tall' })
+    const frame = await f.client.observe()
+    expect(frame.height).toBe(2400)
+    expect(Buffer.from(frame.data, 'base64').readUInt16BE(7)).toBe(2400)
+  })
   for (const config of [
     { frameMode: 'outside' }, { frameMode: 'symlink' }, { frameMode: 'directory-link' }, { frameMode: 'large' }, { frameMode: 'not-jpeg' },
-    { frame: { width: 1601 } }, { frame: { width: 3 } }, { frame: { height: 0 } }, { frame: { capturedAtMs: -1 } },
+    { frame: { width: 1601 } }, { frame: { width: 3 } }, { frame: { height: 0 } }, { frame: { height: 8193 } }, { frame: { capturedAtMs: -1 } },
     { frame: { connectionId: 'other' } }, { frame: { bounds: { x: 0, y: 0, width: 0, height: 1 } } },
   ]) {
     test(`Given 不可信帧 ${JSON.stringify(config)} When observe Then 拒绝`, async () => {
@@ -545,7 +607,7 @@ describeUnixIntegration('Chrome 组件：停止确认与注入边界 BDD', () =>
   test('Given executor 同步抛出文本 When 检查 Then 转换为无敏感内容的固定错误', async () => {
     const f = await fixture()
     const client = new ChromeDesktopComponentClient({ platform: 'darwin', moduleRootDir: f.root, executeCommand: command => {
-      cleanups.push(() => rm(command.env.COPIS_CHROME_RUNTIME_DIR!, { recursive: true, force: true }))
+      cleanups.push(() => rm(command.env.COPIS_DESKTOP_RUNTIME_DIR!, { recursive: true, force: true }))
       throw Error('secret-token 用户输入')
     } })
     await rejectsCode(client.checkPermissions(), 'CHROME_HELPER_FAILED')
@@ -583,7 +645,7 @@ describeUnixIntegration('Chrome 组件：后台启动取消 BDD', () => {
 describeUnixIntegration('Chrome 组件：真实归档安装 BDD', () => {
   test('Given tar.gz 经 store 缓存、解包和激活 When 准备 Then 校验后修复 helper 0644 并执行安装入口', async () => {
     const f = await fixture('0.4.0', true)
-    const helper = join(dirname(f.active.path), 'copis-chrome-helper')
+    const helper = join(dirname(f.active.path), 'macos-chrome-helper')
     expect((await lstat(helper)).mode & 0o777).toBe(0o644)
     expect((await lstat(f.active.path)).mode & 0o111).not.toBe(0)
     expect((await f.client.checkPermissions()).componentVersion).toBe('0.4.0')
@@ -597,7 +659,7 @@ describeUnixIntegration('Chrome 组件：真实归档安装 BDD', () => {
 
   test('Given 归档 helper 0644 且协议不符 When 准备 Then 校验失败前不修改权限', async () => {
     const f = await fixture('0.4.0', true)
-    const helper = join(dirname(f.active.path), 'copis-chrome-helper')
+    const helper = join(dirname(f.active.path), 'macos-chrome-helper')
     const metadataPath = join(dirname(f.active.path), 'module.json')
     const metadata = JSON.parse(await readFile(metadataPath, 'utf8'))
     await writeFile(metadataPath, JSON.stringify({ ...metadata, protocolVersion: 2 }))
@@ -608,7 +670,7 @@ describeUnixIntegration('Chrome 组件：真实归档安装 BDD', () => {
 
   test('Given helper 被换成指向外部的链接 When 准备 Then 不给外部文件加执行权限', async () => {
     const f = await fixture('0.4.0', true)
-    const helper = join(dirname(f.active.path), 'copis-chrome-helper')
+    const helper = join(dirname(f.active.path), 'macos-chrome-helper')
     const outside = join(f.root, 'outside-helper')
     await writeFile(outside, 'outside', { mode: 0o644 })
     await rm(helper)
@@ -626,12 +688,12 @@ describeUnixIntegration('Chrome 组件：权限修复的路径边界 BDD', () =>
     await symlink(f.root, alias)
     const client = new ChromeDesktopComponentClient({ platform: 'darwin', moduleRootDir: alias })
     cleanups.push(() => client.cancel())
-    expect((await client.checkPermissions()).helperPath).toBe(join(dirname(f.active.path), 'copis-chrome-helper'))
+    expect((await client.checkPermissions()).helperPath).toBe(join(dirname(f.active.path), 'macos-chrome-helper'))
   })
 
   test('Given helper 是外部文件的硬链接 When 准备 Then 不通过 chmod 修改外部文件', async () => {
     const f = await fixture('0.4.0', true)
-    const helper = join(dirname(f.active.path), 'copis-chrome-helper')
+    const helper = join(dirname(f.active.path), 'macos-chrome-helper')
     const outside = join(f.root, 'outside-helper')
     await writeFile(outside, 'outside', { mode: 0o644 })
     await rm(helper)

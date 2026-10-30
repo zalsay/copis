@@ -6,6 +6,15 @@ function deferred<T>() { let resolve!: (value: T) => void; const promise = new P
 afterEach(() => { for (const f of fixtures.splice(0)) f.service.releaseCurrentControl() })
 
 describe('Chrome 桌面工具组件服务 BDD', () => {
+  test('Given MCC原像素长图 When Observe Then 不缩放并允许图内坐标', async () => {
+    const f = fixture(); const { controlId, confirm } = await f.begin(); await confirm()
+    f.component.onObserve = async () => ({ frameId: 'tall', width: 1600, height: 2400, capturedAt: Date.now(), bounds: f.component.bounds, data: '/9j/AA==' })
+    const frame = await f.observe(controlId)
+    expect(frame.frame).toMatchObject({ width: 1600, height: 2400 })
+    await f.call('ChromeDesktopClick', 'tall-click', { controlId, frameId: 'tall', x: 100, y: 2200 })
+    expect(f.component.inputCalls[0]?.action).toMatchObject({ x: 100, y: 2200 })
+  })
+
   test('Given A正在等待用户选择 When B发起Start Then 返回忙碌且不更换控制', async () => {
     const f = fixture(); const a = await f.begin()
     expect(await f.call('ChromeDesktopStart', 'B', {}, 'B', 'token-B')).toMatchObject({ kind: 'json', value: { error: 'CHROME_BUSY' } })

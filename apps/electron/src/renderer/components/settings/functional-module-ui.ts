@@ -69,8 +69,8 @@ export const FUNCTIONAL_MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[
   },
   {
     name: 'chrome-desktop-cli',
-    displayName: 'Chrome 桌面自动化',
-    description: '在 macOS 中观察本机 Chrome 窗口并执行点击与输入',
+    displayName: 'MCC · Chrome 桌面自动化',
+    description: '由可更新的 MCC 组件执行本机 Chrome 观察、点击与输入',
     required: false,
     platform: 'darwin',
   },

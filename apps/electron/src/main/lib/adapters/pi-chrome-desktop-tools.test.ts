@@ -38,6 +38,7 @@ describe('pi-chrome-desktop-tools', () => {
     expect(descriptions).not.toContain('仅按用户明确指定')
 
     for (const tool of tools) {
+      expect(tool.description).toContain('MCC（mcc）')
       expect((tool as any).executionMode).toBe('sequential')
     }
   })

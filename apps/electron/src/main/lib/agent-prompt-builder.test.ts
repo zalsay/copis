@@ -59,6 +59,10 @@ describe('项目与会话工作台提示词', () => {
       agentRuntime: 'pi', sessionId: 'chrome-reusable-frame',
       permissionMode: 'bypassPermissions', chromeDesktopControlAvailable: true,
     })
+    expect(prompt).toContain('MCC')
+    expect(prompt).toContain('`mcc`')
+    expect(prompt).toContain('ChromeDesktopStart')
+    expect(prompt).toContain('不要通过 Bash')
     expect(prompt).toContain('同一 frameId 可重复使用')
     expect(prompt).toContain('同一会话已有有效 control 时直接复用')
     expect(prompt).toContain('普通任务完成后保留控制权')
