@@ -102,6 +102,27 @@ async function runWorker(config: PiWorkerRunConfig): Promise<void> {
     await flushOutput()
     return
   }
+
+  // 打包正式版中，Rust 启动 Worker 时父进程环境变量可能未包含代理；
+  // 将来自配置的 proxyUrl 与 runtimeEnv 注入当前 Worker 进程环境变量，确保所有工具与子进程可正常使用代理。
+  if (config.query.proxyUrl) {
+    const proxyUrl = config.query.proxyUrl.trim()
+    if (proxyUrl) {
+      process.env.HTTP_PROXY = proxyUrl
+      process.env.HTTPS_PROXY = proxyUrl
+      process.env.http_proxy = proxyUrl
+      process.env.https_proxy = proxyUrl
+      process.env.ALL_PROXY = proxyUrl
+      process.env.all_proxy = proxyUrl
+    }
+  }
+  if (config.query.runtimeEnv?.env) {
+    for (const [key, value] of Object.entries(config.query.runtimeEnv.env)) {
+      if (value !== undefined && !process.env[key]) {
+        process.env[key] = value
+      }
+    }
+  }
   const browserPageControl = config.query.browserPageControl === undefined
     ? undefined
     : parsePiWorkerBrowserCapability(config.query.browserPageControl)

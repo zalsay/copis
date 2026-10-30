@@ -813,6 +813,38 @@ impl PiWorkerManager {
         let mut command = Command::new(&launch.program);
         command.args(&launch.args);
         configure_worker_file_capability(&mut command, &file_api_token);
+        if let Some(query_val) = config.get("query").and_then(Value::as_object) {
+            if let Some(proxy_url) = query_val.get("proxyUrl").and_then(Value::as_str) {
+                let trimmed = proxy_url.trim();
+                if !trimmed.is_empty() {
+                    command.env("HTTP_PROXY", trimmed);
+                    command.env("HTTPS_PROXY", trimmed);
+                    command.env("http_proxy", trimmed);
+                    command.env("https_proxy", trimmed);
+                    command.env("ALL_PROXY", trimmed);
+                    command.env("all_proxy", trimmed);
+                }
+            }
+            if let Some(runtime_env) = query_val
+                .get("runtimeEnv")
+                .and_then(Value::as_object)
+                .and_then(|obj| obj.get("env"))
+                .and_then(Value::as_object)
+            {
+                for (key, val) in runtime_env {
+                    if let Some(val_str) = val.as_str() {
+                        let lower = key.to_ascii_lowercase();
+                        if lower == "http_proxy"
+                            || lower == "https_proxy"
+                            || lower == "all_proxy"
+                            || lower == "no_proxy"
+                        {
+                            command.env(key, val_str);
+                        }
+                    }
+                }
+            }
+        }
         if let Some(external_runtime) = external_runtime.as_ref() {
             command.env("PATH", external_runtime.path_value());
             command.env("COPIS_RUNTIME_ROOT", &external_runtime.runtime_root);

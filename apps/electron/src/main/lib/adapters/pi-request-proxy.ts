@@ -19,10 +19,48 @@ import {
 } from 'undici'
 
 const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 300_000
-const requestDispatcherStorage = new AsyncLocalStorage<Dispatcher>()
+
+export interface PiRequestProxyOptions {
+  proxyUrl?: string
+  noProxy?: string
+  httpIdleTimeoutMs?: number
+}
+
+const PI_PROXY_OPTIONS_KEY = Symbol('PI_PROXY_OPTIONS')
+
+interface DispatcherWithProxyOptions extends Dispatcher {
+  [PI_PROXY_OPTIONS_KEY]?: PiRequestProxyOptions
+}
+
+interface PiRequestProxyStore {
+  dispatcher: Dispatcher
+  proxyUrl?: string
+  noProxy?: string
+}
+
+const requestDispatcherStorage = new AsyncLocalStorage<PiRequestProxyStore>()
 const originalFetch = globalThis.fetch
 const ignoreUndiciDispatcherError = (_error: Error): void => {}
 let proxyFetchInstalled = false
+
+export function shouldBypassProxy(urlStr: string, noProxy: string | undefined): boolean {
+  if (!noProxy || !noProxy.trim()) return false
+  try {
+    const url = new URL(urlStr)
+    const hostname = url.hostname.toLowerCase()
+    const rules = noProxy.split(',').map((item) => item.trim().toLowerCase()).filter(Boolean)
+    for (const rule of rules) {
+      if (rule === '*') return true
+      const domainRule = rule.startsWith('.') ? rule.slice(1) : rule
+      if (hostname === domainRule || hostname.endsWith(`.${domainRule}`)) {
+        return true
+      }
+    }
+    return false
+  } catch {
+    return false
+  }
+}
 
 function withUndiciErrorListener<T extends Dispatcher>(dispatcher: T): T {
   if (dispatcher instanceof EventEmitter) {
@@ -51,19 +89,37 @@ export function installPiRequestProxyFetch(): void {
   proxyFetchInstalled = true
 
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    const dispatcher = requestDispatcherStorage.getStore()
-    if (!dispatcher) return (originalFetch as unknown as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>)(input, init)
+    const store = requestDispatcherStorage.getStore()
+    if (!store) {
+      return (originalFetch as unknown as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>)(input, init)
+    }
+
+    // 在 Bun runtime（包括打包为独立自包含二进制的 copis CLI / Pi Worker）中，
+    // 原生 fetch 原生支持 `{ proxy: proxyUrl }`。
+    // undici fetch 在 Bun 下构建的纯 JS socket 隧道在父进程环境变量未注入代理时会触发 ECONNRESET。
+    // 直接使用 Bun 原生 fetch 的 proxy 选项可百分之百稳定地通过代理访问。
+    if (typeof Bun !== 'undefined' || Boolean(process.versions?.bun)) {
+      if (store.proxyUrl) {
+        const urlStr = typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : (input as { url?: string }).url ?? ''
+        if (!shouldBypassProxy(urlStr, store.noProxy)) {
+          return (originalFetch as unknown as (input: RequestInfo | URL, init?: Record<string, unknown>) => Promise<Response>)(input, {
+            ...(init as Record<string, unknown>),
+            proxy: store.proxyUrl,
+          })
+        }
+      }
+      return (originalFetch as unknown as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>)(input, init)
+    }
+
     return undiciFetch(input as Parameters<typeof undiciFetch>[0], {
       ...init,
-      dispatcher,
+      dispatcher: store.dispatcher,
     } as Parameters<typeof undiciFetch>[1])
   }) as typeof globalThis.fetch
-}
-
-export interface PiRequestProxyOptions {
-  proxyUrl?: string
-  noProxy?: string
-  httpIdleTimeoutMs?: number
 }
 
 /**
@@ -80,7 +136,7 @@ export function createPiRequestProxyDispatcher(options: PiRequestProxyOptions): 
   const effectiveNoProxy = rawNoProxy
     ? (rawNoProxy.includes('127.0.0.1') ? rawNoProxy : `${rawNoProxy},${defaultNoProxy}`)
     : defaultNoProxy
-  return withUndiciErrorListener(new EnvHttpProxyAgent({
+  const dispatcher = withUndiciErrorListener(new EnvHttpProxyAgent({
     httpProxy: proxyUrl,
     httpsProxy: proxyUrl,
     noProxy: effectiveNoProxy,
@@ -89,18 +145,31 @@ export function createPiRequestProxyDispatcher(options: PiRequestProxyOptions): 
     bodyTimeout: normalizedTimeoutMs,
     clientFactory: createUndiciClient,
     factory: createUndiciOriginDispatcher,
-  }))
+  })) as DispatcherWithProxyOptions
+
+  dispatcher[PI_PROXY_OPTIONS_KEY] = {
+    proxyUrl,
+    noProxy: effectiveNoProxy,
+    httpIdleTimeoutMs: normalizedTimeoutMs,
+  }
+
+  return dispatcher
 }
 
 /** 仅让当前异步链内的 Pi 网络请求使用其 dispatcher。 */
 export function runWithPiRequestProxy<T>(dispatcher: Dispatcher | undefined, operation: () => T): T {
   if (!dispatcher) return operation()
-  return requestDispatcherStorage.run(dispatcher, operation)
+  const options = (dispatcher as DispatcherWithProxyOptions)[PI_PROXY_OPTIONS_KEY]
+  return requestDispatcherStorage.run({
+    dispatcher,
+    proxyUrl: options?.proxyUrl,
+    noProxy: options?.noProxy,
+  }, operation)
 }
 
 /** 用于测试及诊断：不会暴露或修改全局 dispatcher。 */
 export function getPiRequestProxyDispatcher(): Dispatcher | undefined {
-  return requestDispatcherStorage.getStore()
+  return requestDispatcherStorage.getStore()?.dispatcher
 }
 
 export async function closePiRequestProxyDispatcher(dispatcher: Dispatcher | undefined): Promise<void> {

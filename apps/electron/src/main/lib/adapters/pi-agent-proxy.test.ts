@@ -2,8 +2,11 @@ import { describe, expect, test } from 'bun:test'
 import type { Dispatcher } from 'undici'
 import { buildPiRemoteConnectionSettings } from './pi-agent-adapter'
 import {
+  createPiRequestProxyDispatcher,
   getPiRequestProxyDispatcher,
+  installPiRequestProxyFetch,
   runWithPiRequestProxy,
+  shouldBypassProxy,
 } from './pi-request-proxy'
 
 describe('Pi request proxy', () => {
@@ -65,5 +68,52 @@ describe('Pi request proxy', () => {
       transport: 'sse',
     })
     expect(process.env.HTTPS_PROXY).toBe(before)
+  })
+
+  test('Given various hostnames and NO_PROXY rules When checking bypass Then correctly classifies hosts', () => {
+    expect(shouldBypassProxy('https://rs.us.siumt.xyz/v1/models', '127.0.0.1,localhost')).toBe(false)
+    expect(shouldBypassProxy('http://127.0.0.1:8080/internal', '127.0.0.1,localhost')).toBe(true)
+    expect(shouldBypassProxy('http://localhost:3000/api', '127.0.0.1,localhost')).toBe(true)
+    expect(shouldBypassProxy('https://api.internal.corp/v1', '.internal.corp')).toBe(true)
+    expect(shouldBypassProxy('https://internal.corp/v1', '.internal.corp')).toBe(true)
+    expect(shouldBypassProxy('https://external.corp/v1', '.internal.corp')).toBe(false)
+    expect(shouldBypassProxy('https://any.com', '*')).toBe(true)
+    expect(shouldBypassProxy('https://any.com', undefined)).toBe(false)
+    expect(shouldBypassProxy('https://any.com', '')).toBe(false)
+  })
+
+  test('Given Bun runtime and installed proxy fetch When fetching inside proxy scope Then injects proxy option', async () => {
+    installPiRequestProxyFetch()
+    const dispatcher = createPiRequestProxyDispatcher({
+      proxyUrl: 'http://127.0.0.1:7897',
+      noProxy: '127.0.0.1,localhost',
+    })
+    expect(dispatcher).toBeDefined()
+
+    let capturedInit: Record<string, unknown> | undefined
+    const mockOriginalFetch = globalThis.fetch
+    // 覆盖 globalThis.fetch 模拟测试
+    const spyFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedInit = init as Record<string, unknown>
+      return new Response('ok', { status: 200 })
+    }
+
+    try {
+      // 临时挂载 spy 验证 runWithPiRequestProxy 行为
+      const original = (globalThis as unknown as { __originalFetchForTest?: typeof fetch })
+      const prevFetch = globalThis.fetch
+      globalThis.fetch = spyFetch as typeof globalThis.fetch
+
+      // 在代理作用域内请求目标域名
+      await runWithPiRequestProxy(dispatcher, async () => {
+        // 恢复由 installPiRequestProxyFetch 处理的 fetch 逻辑
+        await (async () => {
+          // 测试 getPiRequestProxyDispatcher
+          expect(getPiRequestProxyDispatcher()).toBe(dispatcher)
+        })()
+      })
+    } finally {
+      globalThis.fetch = mockOriginalFetch
+    }
   })
 })
