@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseDocument } from 'yaml'
@@ -86,6 +86,88 @@ describe('dsh-model-config', () => {
       process.env.COPIS_DEV = originalCopisDev
     }
     rmSync(tempHome, { recursive: true, force: true })
+  })
+
+  test('Given 所有默认内建与自定义模型 When 同步 DSH Then 每个模型均显式声明 text + image 且重复同步不丢失', async () => {
+    const dir = mkdtempSync(join(tempHome, 'vision-defaults-'))
+    try {
+      const config = await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: 'copis-custom-example' })
+      for (let i = 0; i < 2; i++) {
+        modelConfigModule.applyDshModelConfig(config, dir)
+        const providers = parseDocument(readFileSync(join(dir, 'settings.yaml'), 'utf8')).toJS()['llm-pi-ai'].providers
+        expect(Object.keys(providers)).toHaveLength(4)
+        for (const provider of Object.values(providers) as { models: { input?: string[] }[] }[]) {
+          for (const model of provider.models) expect(model.input).toEqual(['text', 'image'])
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('Given 模型显式指定输入类型 When 同步 DSH Then 保留模型级 input 而不被默认值覆盖', async () => {
+    const dir = mkdtempSync(join(tempHome, 'vision-explicit-'))
+    try {
+      const config = await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: 'copis-custom-example' })
+      Object.assign(config.models[0]!, { input: ['text'] })
+      modelConfigModule.applyDshModelConfig(config, dir)
+      const provider = parseDocument(readFileSync(join(dir, 'settings.yaml'), 'utf8')).toJS()['llm-pi-ai'].providers['copis-custom-example']
+      expect(provider.models[0].input).toEqual(['text'])
+      expect(provider.reasoning).toBe('high')
+      expect(provider.models[0].reasoningEfforts).toEqual({ high: 'high' })
+      expect(config.models[0]).toMatchObject({ input: ['text'] })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('Given 官方 Profile 已有模型级输入声明且 legacy settings 已导入 When Copis 再同步 Then 保留该显式声明', async () => {
+    const dir = mkdtempSync(join(tempHome, 'vision-profile-'))
+    try {
+      const profile = join(dir, 'profiles', 'copis')
+      mkdirSync(profile, { recursive: true })
+      writeFileSync(join(profile, 'cordis.patch.yml'), '- id: llm-pi-ai\n  config:\n    providers:\n      copis-custom-example:\n        models:\n          - id: test-model\n            input: [text]\n')
+      const config = await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: 'copis-custom-example' })
+      modelConfigModule.applyDshModelConfig(config, dir)
+      let providers = parseDocument(readFileSync(join(dir, 'settings.yaml'), 'utf8')).toJS()['llm-pi-ai'].providers
+      expect(providers['copis-custom-example'].models[0].input).toEqual(['text'])
+      expect(providers['copis-working'].models[0].input).toEqual(['text', 'image'])
+      // 调用方显式声明的能力应高于之前存储的覆盖值。
+      Object.assign(config.models[0]!, { input: ['text', 'image'] })
+      modelConfigModule.applyDshModelConfig(config, dir)
+      providers = parseDocument(readFileSync(join(dir, 'settings.yaml'), 'utf8')).toJS()['llm-pi-ai'].providers
+      expect(providers['copis-custom-example'].models[0].input).toEqual(['text', 'image'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('Given legacy settings 中已有自定义模型输入声明 When 清理并重新注册自定义路由 Then 不丢失该声明', async () => {
+    const dir = mkdtempSync(join(tempHome, 'vision-legacy-'))
+    try {
+      writeFileSync(join(dir, 'settings.yaml'), 'llm-pi-ai:\n  providers:\n    copis-custom-example:\n      models:\n        - id: test-model\n          input: [text]\n')
+      const config = await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: 'copis-custom-example' })
+      modelConfigModule.applyDshModelConfig(config, dir)
+      const providers = parseDocument(readFileSync(join(dir, 'settings.yaml'), 'utf8')).toJS()['llm-pi-ai'].providers
+      expect(providers['copis-custom-example'].models[0].input).toEqual(['text'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('Given 单一路由无 providerConfigs 且空 input 表示默认 When 同步 DSH Then 同样默认支持 text + image', () => {
+    const dir = mkdtempSync(join(tempHome, 'vision-single-route-'))
+    try {
+      modelConfigModule.applyDshModelConfig({
+        providerRoute: 'copis', displayName: '自定义', defaultModelId: 'vision-fixture',
+        protocol: 'openai-responses', baseURL: 'https://example.com/v1', apiKey: '', apiKeyEnv: '',
+        models: [{ id: 'vision-fixture', name: '视觉模型', ...{ input: [] } }], env: {}, credentialsRefs: {},
+      }, dir)
+      const providers = parseDocument(readFileSync(join(dir, 'settings.yaml'), 'utf8')).toJS()['llm-pi-ai'].providers
+      expect(providers.copis.models[0].input).toEqual(['text', 'image'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   test('Given 自定义模型 When 同步 DSH Then 追加到末尾且非 VIP 也会保留模型，删除模型后清除凭据', async () => {

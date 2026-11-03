@@ -68,7 +68,7 @@ export interface DshWorkingProviderConfig {
   protocol: DshUnifiedModelConfig['protocol']
   reasoning?: AgentThinkingLevel
   baseURL: string
-  models: Array<{ id: string; name: string }>
+  models: DshUnifiedModelConfig['models']
   defaultContextWindow?: number
   env: Record<string, string>
   credentialsRefs: Record<string, string>
@@ -136,8 +136,8 @@ export interface DshUnifiedModelConfig {
   apiKey: string
   /** 凭据在 credentials.yaml / process.env 中的引用键名 */
   apiKeyEnv: string
-  /** 支持的模型条目列表 */
-  models: Array<{ id: string; name: string }>
+  /** 模型级输入声明优先；未声明时默认支持 text + image。 */
+  models: Array<{ id: string; name: string; input?: Array<'text' | 'image'> }>
   /** 需要注入子进程的环境变量 */
   env: Record<string, string>
   /** 需要持久化到 .credentials.yaml 的 refs */
@@ -494,6 +494,25 @@ export function applyDshModelConfig(
     mkdirSync(dshHomeDir, { recursive: true })
   }
 
+  // 先读取官方 Profile，避免 legacy settings 导入后丢失模型级能力覆盖。
+  const profileDir = join(dshHomeDir, 'profiles', profileName)
+  if (!existsSync(profileDir)) {
+    mkdirSync(profileDir, { recursive: true })
+  }
+
+  const patchFile = join(profileDir, 'cordis.patch.yml')
+  let patchItems: any[] = []
+  if (existsSync(patchFile)) {
+    try {
+      const parsed = parseDocument(readFileSync(patchFile, 'utf-8')).toJS()
+      if (Array.isArray(parsed)) {
+        patchItems = parsed
+      }
+    } catch {
+      patchItems = []
+    }
+  }
+
   // 1. 写入 $DSH_HOME/settings.yaml
   const settingsPath = join(dshHomeDir, 'settings.yaml')
   let settingsDoc: Document
@@ -530,6 +549,7 @@ export function applyDshModelConfig(
 
   // 将当前默认路由与 Copis Working 内建路由一起注册到 Composer 模型目录。
   const oldProviders = settingsDoc.toJS()?.['llm-pi-ai']?.providers ?? {}
+  const profileProviders = patchItems.find((item) => item?.id === 'llm-pi-ai')?.config?.providers ?? {}
   for (const route of Object.keys(oldProviders)) {
     if (isWorkingCustomModelChannelId(route)) settingsDoc.deleteIn(['llm-pi-ai', 'providers', route])
   }
@@ -556,14 +576,20 @@ export function applyDshModelConfig(
       api: provider.protocol,
       baseURL: provider.baseURL,
       ...('reasoning' in provider && provider.reasoning !== undefined ? { reasoning: provider.reasoning } : {}),
-      models: provider.models.map((model) => ({
-        id: model.id,
-        name: model.name,
-        // 自定义 route 没有内置能力目录，必须声明设置中选用的思考等级。
-        ...(isWorkingCustomModelChannelId(provider.providerRoute) && 'reasoning' in provider && provider.reasoning !== undefined
-          ? { reasoningEfforts: provider.reasoning === 'off' ? false : { [provider.reasoning]: provider.reasoning } }
-          : {}),
-      })),
+      models: provider.models.map((model) => {
+        const profileInput = profileProviders[provider.providerRoute]?.models?.find((entry: { id: string }) => entry.id === model.id)?.input
+        const previousInput = oldProviders[provider.providerRoute]?.models?.find((entry: { id: string }) => entry.id === model.id)?.input
+        const input = model.input ?? profileInput ?? previousInput
+        return {
+          id: model.id,
+          name: model.name,
+          input: input?.length ? [...input] : ['text', 'image'],
+          // 自定义 route 没有内置能力目录，必须声明设置中选用的思考等级。
+          ...(isWorkingCustomModelChannelId(provider.providerRoute) && 'reasoning' in provider && provider.reasoning !== undefined
+            ? { reasoningEfforts: provider.reasoning === 'off' ? false : { [provider.reasoning]: provider.reasoning } }
+            : {}),
+        }
+      }),
       ...(provider.defaultContextWindow !== undefined ? { defaultContextWindow: provider.defaultContextWindow } : {}),
     })
   }
@@ -607,24 +633,6 @@ export function applyDshModelConfig(
   }
 
   // 3. 写入 $DSH_HOME/profiles/<profile>/cordis.patch.yml
-  const profileDir = join(dshHomeDir, 'profiles', profileName)
-  if (!existsSync(profileDir)) {
-    mkdirSync(profileDir, { recursive: true })
-  }
-
-  const patchFile = join(profileDir, 'cordis.patch.yml')
-  let patchItems: any[] = []
-  if (existsSync(patchFile)) {
-    try {
-      const parsed = parseDocument(readFileSync(patchFile, 'utf-8')).toJS()
-      if (Array.isArray(parsed)) {
-        patchItems = parsed
-      }
-    } catch {
-      patchItems = []
-    }
-  }
-
   // 确保 agent-presets default: cordis 保持生效
   const presetsIdx = patchItems.findIndex((item) => item?.id === 'agent-presets')
   if (presetsIdx !== -1) {
