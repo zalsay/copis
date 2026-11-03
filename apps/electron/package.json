@@ -67,7 +67,8 @@
     "pi-web-access": "0.22.0",
     "lightweight-charts": "^5.2.1",
     "typebox": "1.1.38",
-    "yaml": "^2.7.0"
+    "yaml": "^2.7.0",
+    "semver": "7.7.3"
   },
   "devDependencies": {
     "@copis/core": "workspace:*",
@@ -163,7 +164,8 @@
     "vite": "^6.0.3",
     "word-extractor": "1.0.4",
     "ws": "8.19.0",
-    "zod": "^4.0.0"
+    "zod": "^4.0.0",
+    "@types/semver": "7.8.0"
   },
   "electronmon": {
     "patterns": [

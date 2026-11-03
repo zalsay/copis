@@ -164,15 +164,15 @@ describe('AppShell 模式自适应布局', () => {
     expect(html).toContain('data-testid="main-area"')
   })
 
-  test('Given 创造模式与活动网页页签同时恢复 When 渲染 AppShell Then 主工作台保持可见且不渲染网页表面', () => {
+  test('Given 创造模式选中了网页页签 When 渲染 AppShell Then 保留工作台挂载并显示网页表面', () => {
     const html = renderAppShell({ appMode: 'creation' })
 
     expect(html).toContain('data-testid="main-area"')
-    expect(html).not.toContain('data-testid="web-browser-surface"')
-    expect(html).not.toContain('invisible pointer-events-none')
+    expect(html).toContain('data-testid="web-browser-surface"')
+    expect(html).toContain('invisible pointer-events-none')
   })
 
-  test('Given 创造模式恢复时存在活动网页页签 When AppShell 挂载 Then 清空页签状态并通知主进程隐藏原生网页视图', async () => {
+  test('Given 创造模式中激活网页并切回首页 When 状态更新 Then 不取消页签、不退出创造模式且恢复工作台', async () => {
     const { window: domWindow } = parseHTML('<html><body><div id="root"></div></body></html>')
     const activate = mock(() => Promise.resolve({ tabs: [], activeTabId: null }))
     Object.assign(globalThis, {
@@ -183,6 +183,11 @@ describe('AppShell 模式自适应布局', () => {
       IS_REACT_ACT_ENVIRONMENT: true,
     })
     Object.assign(domWindow, {
+      localStorage: {
+        getItem: (key: string) => key === 'copis-app-mode' ? '"creation"' : null,
+        setItem: () => {},
+        removeItem: () => {},
+      },
       electronAPI: {
         webTabs: { activate },
       },
@@ -202,8 +207,19 @@ describe('AppShell 模式自适应布局', () => {
       await Promise.resolve()
     })
 
-    expect(store.get(activeWebTabIdAtom)).toBeNull()
-    expect(activate).toHaveBeenCalledWith(null)
+    expect(store.get(activeWebTabIdAtom)).toBe('web-restored')
+    expect(activate).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-testid="web-browser-surface"]')).not.toBeNull()
+
+    await act(async () => { store.set(activeWebTabIdAtom, 'web-second') })
+    expect(store.get(activeWebTabIdAtom)).toBe('web-second')
+    expect(store.get(appModeAtom)).toBe('creation')
+    expect(activate).not.toHaveBeenCalled()
+
+    await act(async () => { store.set(activeWebTabIdAtom, null) })
+    expect(document.querySelector('[data-testid="web-browser-surface"]')).toBeNull()
+    expect(document.querySelector('[data-testid="main-area"]')).not.toBeNull()
+    expect(store.get(appModeAtom)).toBe('creation')
   })
 
   test('Given appMode 为 agent When 渲染 AppShell Then 外层侧边栏正常显示', () => {

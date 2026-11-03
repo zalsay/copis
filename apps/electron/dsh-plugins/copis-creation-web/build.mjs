@@ -20,7 +20,7 @@ const result = await Bun.build({
   define: {
     'process.env.NODE_ENV': '"production"',
   },
-  external: ['react', 'react/jsx-runtime', '@deepseek-ai/cordis'],
+  external: ['react', 'react/jsx-runtime', 'react-dom', '@deepseek-ai/cordis'],
   minify: false,
 })
 

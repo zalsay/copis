@@ -6,6 +6,11 @@ import type { FunctionalModuleFormat } from '@copis/shared'
 
 const ARCHIVE_PAYLOAD_FILE = '.artifact.tar.gz'
 const MAX_ARCHIVE_UNPACKED_BYTES = 512 * 1024 * 1024
+
+/** 新版官方 DSH 含文档与语音运行时；仅为该模块提供有界的较大解包预算。 */
+export function getFunctionalModuleArchiveLimit(name: string): number {
+  return name === 'dsh' ? 1024 * 1024 * 1024 : MAX_ARCHIVE_UNPACKED_BYTES
+}
 const TAR_TYPE_PAX_GLOBAL_EXTENDED_HEADER = 'g'.charCodeAt(0)
 const TAR_TYPE_PAX_EXTENDED_HEADER = 'x'.charCodeAt(0)
 const TAR_TYPE_SYMLINK = '2'.charCodeAt(0)
@@ -153,7 +158,7 @@ export async function assembleFunctionalModule(
       await mkdir(dirname(temporaryPath), { recursive: true })
       await copyFile(sourcePath, temporaryPath)
     } else {
-      await extractTarGz(sourcePath, temporaryDir)
+      await extractTarGz(sourcePath, temporaryDir, getFunctionalModuleArchiveLimit(packageInfo.name))
     }
     if (!existsSync(temporaryPath)) {
       throw new Error(`归档模块缺少入口文件: ${packageInfo.entrypoint}`)
@@ -387,10 +392,10 @@ function moduleCachePayloadName(packageInfo: FunctionalModulePackage): string {
   return packageInfo.format === 'binary' ? packageInfo.entrypoint : ARCHIVE_PAYLOAD_FILE
 }
 
-async function extractTarGz(sourcePath: string, targetDir: string): Promise<void> {
+async function extractTarGz(sourcePath: string, targetDir: string, maxOutputLength: number): Promise<void> {
   let tar: Buffer
   try {
-    tar = gunzipSync(await readFile(sourcePath), { maxOutputLength: MAX_ARCHIVE_UNPACKED_BYTES })
+    tar = gunzipSync(await readFile(sourcePath), { maxOutputLength })
   } catch (error) {
     throw new Error(`无法解压 tar.gz 功能模块: ${error instanceof Error ? error.message : String(error)}`)
   }

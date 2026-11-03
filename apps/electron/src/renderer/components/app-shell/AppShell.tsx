@@ -71,17 +71,8 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
   const showRightPanel = appMode === 'agent' && !!currentSessionId && !workingHistorySelection && !automationForm.open && activeView !== 'planning' && activeView !== 'automations' && activeView !== 'agent-skills' && activeView !== 'memory' && activeView !== 'expert-team' && activeView !== 'fund-stock'
   const isWindows = React.useMemo(() => detectIsWindows(), [])
   const activeWebTabId = useAtomValue(activeWebTabIdAtom)
-  const setActiveWebTabId = useSetAtom(activeWebTabIdAtom)
-  const isWebTabVisible = appMode === 'agent' && !!activeWebTabId
-
-  React.useEffect(() => {
-    if (appMode !== 'creation' || !activeWebTabId) return
-
-    // 兼容启动恢复等绕过模式切换 Hook 的路径，创造模式不允许网页原生视图遮挡主工作台。
-    setActiveWebTabId(null)
-    void window.electronAPI.webTabs.activate(null)
-      .catch((error) => console.error('[创造模式] 退出活动网页页签失败:', error))
-  }, [appMode, activeWebTabId, setActiveWebTabId])
+  // 网页页签由两种模式共用；DSH 原生视图会根据 activeWebTabId 隐藏，不能反向清空用户选择。
+  const isWebTabVisible = !!activeWebTabId
 
   React.useEffect(() => {
     if (!paymentOpen || workingVipStatus) return

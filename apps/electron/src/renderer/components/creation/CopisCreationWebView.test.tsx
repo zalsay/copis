@@ -580,7 +580,7 @@ describe('CopisCreationWebView 侧边栏宽度与原生视图布局契约', () =
     expect(preloadSource).toContain('content: "返回会话"')
     expect(preloadSource).toContain('content: "Esc"')
     expect(preloadSource).toContain('var(--creation-ui-primary-background)')
-    expect(preloadSource).toContain('body.copis-subview-active .copis-hero-utilities-overlay')
+    expect(preloadSource).not.toContain('copis-hero-utilities-overlay')
     expect(preloadSource).toContain('[class*="_logoRow"]')
 
     // 2. JS 拦截：点击 _newSession 时拦截 startSession，直接关闭子视图并平滑返回原会话

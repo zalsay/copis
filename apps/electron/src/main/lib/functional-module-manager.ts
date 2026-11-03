@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { accessSync, constants, createReadStream, existsSync } from 'node:fs'
 import { chmod, lstat, mkdir, open, rename, rm, stat } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
+import { compare as compareSemver, valid as validSemver } from 'semver'
 import type {
   FunctionalModuleArchitecture,
   FunctionalModuleArtifact,
@@ -165,9 +166,7 @@ export async function checkFunctionalModule(
       displayName: definition.displayName,
       required: artifact.required,
       availableVersion: artifact.version,
-      updateAvailable: !current.installed || !active
-        || active.version !== artifact.version
-        || active.sha256.toLowerCase() !== artifact.sha256.toLowerCase(),
+      updateAvailable: !current.installed || !active || shouldUpdateModuleArtifact(active, artifact),
     }
   } catch (error) {
     return {
@@ -288,11 +287,10 @@ async function installFunctionalModuleInner(
     emit({ phase: 'manifest', detail: '正在获取组件版本信息', progress: 0.04 })
     const artifact = await resolveFunctionalModuleArtifact(input.name, options)
     const current = readActiveFunctionalModule(paths, input.name)
-    if (!input.force && getFunctionalModuleStatus(input.name, rootDir, options.arch).installed
-      && current?.version === artifact.version
-      && current.sha256.toLowerCase() === artifact.sha256.toLowerCase()) {
-      emit({ phase: 'done', detail: `已是最新版本 v${artifact.version}`, progress: 1, version: artifact.version })
-      return statusWithArtifact(getFunctionalModuleStatus(input.name, rootDir, options.arch), artifact)
+    const installed = getFunctionalModuleStatus(input.name, rootDir, options.arch)
+    if (!input.force && installed.installed && current && !shouldUpdateModuleArtifact(current, artifact)) {
+      emit({ phase: 'done', detail: `保留已安装版本 v${current.version}`, progress: 1, version: current.version })
+      return statusWithArtifact(installed, artifact)
     }
 
     const prepared = await prepareFunctionalModuleInner(input, options, definition, emit, artifact)
@@ -486,6 +484,19 @@ async function isVerifiedArtifact(path: string, artifact: FunctionalModuleArtifa
   const fileStats = await stat(path).catch(() => undefined)
   if (!fileStats?.isFile() || fileStats.size !== artifact.size) return false
   return (await sha256File(path)) === artifact.sha256.toLowerCase()
+}
+
+/** 远端清单可能落后于本地验证版本；只允许前进或同版本修复，回滚必须显式 force。 */
+function shouldUpdateModuleArtifact(current: FunctionalModulePackage, candidate: FunctionalModuleArtifact): boolean {
+  const currentVersion = validSemver(current.version)
+  const candidateVersion = validSemver(candidate.version)
+  const hashChanged = current.sha256.toLowerCase() !== candidate.sha256.toLowerCase()
+  if (currentVersion && candidateVersion) {
+    const order = compareSemver(candidateVersion, currentVersion)
+    return order > 0 || (order === 0 && hashChanged)
+  }
+  // 兼容既有非语义版本标签，不改变其按标识与摘要检查的契约。
+  return current.version !== candidate.version || hashChanged
 }
 
 function statusWithArtifact(

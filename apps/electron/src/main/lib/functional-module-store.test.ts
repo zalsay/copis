@@ -8,6 +8,7 @@ import {
   assembleFunctionalModule,
   cacheFunctionalModule,
   getFunctionalModulePaths,
+  getFunctionalModuleArchiveLimit,
   moduleCacheComplete,
   readActiveFunctionalModule,
   type FunctionalModulePackage,
@@ -244,4 +245,10 @@ describe('Copis 功能模块存储', () => {
       source,
     )).rejects.toThrow('入口路径')
   })
+})
+
+test('Given 官方 DSH 归档增大 When 查询解包预算 Then 只允许 DSH 使用 1 GiB 且其他模块仍为 512 MiB', () => {
+  expect(getFunctionalModuleArchiveLimit('dsh')).toBe(1024 * 1024 * 1024)
+  expect(getFunctionalModuleArchiveLimit('python-runtime')).toBe(512 * 1024 * 1024)
+  expect(getFunctionalModuleArchiveLimit('unrecognized')).toBe(512 * 1024 * 1024)
 })

@@ -46,10 +46,12 @@ test('Given 用户位于创造模式 When 操作搜索和设置 Then 事件进�
   expect(source).toContain('event.stopImmediatePropagation()')
 })
 
-test('Given 创造模式左栏 When 插件加载 Then 不渲染模式切换器且隐藏 DSH 本地构建 Header', () => {
+test('Given 创造模式左栏 When 插件加载 Then 提供返回入口而不重复旧模式切换器和 DSH Header', () => {
   expect(source).not.toContain('ModeSwitcher')
   expect(source).not.toContain('copis-mode-switcher')
   expect(source).not.toContain('sendModeSwitch')
+  expect(source).toContain('<CreationReturnToAgentControl')
+  expect(source).toContain("window.copisBridge?.switchMode?.('agent')")
   expect(source).toContain('[class*="_logoRow"]')
   expect(source).toContain('[class*="_localBuildBrand"]')
   expect(preloadSource).toContain('[class*="_logoRow"]')
@@ -78,35 +80,22 @@ test('Given 创造模式侧栏菜单图标与隐藏机制 When 检查源码 Then
   expect(source).toContain('data-copis-menu-id')
 })
 
-test('Given 创造模式中部对话区右上角 When 插件加载 Then 右上角移除 Agent 模式按钮并仅保留工作区文件展开按钮', () => {
-  // 1. 注入到会话右上角 utilities 插槽
-  expect(source).toContain("ctx.slots.inject('conversation.session.header.utilities'")
-  expect(source).toContain("name: 'conversation.session.header.utilities'")
-  expect(source).toContain('CopisHeaderUtilities')
-
-  // 2. 彻底移除右上角 Agent 模式按钮（包括自定义与官方 session-log-download）
-  expect(source).not.toContain('handleSwitchToAgent')
-  expect(source).not.toContain('切换回 Agent 模式')
-  expect(source).not.toContain('<span>Agent 模式</span>')
-  expect(source).toContain('button[class*="sessionLogButton"]')
-  expect(source).toContain('button[title*="返回 Agent 模式"]')
-  expect(preloadSource).toContain('button[class*="sessionLogButton"]')
-  expect(preloadSource).toContain('button[title*="返回 Agent 模式"]')
-
-  // 3. 具备工作区文件展开/折叠按钮（与 Agent 模式对齐，单个 icon 图标控制，统一唤起宽幅多页签抽屉）
-  expect(source).toContain('handleToggleWorkspaceDetails')
-  expect(source).toContain('COPIS_TOGGLE_WORKSPACE_DRAWER')
-  expect(source).toContain('props.ctx.layout?.closeDetails()')
-  expect(source).toContain('PanelRight')
-  expect(source).toContain('PanelRightClose')
-  expect(source).not.toContain('<span>工作区</span>')
+test('Given DSH 官方右侧详情区 When Copis 插件加载 Then 不再注册自定义侧栏按钮或干预官方详情区', () => {
+  expect(source).not.toContain("ctx.slots.inject('conversation.session.header.utilities'")
+  expect(source).not.toContain('CopisHeaderUtilities')
+  expect(source).not.toContain('CopisInspectorPanel')
+  expect(source).not.toContain('CopisDetailsPanel')
+  expect(source).not.toContain('COPIS_TOGGLE_WORKSPACE_DRAWER')
+  expect(source).not.toContain('closeDetails()')
+  expect(source).not.toContain('_2ctAZa_')
+  expect(preloadSource).not.toContain('.copis-header-btn-workspace')
 })
 
-test('Given 创造模式右侧详情区 When 插件加载 Then 具备多页签 Inspector 系统且文件面板支持异步浏览与高亮预览', () => {
-  // 1. 不重复注册 details 插槽避免 single slot priority 冲突，导出并兼容 CopisInspectorPanel / CopisDetailsPanel
+test('Given 未挂载的旧文件面板 When 检查保留源码 Then 异步浏览与高亮预览实现仍保留', () => {
+  // 旧 Inspector 源码保留，但不能从运行入口导出或挂载。
   expect(source).not.toContain("ctx.slots.inject('details'")
-  expect(source).toContain('CopisDetailsPanel')
-  expect(source).toContain('CopisInspectorPanel')
+  expect(source).not.toContain('CopisDetailsPanel')
+  expect(source).not.toContain('CopisInspectorPanel')
 
   // 2. FilesInspectorTab 具备工作区根目录读取与子目录按需异步加载
   expect(filesTabSource).toContain('listDirectory(undefined, sessionCwd)')
@@ -127,32 +116,13 @@ test('Given 创造模式右侧详情区 When 插件加载 Then 具备多页签 I
   expect(filesTabSource).toContain('previewState.isImage')
 })
 
-test('Given 创造模式全局根层 When 插件加载 Then 侧边栏为推入式抽屉并列排布且严禁渲染遮罩覆盖聊天区', () => {
-  // 1. 在 shell.overlay 注入常驻操作栏与推入式抽屉管理器
+test('Given 创造模式全局根层 When 插件加载 Then 只管理搜索且不保留自定义抽屉布局或尺寸存储', () => {
   expect(source).toContain("ctx.slots.inject('shell.overlay'")
-  expect(source).toContain("name: 'shell.overlay'")
   expect(source).toContain('CopisShellOverlayManager')
-  expect(source).toContain('copis-hero-utilities-overlay')
-  expect(source).toContain('copis-details-drawer-root')
-  expect(source).toContain('COPIS_TOGGLE_WORKSPACE_DRAWER')
-
-  // 2. 彻底移除全屏遮罩，严禁覆盖聊天区导致无法交互
-  expect(source).not.toContain('copis-details-drawer-backdrop')
-
-  // 3. 抽屉展开时，中部聊天区通过 margin-right 响应推入并列布局
-  expect(source).toContain('body.copis-details-drawer-open [class*="_centerCol"]')
-  expect(source).toContain('margin-right: var(--copis-inspector-width')
-  expect(source).toContain('transition: margin-right')
-
-  // 4. 具备左边缘拖拽调整宽度手柄与尺寸记忆
-  expect(source).toContain('copis-inspector-resize-handle')
-  expect(source).toContain('handleResizeStart')
-  expect(source).toContain('copis-inspector-resizing')
-
-  // 5. 抽屉背景色为纯正灰色（深色 #18181b / 浅色 #f4f4f5），严禁在抽屉背景上混入紫色
-  expect(source).toContain('.copis-details-drawer-root')
-  expect(source).toContain('background: #18181b;')
-  expect(source).toContain('body:not([data-ds-dark-theme]) .copis-details-drawer-root {\n    background: #f4f4f5;')
+  expect(source).toContain('COPIS_OPEN_SEARCH_MODAL')
+  for (const removed of ['copis-hero-utilities-overlay', 'copis-details-drawer', '--copis-inspector-width', 'handleResizeStart', 'copis_creation_inspector_width']) {
+    expect(source).not.toContain(removed)
+  }
 })
 
 test('Given 创造模式激活子功能视图 When 渲染左侧导航与计算展开状态 Then 保持宽态菜单且调用 toggleSidebar 展开 DSH 侧边栏', () => {
@@ -177,7 +147,6 @@ test('Given 创造模式激活子功能视图 When 检查新会话按钮切换�
   expect(source).toContain('content: "返回会话"')
   expect(source).toContain('content: "Esc"')
   expect(source).toContain('--creation-ui-primary-background')
-  expect(source).toContain('body.copis-subview-active .copis-hero-utilities-overlay')
 
   // 2. 点击拦截：顶部按钮在 subview 激活时阻止 DSH startSession 并通知主程序关闭子视图
   expect(source).toContain('handleTopButtonClick')
@@ -226,18 +195,9 @@ test('Given 创造模式与 Agent 模式视觉对齐契约 When 检查菜单栏�
   expect(source).toContain('height: 28px;')
   expect(preloadSource).toContain('.copis-rail-menu-item')
 
-  // 3. 右上角操作按钮（Agent 模式、工作区等）对齐：border-radius: 7px; 工作区为 30px 方形单图标按钮
-  expect(source).toContain('.copis-header-action-btn')
-  expect(source).toContain('.copis-header-btn-agent')
-  expect(source).toContain('.copis-header-btn-workspace')
-  expect(source).toContain('width: 30px !important;')
-  expect(source).toContain('height: 30px !important;')
-  expect(source).toContain('border-radius: 7px !important;')
-  expect(source).toContain('var(--ui-primary')
-  expect(source).toContain('var(--ui-primary-background')
-  expect(preloadSource).toContain('.copis-header-btn-agent')
-  expect(preloadSource).toContain('.copis-header-btn-workspace')
-  expect(preloadSource).toContain('width: 30px !important;')
+  // 返回 Agent 入口沿用菜单按钮，不再新增自定义右上角样式。
+  expect(source).not.toContain('.copis-header-action-btn')
+  expect(preloadSource).not.toContain('.copis-header-action-btn')
 
   // 4. 新建会话按钮与会话行对齐：border-radius: 7px; font-size: 14px;
   expect(source).toContain('button[class*="_newSession"]')
@@ -314,7 +274,7 @@ test('Given 创造模式 Composer 圆环与视口 When 悬浮弹出 Tooltip Then
   expect(preloadSource).toContain('[class*="JObwrW_root"]')
 })
 
-test('Given 创造模式 Inspector 多页签系统 When 检查顶栏交互 Then 支持文件、侧边聊天、团队多页签切换且支持加号下拉菜单添加与关闭页签', () => {
+test('Given 保留但不再挂载的旧 Inspector When 检查组件内部交互 Then 支持文件、侧边聊天、团队多页签切换且支持加号下拉菜单添加与关闭页签', () => {
   // 1. 具备默认三大页签配置
   expect(inspectorPanelSource).toContain("kind: 'files'")
   expect(inspectorPanelSource).toContain("label: '工作区文件'")
@@ -333,14 +293,14 @@ test('Given 创造模式 Inspector 多页签系统 When 检查顶栏交互 Then 
   expect(inspectorPanelSource).toContain('新建侧边聊天')
 
   // 4. 具备工作区抽屉容器类名
-  expect(source).toContain('copis-inspector-root')
-  expect(source).toContain('copis-inspector-tabbar')
+  expect(inspectorPanelSource).toContain('copis-inspector-root')
+  expect(inspectorPanelSource).toContain('copis-inspector-tabbar')
 
   // 5. 侧栏上方 Tab 激活时，Icon 使用紫色高亮
   expect(inspectorPanelSource).toContain("activePurple = '#a855f7'")
   expect(inspectorPanelSource).toContain('isActive ? activePurple :')
-  expect(source).toContain('.copis-inspector-tab-item[data-active="true"] .copis-inspector-tab-icon')
-  expect(source).toContain('color: #a855f7 !important;')
+  expect(source).not.toContain('.copis-inspector-tab-item[data-active="true"] .copis-inspector-tab-icon')
+  expect(source).not.toContain('color: #a855f7 !important;')
 })
 
 test('Given 创造模式侧边聊天 (Side Chat) 检查器 When 检查轻量问答能力 Then 包含上下文对话流、预设推荐快捷提问与首条消息自动更新页签标题', () => {

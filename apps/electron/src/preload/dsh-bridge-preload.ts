@@ -430,57 +430,14 @@ function injectCopisThemeAccent(): void {
     .copis-rail-menu-item {
       border-radius: 7px !important;
     }
-    .copis-header-action-btn {
-      border-radius: 7px !important;
-      font-size: 13px !important;
-    }
     /* 隐藏顶部右上角原生的 session-log-download 及任何 Agent 模式切换按钮 */
     button[class*="sessionLogButton"],
-    button[title*="返回 Agent 模式"],
-    button[title*="返回Agent 模式"],
-    button[aria-label*="返回 Agent 模式"],
-    button[aria-label*="返回Agent 模式"],
-    .copis-header-btn-agent,
+    button[title*="返回 Agent 模式"]:not(.copis-return-agent-button),
+    button[title*="返回Agent 模式"]:not(.copis-return-agent-button),
+    button[aria-label*="返回 Agent 模式"]:not(.copis-return-agent-button),
+    button[aria-label*="返回Agent 模式"]:not(.copis-return-agent-button),
     [data-slot-id="session-log-download"] {
       display: none !important;
-    }
-    .copis-header-btn-agent {
-      display: none !important;
-    }
-    .copis-header-btn-workspace {
-      width: 30px !important;
-      height: 30px !important;
-      padding: 0 !important;
-      border-radius: 7px !important;
-      display: inline-flex !important;
-      align-items: center !important;
-      justify-content: center !important;
-      border: 1px solid var(--dsw-alias-border-l3, rgba(255, 255, 255, 0.08)) !important;
-      background: var(--dsw-alias-button-elevated-fill, rgba(255, 255, 255, 0.04)) !important;
-      color: var(--dsw-alias-label-secondary, #94a3b8) !important;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04) !important;
-      backdrop-filter: blur(8px) !important;
-      transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1) !important;
-    }
-    .copis-header-btn-workspace:hover {
-      background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.08)) !important;
-      color: var(--dsw-alias-label-primary, #ffffff) !important;
-      border-color: var(--dsw-alias-border-l2, rgba(255, 255, 255, 0.16)) !important;
-      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08) !important;
-    }
-    .copis-header-btn-workspace:active {
-      transform: scale(0.95) !important;
-    }
-    .copis-header-btn-workspace[data-active="true"] {
-      background: rgba(255, 255, 255, 0.12) !important;
-      border: 1px solid rgba(255, 255, 255, 0.16) !important;
-      color: #ffffff !important;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
-    }
-    .copis-header-btn-workspace[data-active="true"]:hover {
-      background: rgba(255, 255, 255, 0.16) !important;
-      border-color: rgba(255, 255, 255, 0.24) !important;
-      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
     }
     /* 创造模式会话列表行圆角与字号对齐 Agent 模式 */
     .YDXeBa_sessionRow,
@@ -911,11 +868,6 @@ function injectCopisThemeAccent(): void {
       background: transparent !important;
       color: currentColor !important;
       flex: none !important;
-    }
-
-    /* 当子视图激活时，彻底隐藏浮动工具栏（工作区、Agent模式），避免挤占/遮挡侧栏顶部 */
-    body.copis-subview-active .copis-hero-utilities-overlay {
-      display: none !important;
     }
 
     body.copis-subview-active [class*="_regionArea"],

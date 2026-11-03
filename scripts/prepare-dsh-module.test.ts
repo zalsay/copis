@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -80,10 +80,10 @@ describe('dsh 运行环境功能模块准备', () => {
 
   test('使用官方 npm 包并固定版本与入口', () => {
     expect(DSH_PACKAGE).toBe('@deepseek-ai/dsh')
-    expect(DSH_PACKAGE_VERSION).toBe('0.2.1-rc.2')
-    expect(DSH_VERSION).toBe('0.2.1')
+    expect(DSH_PACKAGE_VERSION).toBe('0.2.2-alpha.2')
+    expect(DSH_VERSION).toBe('0.2.2-alpha.2')
     expect(DSH_ENTRYPOINT).toBe('bin/dsh')
-    expect(DSH_INTEGRITY).toBe('sha512-tvY+yhfKRifthbqPe/OK0AYxM5ZkvqfYq/jMYgJcEUxiRRL1Vwra3Ti5TB6AXgSWQdiPHYh/Vp6SJa9yHwMNuw==')
+    expect(DSH_INTEGRITY).toBe('sha512-mdcpgF8D1eFQV8Gu3T/sYLkBwfw9h/Li0uPIxXyby1VybJgrFg8BU1Le40FiMnN+heL7k3zOMuAVe7sFq/JO4w==')
   })
 
   test('Composer 触发器显示 Provider 与不含括号说明的模型名 (兼容 0.1.2 与 0.2.1-rc.2)', () => {
@@ -365,3 +365,13 @@ const CopisMenuItem = (props) => {
   })
 })
 
+test('Given 官方 DSH 已修复同级权限与空白理由 When 准备和启动运行时 Then 不再注入自定义沙箱提示或 schema 裁剪', () => {
+  for (const path of [
+    join(import.meta.dir, 'prepare-dsh-module.ts'),
+    join(import.meta.dir, '../apps/electron/src/main/lib/dsh-cordis-service.ts'),
+  ]) {
+    const source = readFileSync(path, 'utf8')
+    expect(source).not.toContain('dsh-sandbox-patch')
+    expect(source).not.toContain('patchDshSandboxRuntime')
+  }
+})

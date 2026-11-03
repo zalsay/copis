@@ -11,6 +11,8 @@ export function patchDshDetailsPanelFilePreviewRuntime(runtimeRoot: string): boo
   const entrypoint = join(runtimeRoot, DSH_CHAT_CLIENT_ENTRYPOINT)
   if (!existsSync(entrypoint)) return false
   const source = readFileSync(entrypoint, 'utf8')
+  // 新版官方 Chat 已迁移详情面板，保留其实现，不再注入旧文件预览补丁。
+  if (!source.includes('function DetailsPanel(')) return false
   try {
     const patched = patchDshDetailsPanelFilePreviewSource(source)
     if (source !== patched) writeFileSync(entrypoint, patched, 'utf8')

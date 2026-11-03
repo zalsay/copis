@@ -1,5 +1,9 @@
 import { expect, test } from 'bun:test'
-import { patchDshDirectoryPickerSource, patchDshSidebarSource } from './dsh-sidebar-patch'
+import { patchDshSidebarRuntime, patchDshSidebarSource } from './dsh-sidebar-patch'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { Script } from 'node:vm'
 
 const sampleSource = `
 const CopisMenuItem = (props) => {
@@ -244,29 +248,30 @@ test('Given DSH 侧边栏源码中包含旧版硬编码菜单栏 When 执行 pat
   expect(patchDshSidebarSource(patched)).toBe(patched)
 })
 
-test('Given DSH 原生目录选择器源码 When 执行 patchDshDirectoryPickerSource Then 将嵌套的 sidebar.workspaces.directoryFlow 解除绑定并平级注入', () => {
-  const samplePickerSource = `
-		function apply(ctx) {
-			const injected = () => ({ pick: () => ctx.uiWorkspace.pickDirectory() });
-			ctx.slots.inject("conversation.hero.workspace.directoryFlow", () => ctx.slots.inject("sidebar.workspaces.directoryFlow", function* () {
-				yield ctx.slots.register({
-					name: "conversation.hero.workspace.directoryFlow",
-					inject: injected
-				}, NativeDirectoryFlow);
-				yield ctx.slots.register({
-					name: "sidebar.workspaces.directoryFlow",
-					inject: injected
-				}, NativeDirectoryFlow);
-			}));
-		}
-  `
-  const patched = patchDshDirectoryPickerSource(samplePickerSource)
-  expect(patched).not.toContain('ctx.slots.inject("conversation.hero.workspace.directoryFlow", () => ctx.slots.inject')
-  expect(patched).toContain('ctx.slots.inject("sidebar.workspaces.directoryFlow", function* () {')
-  expect(patched).toContain('ctx.slots.inject("conversation.hero.workspace.directoryFlow", function* () {')
-
-  // 幂等性
-  expect(patchDshDirectoryPickerSource(patched)).toBe(patched)
+test('Given 官方目录选择器含 remoteAccess 外层 When 运行旧侧栏兼容处理 Then 保留官方原文与完整括号且可解析', () => {
+  const root = mkdtempSync(join(tmpdir(), 'copis-dsh-official-picker-'))
+  const entry = join(root, 'node_modules/@deepseek-ai/dsh-client-ui-directory-picker-native/lib/client.js')
+  const sidebar = join(root, 'node_modules/@deepseek-ai/dsh-client-ui-sidebar/lib/client.js')
+  // 与官方 0.2.2-alpha.2 相同的访问控制和嵌套插槽边界。
+  const source = `function apply(ctx) {
+    const injected = () => ({ pick: () => ctx.uiWorkspace.pickDirectory() });
+    ctx.remoteAccess.whenAccess("directoryPicker/pick", () => ctx.slots.inject("conversation.hero.workspace.directoryFlow", () => ctx.slots.inject("sidebar.workspaces.directoryFlow", function* () {
+      yield ctx.slots.register({ name: "conversation.hero.workspace.directoryFlow", inject: injected }, NativeDirectoryFlow);
+      yield ctx.slots.register({ name: "sidebar.workspaces.directoryFlow", inject: injected }, NativeDirectoryFlow);
+    })));
+  }`
+  try {
+    mkdirSync(join(entry, '..'), { recursive: true })
+    mkdirSync(join(sidebar, '..'), { recursive: true })
+    writeFileSync(entry, source)
+    writeFileSync(sidebar, 'const sidebar = {};')
+    patchDshSidebarRuntime(root)
+    const actual = readFileSync(entry, 'utf8')
+    expect(() => new Script(actual)).not.toThrow()
+    expect(actual).toBe(source)
+    patchDshSidebarRuntime(root)
+    expect(readFileSync(entry, 'utf8')).toBe(source)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
-
-

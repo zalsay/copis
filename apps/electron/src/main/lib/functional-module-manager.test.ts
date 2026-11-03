@@ -4,8 +4,10 @@ import { existsSync, readFileSync, readdirSync, mkdtempSync, rmSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { FunctionalModuleFetch } from './functional-module-manager'
+import { shouldInstallDshModule } from '../../renderer/components/creation/creation-dsh-helper'
 import {
   fetchFunctionalModuleManifest,
+  checkFunctionalModule,
   getFunctionalModuleStatuses,
   installFunctionalModule,
 } from './functional-module-manager'
@@ -308,5 +310,68 @@ describe('COS 功能模块统一管理', () => {
       displayName: '专业模式',
       required: false,
     })
+  })
+})
+
+
+describe('功能模块版本顺序与防自动降级', () => {
+  async function fixture(currentVersion: string, candidateVersion: string, sameContent = false) {
+    const rootDir = createRoot()
+    const current = '当前已验证模块'
+    const candidate = sameContent ? current : '候选模块'
+    const options = { rootDir, manifestUrl: MANIFEST_URL, platform: 'darwin' as const, arch: 'arm64' as const, clientVersion: '0.16.17' }
+    const initial = createManifest(moduleArtifact('officecli', currentVersion, current, true), moduleArtifact('rust-http-api', '1.0.0', 'rust', true))
+    const initialUrl = `https://download.example.com/copis/modules/stable/darwin-arm64/officecli-${currentVersion}`
+    await installFunctionalModule({ name: 'officecli' }, { ...options, fetchImpl: createFetchFixture(initial, { [initialUrl]: current }, []) })
+    const calls: string[] = []
+    const manifest = createManifest(moduleArtifact('officecli', candidateVersion, candidate, true), moduleArtifact('rust-http-api', '1.0.0', 'rust', true))
+    const candidateUrl = `https://download.example.com/copis/modules/stable/darwin-arm64/officecli-${candidateVersion}`
+    return { options: { ...options, fetchImpl: createFetchFixture(manifest, { [candidateUrl]: candidate }, calls) }, calls, current, candidate }
+  }
+
+  test('Given 本地新版 rc.5 而远端为 0.1.3 When 检查并自动安装 Then 不标记更新、不下载、不降级', async () => {
+    const f = await fixture('0.2.1-rc.5', '0.1.3')
+    const checked = await checkFunctionalModule('officecli', f.options)
+    expect(checked.updateAvailable).toBe(false)
+    expect(shouldInstallDshModule(checked)).toBe(false)
+    const installed = await installFunctionalModule({ name: 'officecli' }, f.options)
+    expect(installed.version).toBe('0.2.1-rc.5')
+    expect(readFileSync(installed.path!, 'utf8')).toBe(f.current)
+    expect(f.calls.every((url) => url === MANIFEST_URL)).toBe(true)
+  })
+
+  test('Given 本地 alpha.2 而远端仍为旧 rc.5 When 检查并自动安装 Then 不下载旧模块且保留 alpha 版本', async () => {
+    const f = await fixture('0.2.2-alpha.2', '0.2.1-rc.5')
+    expect((await checkFunctionalModule('officecli', f.options)).updateAvailable).toBe(false)
+    expect((await installFunctionalModule({ name: 'officecli' }, f.options)).version).toBe('0.2.2-alpha.2')
+    expect(f.calls.every((url) => url === MANIFEST_URL)).toBe(true)
+  })
+
+  test('Given 本地预发布 rc.10 而远端 rc.2 When 检查更新 Then 按语义版本比较而非字符串比较', async () => {
+    const f = await fixture('0.2.1-rc.10', '0.2.1-rc.2')
+    expect((await checkFunctionalModule('officecli', f.options)).updateAvailable).toBe(false)
+  })
+
+  test('Given 本地正式版本而远端为同基线预发布 When 检查更新 Then 不降级', async () => {
+    const f = await fixture('0.2.1', '0.2.1-rc.5')
+    expect((await checkFunctionalModule('officecli', f.options)).updateAvailable).toBe(false)
+  })
+
+  test('Given 本地预发布而远端为正式版本 When 检查并安装 Then 正常升级', async () => {
+    const f = await fixture('0.2.1-rc.5', '0.2.1')
+    expect((await checkFunctionalModule('officecli', f.options)).updateAvailable).toBe(true)
+    expect((await installFunctionalModule({ name: 'officecli' }, f.options)).version).toBe('0.2.1')
+  })
+
+  test('Given 同版本不同校验和 When 检查并安装 Then 保留同版本修复能力', async () => {
+    const f = await fixture('0.2.1', '0.2.1')
+    expect((await checkFunctionalModule('officecli', f.options)).updateAvailable).toBe(true)
+    const installed = await installFunctionalModule({ name: 'officecli' }, f.options)
+    expect(readFileSync(installed.path!, 'utf8')).toBe(f.candidate)
+  })
+
+  test('Given 显式 force 指定旧版本 When 安装 Then 仍允许受控回滚', async () => {
+    const f = await fixture('0.2.1-rc.5', '0.1.3')
+    expect((await installFunctionalModule({ name: 'officecli', force: true }, f.options)).version).toBe('0.1.3')
   })
 })

@@ -18,6 +18,7 @@ import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { gzipSync } from 'node:zlib'
 import type { FunctionalModuleArchitecture, FunctionalModulePlatform } from '@copis/shared'
+import { validateDshClientRuntime } from '../apps/electron/src/main/lib/dsh-client-runtime-validation'
 import { patchDshComposerHistoryRuntime } from '../apps/electron/src/main/lib/dsh-composer-history-patch'
 import { patchDshHeroLogoRuntime } from '../apps/electron/src/main/lib/dsh-hero-logo-patch'
 import {
@@ -27,6 +28,7 @@ import {
 import { patchDshSidebarRuntime, patchDshSidebarSource } from '../apps/electron/src/main/lib/dsh-sidebar-patch'
 
 export {
+  validateDshClientRuntime,
   patchDshDetailsPanelFilePreviewRuntime,
   patchDshDetailsPanelFilePreviewSource,
   patchDshSidebarRuntime,
@@ -34,9 +36,9 @@ export {
 }
 
 export const DSH_PACKAGE = '@deepseek-ai/dsh'
-export const DSH_PACKAGE_VERSION = '0.2.1-rc.2'
-export const DSH_VERSION = '0.2.1'
-export const DSH_INTEGRITY = 'sha512-tvY+yhfKRifthbqPe/OK0AYxM5ZkvqfYq/jMYgJcEUxiRRL1Vwra3Ti5TB6AXgSWQdiPHYh/Vp6SJa9yHwMNuw=='
+export const DSH_PACKAGE_VERSION = '0.2.2-alpha.2'
+export const DSH_VERSION = DSH_PACKAGE_VERSION
+export const DSH_INTEGRITY = 'sha512-mdcpgF8D1eFQV8Gu3T/sYLkBwfw9h/Li0uPIxXyby1VybJgrFg8BU1Le40FiMnN+heL7k3zOMuAVe7sFq/JO4w=='
 export const DSH_ENTRYPOINT = 'bin/dsh'
 const DSH_RUNTIME_ENTRYPOINT = 'node_modules/@deepseek-ai/dsh/lib/bin.js'
 const DSH_MODEL_SELECTION_CLIENT_ENTRYPOINT = 'node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.js'
@@ -88,6 +90,7 @@ export function main(): void {
       resolve('apps/electron/resources/copis-logos/main-logo-metal-light.svg'),
     )
     if (!patchDshComposerHistoryRuntime(runtimeRoot)) throw new Error('官方 dsh 缺少 Composer 输入组件')
+    validateDshClientRuntime(runtimeRoot)
     if (!isFile(join(runtimeRoot, DSH_RUNTIME_ENTRYPOINT))) {
       throw new Error(`官方 dsh 缺少入口文件: ${DSH_RUNTIME_ENTRYPOINT}`)
     }
