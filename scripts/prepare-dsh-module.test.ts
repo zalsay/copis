@@ -1,8 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { gunzipSync } from 'node:zlib'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  createArchive,
   patchDshComposerModelSelectionSource,
   patchDshDetailsPanelFilePreviewSource,
   patchDshCordisPanelSource,
@@ -80,10 +83,10 @@ describe('dsh 运行环境功能模块准备', () => {
 
   test('使用官方 npm 包并固定版本与入口', () => {
     expect(DSH_PACKAGE).toBe('@deepseek-ai/dsh')
-    expect(DSH_PACKAGE_VERSION).toBe('0.2.2-alpha.2')
-    expect(DSH_VERSION).toBe('0.2.2-alpha.2')
+    expect(DSH_PACKAGE_VERSION).toBe('0.2.2-rc.2')
+    expect(DSH_VERSION).toBe('0.2.2-rc.2')
     expect(DSH_ENTRYPOINT).toBe('bin/dsh')
-    expect(DSH_INTEGRITY).toBe('sha512-mdcpgF8D1eFQV8Gu3T/sYLkBwfw9h/Li0uPIxXyby1VybJgrFg8BU1Le40FiMnN+heL7k3zOMuAVe7sFq/JO4w==')
+    expect(DSH_INTEGRITY).toBe('sha512-J727r2C471x2cYXGjqZ0D9T1ZyaYQDFH/Ynx8iq+85oslM4nky5YTBnbAuTtxMhW7nhY8wuAEfjjFCQ+K6Swgw==')
   })
 
   test('Composer 触发器显示 Provider 与不含括号说明的模型名 (兼容 0.1.2 与 0.2.1-rc.2)', () => {
@@ -374,4 +377,23 @@ test('Given 官方 DSH 已修复同级权限与空白理由 When 准备和启动
     expect(source).not.toContain('dsh-sandbox-patch')
     expect(source).not.toContain('patchDshSandboxRuntime')
   }
+})
+
+
+test('DSH 归档保留语言字典，不打包 macOS 附属文件或为扩展属性生成副本', () => {
+  const root = mkdtempSync(join(tmpdir(), 'copis-dsh-archive-'))
+  try {
+    const module = join(root, 'module')
+    const locale = join(module, 'plugin', 'locale')
+    mkdirSync(locale, { recursive: true })
+    writeFileSync(join(locale, 'de.json'), '{}')
+    writeFileSync(join(locale, '._old.json'), 'AppleDouble')
+    if (process.platform === 'darwin') execFileSync('xattr', ['-w', 'com.copis.test', 'marker', join(locale, 'de.json')])
+    const archive = join(root, 'dsh.tar.gz')
+    createArchive(module, archive)
+    // macOS 的 tar -t 会隐藏 AppleDouble 条目；直接检查小型固定样本的原始 tar 内容。
+    const tar = gunzipSync(readFileSync(archive)).toString('latin1')
+    expect(tar).toContain('./plugin/locale/de.json\0')
+    expect(tar).not.toContain('/._')
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })

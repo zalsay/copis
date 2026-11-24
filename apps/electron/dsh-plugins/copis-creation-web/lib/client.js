@@ -22,6 +22,7 @@ var __toCommonJS = (from) => {
   __moduleCache.set(from, entry);
   return entry;
 };
+var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, {
@@ -32,10 +33,995 @@ var __export = (target, all) => {
     });
 };
 
+// ../../node_modules/jotai/vanilla/internals.js
+var require_internals = __commonJS((exports2) => {
+  function _arrayLikeToArray(r, a) {
+    (a == null || a > r.length) && (a = r.length);
+    for (var e = 0, n = Array(a);e < a; e++)
+      n[e] = r[e];
+    return n;
+  }
+  function _createForOfIteratorHelperLoose(r, e) {
+    var t = typeof Symbol != "undefined" && r[Symbol.iterator] || r["@@iterator"];
+    if (t)
+      return (t = t.call(r)).next.bind(t);
+    if (Array.isArray(r) || (t = _unsupportedIterableToArray(r)) || e) {
+      t && (r = t);
+      var o = 0;
+      return function() {
+        return o >= r.length ? {
+          done: true
+        } : {
+          done: false,
+          value: r[o++]
+        };
+      };
+    }
+    throw new TypeError(`Invalid attempt to iterate non-iterable instance.
+In order to be iterable, non-array objects must have a [Symbol.iterator]() method.`);
+  }
+  function _unsupportedIterableToArray(r, a) {
+    if (r) {
+      if (typeof r == "string")
+        return _arrayLikeToArray(r, a);
+      var t = {}.toString.call(r).slice(8, -1);
+      return t === "Object" && r.constructor && (t = r.constructor.name), t === "Map" || t === "Set" ? Array.from(r) : t === "Arguments" || /^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(t) ? _arrayLikeToArray(r, a) : undefined;
+    }
+  }
+  function hasInitialValue(atom) {
+    return "init" in atom;
+  }
+  function isActuallyWritableAtom(atom) {
+    return !!atom.write;
+  }
+  function isAtomStateInitialized(atomState) {
+    return "v" in atomState || "e" in atomState;
+  }
+  function returnAtomValue(atomState) {
+    if ("e" in atomState) {
+      throw atomState.e;
+    }
+    if (false) {}
+    return atomState.v;
+  }
+  var promiseStateMap = new WeakMap;
+  function isPendingPromise(value) {
+    var _promiseStateMap$get;
+    return isPromiseLike(value) && !!((_promiseStateMap$get = promiseStateMap.get(value)) != null && _promiseStateMap$get[0]);
+  }
+  function abortPromise(promise) {
+    var promiseState = promiseStateMap.get(promise);
+    if (promiseState != null && promiseState[0]) {
+      promiseState[0] = false;
+      promiseState[1].forEach(function(fn) {
+        return fn();
+      });
+    }
+  }
+  function registerAbortHandler(promise, abortHandler) {
+    var promiseState = promiseStateMap.get(promise);
+    if (!promiseState) {
+      promiseState = [true, new Set];
+      promiseStateMap.set(promise, promiseState);
+      var settle = function settle2() {
+        promiseState[0] = false;
+      };
+      promise.then(settle, settle);
+    }
+    promiseState[1].add(abortHandler);
+  }
+  function isPromiseLike(p) {
+    return typeof (p == null ? undefined : p.then) === "function";
+  }
+  function addPendingPromiseToDependency(atom, promise, dependencyAtomState) {
+    if (!dependencyAtomState.p.has(atom)) {
+      dependencyAtomState.p.add(atom);
+      var cleanup = function cleanup2() {
+        return dependencyAtomState.p.delete(atom);
+      };
+      promise.then(cleanup, cleanup);
+    }
+  }
+  function getMountedOrPendingDependents(atom, atomState, mountedMap) {
+    var dependents = new Set;
+    for (var _iterator = _createForOfIteratorHelperLoose(((_mountedMap$get = mountedMap.get(atom)) == null ? undefined : _mountedMap$get.t) || []), _step;!(_step = _iterator()).done; ) {
+      var _mountedMap$get;
+      var a = _step.value;
+      dependents.add(a);
+    }
+    for (var _iterator2 = _createForOfIteratorHelperLoose(atomState.p), _step2;!(_step2 = _iterator2()).done; ) {
+      var atomWithPendingPromise = _step2.value;
+      dependents.add(atomWithPendingPromise);
+    }
+    return dependents;
+  }
+  var createStoreHook = function createStoreHook2() {
+    var callbacks = new Set;
+    var notify = function notify2() {
+      return callbacks.forEach(function(fn) {
+        return fn();
+      });
+    };
+    notify.add = function(fn) {
+      callbacks.add(fn);
+      return function() {
+        return callbacks.delete(fn);
+      };
+    };
+    return notify;
+  };
+  var createStoreHookForAtoms = function createStoreHookForAtoms2() {
+    var all = {};
+    var callbacks = new WeakMap;
+    var notify = function notify2(atom) {
+      var _callbacks$get, _callbacks$get2;
+      (_callbacks$get = callbacks.get(all)) == null || _callbacks$get.forEach(function(fn) {
+        return fn(atom);
+      });
+      (_callbacks$get2 = callbacks.get(atom)) == null || _callbacks$get2.forEach(function(fn) {
+        return fn();
+      });
+    };
+    notify.add = function(atom, fn) {
+      var key = atom || all;
+      var fns = callbacks.get(key);
+      if (!fns) {
+        fns = new Set;
+        callbacks.set(key, fns);
+      }
+      fns.add(fn);
+      return function() {
+        fns.delete(fn);
+        if (!fns.size) {
+          callbacks.delete(key);
+        }
+      };
+    };
+    return notify;
+  };
+  function initializeStoreHooks(storeHooks) {
+    var _ref, _ref2, _ref3, _ref4, _ref5, _ref6;
+    (_ref = storeHooks).i || (_ref.i = createStoreHookForAtoms());
+    (_ref2 = storeHooks).r || (_ref2.r = createStoreHookForAtoms());
+    (_ref3 = storeHooks).c || (_ref3.c = createStoreHookForAtoms());
+    (_ref4 = storeHooks).m || (_ref4.m = createStoreHookForAtoms());
+    (_ref5 = storeHooks).u || (_ref5.u = createStoreHookForAtoms());
+    (_ref6 = storeHooks).f || (_ref6.f = createStoreHook());
+    return storeHooks;
+  }
+  var BUILDING_BLOCK_atomRead = function BUILDING_BLOCK_atomRead2(_store, atom) {
+    for (var _len = arguments.length, params = new Array(_len > 2 ? _len - 2 : 0), _key = 2;_key < _len; _key++) {
+      params[_key - 2] = arguments[_key];
+    }
+    return atom.read.apply(atom, params);
+  };
+  var BUILDING_BLOCK_atomWrite = function BUILDING_BLOCK_atomWrite2(_store, atom) {
+    for (var _len2 = arguments.length, params = new Array(_len2 > 2 ? _len2 - 2 : 0), _key2 = 2;_key2 < _len2; _key2++) {
+      params[_key2 - 2] = arguments[_key2];
+    }
+    return atom.write.apply(atom, params);
+  };
+  var BUILDING_BLOCK_atomOnInit = function BUILDING_BLOCK_atomOnInit2(store, atom) {
+    return atom.INTERNAL_onInit == null ? undefined : atom.INTERNAL_onInit(store);
+  };
+  var BUILDING_BLOCK_atomOnMount = function BUILDING_BLOCK_atomOnMount2(_store, atom, setAtom) {
+    return atom.onMount == null ? undefined : atom.onMount(setAtom);
+  };
+  var BUILDING_BLOCK_ensureAtomState = function BUILDING_BLOCK_ensureAtomState2(store, atom) {
+    var buildingBlocks = getInternalBuildingBlocks(store);
+    var atomStateMap = buildingBlocks[0];
+    var storeHooks = buildingBlocks[6];
+    var atomOnInit = buildingBlocks[9];
+    if (false) {}
+    var atomState = atomStateMap.get(atom);
+    if (!atomState) {
+      atomState = {
+        d: new Map,
+        p: new Set,
+        n: 0
+      };
+      atomStateMap.set(atom, atomState);
+      storeHooks.i == null || storeHooks.i(atom);
+      atomOnInit == null || atomOnInit(store, atom);
+    }
+    return atomState;
+  };
+  var BUILDING_BLOCK_flushCallbacks = function BUILDING_BLOCK_flushCallbacks2(store) {
+    var buildingBlocks = getInternalBuildingBlocks(store);
+    var mountedMap = buildingBlocks[1];
+    var changedAtoms = buildingBlocks[3];
+    var mountCallbacks = buildingBlocks[4];
+    var unmountCallbacks = buildingBlocks[5];
+    var storeHooks = buildingBlocks[6];
+    var recomputeInvalidatedAtoms = buildingBlocks[13];
+    var errors = [];
+    var call = function call2(fn) {
+      try {
+        fn();
+      } catch (e) {
+        errors.push(e);
+      }
+    };
+    var _loop = function _loop2() {
+      if (storeHooks.f) {
+        call(storeHooks.f);
+      }
+      var callbacks = new Set;
+      var add = callbacks.add.bind(callbacks);
+      changedAtoms.forEach(function(atom) {
+        var _mountedMap$get2;
+        return (_mountedMap$get2 = mountedMap.get(atom)) == null ? undefined : _mountedMap$get2.l.forEach(add);
+      });
+      changedAtoms.clear();
+      unmountCallbacks.forEach(add);
+      unmountCallbacks.clear();
+      mountCallbacks.forEach(add);
+      mountCallbacks.clear();
+      callbacks.forEach(call);
+      if (changedAtoms.size) {
+        recomputeInvalidatedAtoms(store);
+      }
+    };
+    do {
+      _loop();
+    } while (changedAtoms.size || unmountCallbacks.size || mountCallbacks.size);
+    if (errors.length) {
+      throw new AggregateError(errors);
+    }
+  };
+  var BUILDING_BLOCK_recomputeInvalidatedAtoms = function BUILDING_BLOCK_recomputeInvalidatedAtoms2(store) {
+    var buildingBlocks = getInternalBuildingBlocks(store);
+    var mountedMap = buildingBlocks[1];
+    var invalidatedAtoms = buildingBlocks[2];
+    var changedAtoms = buildingBlocks[3];
+    var ensureAtomState = buildingBlocks[11];
+    var readAtomState = buildingBlocks[14];
+    var mountDependencies = buildingBlocks[17];
+    var topSortedReversed = [];
+    var visiting = new WeakSet;
+    var visited = new WeakSet;
+    var stack = Array.from(changedAtoms);
+    while (stack.length) {
+      var a = stack[stack.length - 1];
+      var aState = ensureAtomState(store, a);
+      if (visited.has(a)) {
+        stack.pop();
+        continue;
+      }
+      if (visiting.has(a)) {
+        if (invalidatedAtoms.get(a) === aState.n) {
+          topSortedReversed.push([a, aState]);
+        } else if (false) {}
+        visited.add(a);
+        stack.pop();
+        continue;
+      }
+      visiting.add(a);
+      for (var _iterator3 = _createForOfIteratorHelperLoose(getMountedOrPendingDependents(a, aState, mountedMap)), _step3;!(_step3 = _iterator3()).done; ) {
+        var d = _step3.value;
+        if (!visiting.has(d)) {
+          stack.push(d);
+        }
+      }
+    }
+    for (var i = topSortedReversed.length - 1;i >= 0; --i) {
+      var _ref7 = topSortedReversed[i], _a = _ref7[0], _aState = _ref7[1];
+      var hasChangedDeps = false;
+      for (var _iterator4 = _createForOfIteratorHelperLoose(_aState.d.keys()), _step4;!(_step4 = _iterator4()).done; ) {
+        var dep = _step4.value;
+        if (dep !== _a && changedAtoms.has(dep)) {
+          hasChangedDeps = true;
+          break;
+        }
+      }
+      if (hasChangedDeps) {
+        readAtomState(store, _a);
+        mountDependencies(store, _a);
+      }
+      invalidatedAtoms.delete(_a);
+    }
+  };
+  var storeMutationSet = new WeakSet;
+  var BUILDING_BLOCK_readAtomState = function BUILDING_BLOCK_readAtomState2(store, atom) {
+    var buildingBlocks = getInternalBuildingBlocks(store);
+    var mountedMap = buildingBlocks[1];
+    var invalidatedAtoms = buildingBlocks[2];
+    var changedAtoms = buildingBlocks[3];
+    var storeHooks = buildingBlocks[6];
+    var atomRead = buildingBlocks[7];
+    var ensureAtomState = buildingBlocks[11];
+    var flushCallbacks = buildingBlocks[12];
+    var recomputeInvalidatedAtoms = buildingBlocks[13];
+    var readAtomState = buildingBlocks[14];
+    var writeAtomState = buildingBlocks[16];
+    var mountDependencies = buildingBlocks[17];
+    var setAtomStateValueOrPromise = buildingBlocks[20];
+    var atomState = ensureAtomState(store, atom);
+    if (isAtomStateInitialized(atomState)) {
+      if (mountedMap.has(atom) && invalidatedAtoms.get(atom) !== atomState.n) {
+        return atomState;
+      }
+      var hasChangedDeps = false;
+      for (var _iterator5 = _createForOfIteratorHelperLoose(atomState.d), _step5;!(_step5 = _iterator5()).done; ) {
+        var _step5$value = _step5.value, a = _step5$value[0], n = _step5$value[1];
+        if (readAtomState(store, a).n !== n) {
+          hasChangedDeps = true;
+          break;
+        }
+      }
+      if (!hasChangedDeps) {
+        return atomState;
+      }
+    }
+    atomState.d.clear();
+    var isSync = true;
+    function mountDependenciesIfAsync() {
+      if (mountedMap.has(atom)) {
+        mountDependencies(store, atom);
+        recomputeInvalidatedAtoms(store);
+        flushCallbacks(store);
+      }
+    }
+    function getter(a2) {
+      if (a2 === atom) {
+        var _aState2 = ensureAtomState(store, a2);
+        if (!isAtomStateInitialized(_aState2)) {
+          if (hasInitialValue(a2)) {
+            setAtomStateValueOrPromise(store, a2, a2.init);
+          } else {
+            throw new Error("no atom init");
+          }
+        }
+        return returnAtomValue(_aState2);
+      }
+      var aState = readAtomState(store, a2);
+      try {
+        return returnAtomValue(aState);
+      } finally {
+        atomState.d.set(a2, aState.n);
+        if (isPendingPromise(atomState.v)) {
+          addPendingPromiseToDependency(atom, atomState.v, aState);
+        }
+        if (mountedMap.has(atom)) {
+          var _mountedMap$get3;
+          (_mountedMap$get3 = mountedMap.get(a2)) == null || _mountedMap$get3.t.add(atom);
+        }
+        if (!isSync) {
+          mountDependenciesIfAsync();
+        }
+      }
+    }
+    var controller;
+    var setSelf;
+    var options = {
+      get signal() {
+        if (!controller) {
+          controller = new AbortController;
+        }
+        return controller.signal;
+      },
+      get setSelf() {
+        if (false) {}
+        if (false) {}
+        if (!setSelf && isActuallyWritableAtom(atom)) {
+          setSelf = function setSelf2() {
+            if (false) {}
+            if (!isSync) {
+              try {
+                for (var _len3 = arguments.length, args = new Array(_len3), _key3 = 0;_key3 < _len3; _key3++) {
+                  args[_key3] = arguments[_key3];
+                }
+                return writeAtomState.apply(undefined, [store, atom].concat(args));
+              } finally {
+                recomputeInvalidatedAtoms(store);
+                flushCallbacks(store);
+              }
+            }
+          };
+        }
+        return setSelf;
+      }
+    };
+    var prevEpochNumber = atomState.n;
+    try {
+      if (false) {}
+      var _valueOrPromise = atomRead(store, atom, getter, options);
+      if (false) {}
+      setAtomStateValueOrPromise(store, atom, _valueOrPromise);
+      if (isPromiseLike(_valueOrPromise)) {
+        registerAbortHandler(_valueOrPromise, function() {
+          var _controller;
+          return (_controller = controller) == null ? undefined : _controller.abort();
+        });
+        _valueOrPromise.then(mountDependenciesIfAsync, mountDependenciesIfAsync);
+      }
+      storeHooks.r == null || storeHooks.r(atom);
+      return atomState;
+    } catch (error) {
+      delete atomState.v;
+      atomState.e = error;
+      ++atomState.n;
+      return atomState;
+    } finally {
+      isSync = false;
+      if (prevEpochNumber !== atomState.n && invalidatedAtoms.get(atom) === prevEpochNumber) {
+        invalidatedAtoms.set(atom, atomState.n);
+        changedAtoms.add(atom);
+        storeHooks.c == null || storeHooks.c(atom);
+      }
+    }
+  };
+  var BUILDING_BLOCK_invalidateDependents = function BUILDING_BLOCK_invalidateDependents2(store, atom) {
+    var buildingBlocks = getInternalBuildingBlocks(store);
+    var mountedMap = buildingBlocks[1];
+    var invalidatedAtoms = buildingBlocks[2];
+    var ensureAtomState = buildingBlocks[11];
+    var stack = [atom];
+    while (stack.length) {
+      var a = stack.pop();
+      var aState = ensureAtomState(store, a);
+      for (var _iterator6 = _createForOfIteratorHelperLoose(getMountedOrPendingDependents(a, aState, mountedMap)), _step6;!(_step6 = _iterator6()).done; ) {
+        var d = _step6.value;
+        var dState = ensureAtomState(store, d);
+        invalidatedAtoms.set(d, dState.n);
+        stack.push(d);
+      }
+    }
+  };
+  var BUILDING_BLOCK_writeAtomState = function BUILDING_BLOCK_writeAtomState2(store, atom) {
+    var buildingBlocks = getInternalBuildingBlocks(store);
+    var changedAtoms = buildingBlocks[3];
+    var storeHooks = buildingBlocks[6];
+    var atomWrite = buildingBlocks[8];
+    var ensureAtomState = buildingBlocks[11];
+    var flushCallbacks = buildingBlocks[12];
+    var recomputeInvalidatedAtoms = buildingBlocks[13];
+    var readAtomState = buildingBlocks[14];
+    var invalidateDependents = buildingBlocks[15];
+    var writeAtomState = buildingBlocks[16];
+    var mountDependencies = buildingBlocks[17];
+    var setAtomStateValueOrPromise = buildingBlocks[20];
+    var isSync = true;
+    var getter = function getter2(a) {
+      return returnAtomValue(readAtomState(store, a));
+    };
+    var setter = function setter2(a) {
+      var aState = ensureAtomState(store, a);
+      try {
+        for (var _len5 = arguments.length, args2 = new Array(_len5 > 1 ? _len5 - 1 : 0), _key5 = 1;_key5 < _len5; _key5++) {
+          args2[_key5 - 1] = arguments[_key5];
+        }
+        if (a === atom) {
+          if (!hasInitialValue(a)) {
+            throw new Error("atom not writable");
+          }
+          if (false) {}
+          var prevEpochNumber = aState.n;
+          var v = args2[0];
+          setAtomStateValueOrPromise(store, a, v);
+          mountDependencies(store, a);
+          if (prevEpochNumber !== aState.n) {
+            changedAtoms.add(a);
+            invalidateDependents(store, a);
+            storeHooks.c == null || storeHooks.c(a);
+          }
+          return;
+        } else {
+          return writeAtomState.apply(undefined, [store, a].concat(args2));
+        }
+      } finally {
+        if (!isSync) {
+          recomputeInvalidatedAtoms(store);
+          flushCallbacks(store);
+        }
+      }
+    };
+    try {
+      for (var _len4 = arguments.length, args = new Array(_len4 > 2 ? _len4 - 2 : 0), _key4 = 2;_key4 < _len4; _key4++) {
+        args[_key4 - 2] = arguments[_key4];
+      }
+      return atomWrite.apply(undefined, [store, atom, getter, setter].concat(args));
+    } finally {
+      isSync = false;
+    }
+  };
+  var BUILDING_BLOCK_mountDependencies = function BUILDING_BLOCK_mountDependencies2(store, atom) {
+    var buildingBlocks = getInternalBuildingBlocks(store);
+    var mountedMap = buildingBlocks[1];
+    var changedAtoms = buildingBlocks[3];
+    var storeHooks = buildingBlocks[6];
+    var ensureAtomState = buildingBlocks[11];
+    var invalidateDependents = buildingBlocks[15];
+    var mountAtom = buildingBlocks[18];
+    var unmountAtom = buildingBlocks[19];
+    var atomState = ensureAtomState(store, atom);
+    var mounted = mountedMap.get(atom);
+    if (mounted && !isPendingPromise(atomState.v)) {
+      for (var _iterator7 = _createForOfIteratorHelperLoose(atomState.d), _step7;!(_step7 = _iterator7()).done; ) {
+        var _step7$value = _step7.value, a = _step7$value[0], n = _step7$value[1];
+        if (!mounted.d.has(a)) {
+          var aState = ensureAtomState(store, a);
+          var aMounted = mountAtom(store, a);
+          aMounted.t.add(atom);
+          mounted.d.add(a);
+          if (n !== aState.n) {
+            changedAtoms.add(a);
+            invalidateDependents(store, a);
+            storeHooks.c == null || storeHooks.c(a);
+          }
+        }
+      }
+      for (var _iterator8 = _createForOfIteratorHelperLoose(mounted.d), _step8;!(_step8 = _iterator8()).done; ) {
+        var _a2 = _step8.value;
+        if (!atomState.d.has(_a2)) {
+          mounted.d.delete(_a2);
+          var _aMounted = unmountAtom(store, _a2);
+          _aMounted == null || _aMounted.t.delete(atom);
+        }
+      }
+    }
+  };
+  var BUILDING_BLOCK_mountAtom = function BUILDING_BLOCK_mountAtom2(store, atom) {
+    var buildingBlocks = getInternalBuildingBlocks(store);
+    var mountedMap = buildingBlocks[1];
+    var mountCallbacks = buildingBlocks[4];
+    var storeHooks = buildingBlocks[6];
+    var atomOnMount = buildingBlocks[10];
+    var ensureAtomState = buildingBlocks[11];
+    var flushCallbacks = buildingBlocks[12];
+    var recomputeInvalidatedAtoms = buildingBlocks[13];
+    var readAtomState = buildingBlocks[14];
+    var writeAtomState = buildingBlocks[16];
+    var mountAtom = buildingBlocks[18];
+    var atomState = ensureAtomState(store, atom);
+    var mounted = mountedMap.get(atom);
+    if (!mounted) {
+      readAtomState(store, atom);
+      for (var _iterator9 = _createForOfIteratorHelperLoose(atomState.d.keys()), _step9;!(_step9 = _iterator9()).done; ) {
+        var a = _step9.value;
+        var aMounted = mountAtom(store, a);
+        aMounted.t.add(atom);
+      }
+      mounted = {
+        l: new Set,
+        d: new Set(atomState.d.keys()),
+        t: new Set
+      };
+      mountedMap.set(atom, mounted);
+      if (isActuallyWritableAtom(atom)) {
+        var processOnMount = function processOnMount2() {
+          var isSync = true;
+          var setAtom = function setAtom2() {
+            try {
+              for (var _len6 = arguments.length, args = new Array(_len6), _key6 = 0;_key6 < _len6; _key6++) {
+                args[_key6] = arguments[_key6];
+              }
+              return writeAtomState.apply(undefined, [store, atom].concat(args));
+            } finally {
+              if (!isSync) {
+                recomputeInvalidatedAtoms(store);
+                flushCallbacks(store);
+              }
+            }
+          };
+          try {
+            var onUnmount = atomOnMount(store, atom, setAtom);
+            if (onUnmount) {
+              mounted.u = function() {
+                isSync = true;
+                try {
+                  onUnmount();
+                } finally {
+                  isSync = false;
+                }
+              };
+            }
+          } finally {
+            isSync = false;
+          }
+        };
+        mountCallbacks.add(processOnMount);
+      }
+      storeHooks.m == null || storeHooks.m(atom);
+    }
+    return mounted;
+  };
+  var BUILDING_BLOCK_unmountAtom = function BUILDING_BLOCK_unmountAtom2(store, atom) {
+    var buildingBlocks = getInternalBuildingBlocks(store);
+    var mountedMap = buildingBlocks[1];
+    var unmountCallbacks = buildingBlocks[5];
+    var storeHooks = buildingBlocks[6];
+    var ensureAtomState = buildingBlocks[11];
+    var unmountAtom = buildingBlocks[19];
+    var atomState = ensureAtomState(store, atom);
+    var mounted = mountedMap.get(atom);
+    if (!mounted || mounted.l.size) {
+      return mounted;
+    }
+    var isDependent = false;
+    for (var _iterator0 = _createForOfIteratorHelperLoose(mounted.t), _step0;!(_step0 = _iterator0()).done; ) {
+      var _mountedMap$get4;
+      var _a3 = _step0.value;
+      if ((_mountedMap$get4 = mountedMap.get(_a3)) != null && _mountedMap$get4.d.has(atom)) {
+        isDependent = true;
+        break;
+      }
+    }
+    if (!isDependent) {
+      if (mounted.u) {
+        unmountCallbacks.add(mounted.u);
+      }
+      mounted = undefined;
+      mountedMap.delete(atom);
+      for (var _iterator1 = _createForOfIteratorHelperLoose(atomState.d.keys()), _step1;!(_step1 = _iterator1()).done; ) {
+        var a = _step1.value;
+        var aMounted = unmountAtom(store, a);
+        aMounted == null || aMounted.t.delete(atom);
+      }
+      storeHooks.u == null || storeHooks.u(atom);
+      return;
+    }
+    return mounted;
+  };
+  var BUILDING_BLOCK_setAtomStateValueOrPromise = function BUILDING_BLOCK_setAtomStateValueOrPromise2(store, atom, valueOrPromise) {
+    var ensureAtomState = getInternalBuildingBlocks(store)[11];
+    var atomState = ensureAtomState(store, atom);
+    var hasPrevValue = "v" in atomState;
+    var prevValue = atomState.v;
+    if (isPromiseLike(valueOrPromise)) {
+      for (var _iterator10 = _createForOfIteratorHelperLoose(atomState.d.keys()), _step10;!(_step10 = _iterator10()).done; ) {
+        var a = _step10.value;
+        addPendingPromiseToDependency(atom, valueOrPromise, ensureAtomState(store, a));
+      }
+    }
+    atomState.v = valueOrPromise;
+    delete atomState.e;
+    if (!hasPrevValue || !Object.is(prevValue, atomState.v)) {
+      ++atomState.n;
+      if (isPromiseLike(prevValue)) {
+        abortPromise(prevValue);
+      }
+    }
+  };
+  var BUILDING_BLOCK_storeGet = function BUILDING_BLOCK_storeGet2(store, atom) {
+    var readAtomState = getInternalBuildingBlocks(store)[14];
+    return returnAtomValue(readAtomState(store, atom));
+  };
+  var BUILDING_BLOCK_storeSet = function BUILDING_BLOCK_storeSet2(store, atom) {
+    var buildingBlocks = getInternalBuildingBlocks(store);
+    var flushCallbacks = buildingBlocks[12];
+    var recomputeInvalidatedAtoms = buildingBlocks[13];
+    var writeAtomState = buildingBlocks[16];
+    try {
+      for (var _len7 = arguments.length, args = new Array(_len7 > 2 ? _len7 - 2 : 0), _key7 = 2;_key7 < _len7; _key7++) {
+        args[_key7 - 2] = arguments[_key7];
+      }
+      return writeAtomState.apply(undefined, [store, atom].concat(args));
+    } finally {
+      recomputeInvalidatedAtoms(store);
+      flushCallbacks(store);
+    }
+  };
+  var BUILDING_BLOCK_storeSub = function BUILDING_BLOCK_storeSub2(store, atom, listener) {
+    var buildingBlocks = getInternalBuildingBlocks(store);
+    var flushCallbacks = buildingBlocks[12];
+    var mountAtom = buildingBlocks[18];
+    var unmountAtom = buildingBlocks[19];
+    var mounted = mountAtom(store, atom);
+    var listeners = mounted.l;
+    listeners.add(listener);
+    flushCallbacks(store);
+    return function() {
+      listeners.delete(listener);
+      unmountAtom(store, atom);
+      flushCallbacks(store);
+    };
+  };
+  var buildingBlockMap = new WeakMap;
+  var getInternalBuildingBlocks = function getInternalBuildingBlocks2(store) {
+    var buildingBlocks = buildingBlockMap.get(store);
+    if (false) {}
+    return buildingBlocks;
+  };
+  function getBuildingBlocks(store) {
+    var buildingBlocks = getInternalBuildingBlocks(store);
+    var enhanceBuildingBlocks = buildingBlocks[24];
+    if (enhanceBuildingBlocks) {
+      return enhanceBuildingBlocks(buildingBlocks);
+    }
+    return buildingBlocks;
+  }
+  function buildStore() {
+    for (var _len8 = arguments.length, buildArgs = new Array(_len8), _key8 = 0;_key8 < _len8; _key8++) {
+      buildArgs[_key8] = arguments[_key8];
+    }
+    var store = {
+      get: function get(atom) {
+        var storeGet = getInternalBuildingBlocks(store)[21];
+        return storeGet(store, atom);
+      },
+      set: function set(atom) {
+        var storeSet = getInternalBuildingBlocks(store)[22];
+        for (var _len9 = arguments.length, args = new Array(_len9 > 1 ? _len9 - 1 : 0), _key9 = 1;_key9 < _len9; _key9++) {
+          args[_key9 - 1] = arguments[_key9];
+        }
+        return storeSet.apply(undefined, [store, atom].concat(args));
+      },
+      sub: function sub(atom, listener) {
+        var storeSub = getInternalBuildingBlocks(store)[23];
+        return storeSub(store, atom, listener);
+      }
+    };
+    var buildingBlocks = [new WeakMap, new WeakMap, new WeakMap, new Set, new Set, new Set, {}, BUILDING_BLOCK_atomRead, BUILDING_BLOCK_atomWrite, BUILDING_BLOCK_atomOnInit, BUILDING_BLOCK_atomOnMount, BUILDING_BLOCK_ensureAtomState, BUILDING_BLOCK_flushCallbacks, BUILDING_BLOCK_recomputeInvalidatedAtoms, BUILDING_BLOCK_readAtomState, BUILDING_BLOCK_invalidateDependents, BUILDING_BLOCK_writeAtomState, BUILDING_BLOCK_mountDependencies, BUILDING_BLOCK_mountAtom, BUILDING_BLOCK_unmountAtom, BUILDING_BLOCK_setAtomStateValueOrPromise, BUILDING_BLOCK_storeGet, BUILDING_BLOCK_storeSet, BUILDING_BLOCK_storeSub, undefined].map(function(fn, i) {
+      return buildArgs[i] || fn;
+    });
+    buildingBlockMap.set(store, Object.freeze(buildingBlocks));
+    return store;
+  }
+  exports2.INTERNAL_abortPromise = abortPromise;
+  exports2.INTERNAL_addPendingPromiseToDependency = addPendingPromiseToDependency;
+  exports2.INTERNAL_buildStoreRev2 = buildStore;
+  exports2.INTERNAL_getBuildingBlocksRev2 = getBuildingBlocks;
+  exports2.INTERNAL_getMountedOrPendingDependents = getMountedOrPendingDependents;
+  exports2.INTERNAL_hasInitialValue = hasInitialValue;
+  exports2.INTERNAL_initializeStoreHooksRev2 = initializeStoreHooks;
+  exports2.INTERNAL_isActuallyWritableAtom = isActuallyWritableAtom;
+  exports2.INTERNAL_isAtomStateInitialized = isAtomStateInitialized;
+  exports2.INTERNAL_isPendingPromise = isPendingPromise;
+  exports2.INTERNAL_isPromiseLike = isPromiseLike;
+  exports2.INTERNAL_promiseStateMap = promiseStateMap;
+  exports2.INTERNAL_registerAbortHandler = registerAbortHandler;
+  exports2.INTERNAL_returnAtomValue = returnAtomValue;
+});
+
+// ../../node_modules/jotai/vanilla.js
+var require_vanilla = __commonJS((exports2) => {
+  var internals = require_internals();
+  var keyCount = 0;
+  function atom(read, write) {
+    var key = "atom" + ++keyCount;
+    var config = {
+      toString: function toString() {
+        return key;
+      }
+    };
+    if (typeof read === "function") {
+      config.read = read;
+    } else {
+      config.init = read;
+      config.read = defaultRead;
+      config.write = defaultWrite;
+    }
+    if (write) {
+      config.write = write;
+    }
+    return config;
+  }
+  function defaultRead(get) {
+    return get(this);
+  }
+  function defaultWrite(get, set, arg) {
+    return set(this, typeof arg === "function" ? arg(get(this)) : arg);
+  }
+  var overriddenCreateStore;
+  function INTERNAL_overrideCreateStore(fn) {
+    overriddenCreateStore = fn(overriddenCreateStore);
+  }
+  function createStore() {
+    if (overriddenCreateStore) {
+      return overriddenCreateStore();
+    }
+    return internals.INTERNAL_buildStoreRev2();
+  }
+  var defaultStore;
+  function getDefaultStore() {
+    if (!defaultStore) {
+      defaultStore = createStore();
+      if (false) {
+        var _ref;
+      }
+    }
+    return defaultStore;
+  }
+  exports2.INTERNAL_overrideCreateStore = INTERNAL_overrideCreateStore;
+  exports2.atom = atom;
+  exports2.createStore = createStore;
+  exports2.getDefaultStore = getDefaultStore;
+});
+
+// ../../node_modules/jotai/react.js
+var require_react = __commonJS((exports2) => {
+  "use client";
+  var React = require("react");
+  var vanilla = require_vanilla();
+  var internals = require_internals();
+  var StoreContext = React.createContext(undefined);
+  function useStore(options) {
+    var store = React.useContext(StoreContext);
+    return (options == null ? undefined : options.store) || store || vanilla.getDefaultStore();
+  }
+  function Provider(_ref) {
+    var { children, store } = _ref;
+    var storeRef = React.useRef(null);
+    if (store) {
+      return React.createElement(StoreContext.Provider, {
+        value: store
+      }, children);
+    }
+    if (storeRef.current === null) {
+      storeRef.current = vanilla.createStore();
+    }
+    return React.createElement(StoreContext.Provider, {
+      value: storeRef.current
+    }, children);
+  }
+  var isPromiseLike = function isPromiseLike2(x) {
+    return typeof (x == null ? undefined : x.then) === "function";
+  };
+  var attachPromiseStatus = function attachPromiseStatus2(promise) {
+    if (!promise.status) {
+      promise.status = "pending";
+      promise.then(function(v) {
+        promise.status = "fulfilled";
+        promise.value = v;
+      }, function(e) {
+        promise.status = "rejected";
+        promise.reason = e;
+      });
+    }
+  };
+  var use = React.use || function(promise) {
+    if (promise.status === "pending") {
+      throw promise;
+    } else if (promise.status === "fulfilled") {
+      return promise.value;
+    } else if (promise.status === "rejected") {
+      throw promise.reason;
+    } else {
+      attachPromiseStatus(promise);
+      throw promise;
+    }
+  };
+  var continuablePromiseMap = new WeakMap;
+  var createContinuablePromise = function createContinuablePromise2(promise, getValue) {
+    var continuablePromise = continuablePromiseMap.get(promise);
+    if (!continuablePromise) {
+      continuablePromise = new Promise(function(resolve, reject) {
+        var curr = promise;
+        var onFulfilled = function onFulfilled2(me) {
+          return function(v) {
+            if (curr === me) {
+              resolve(v);
+            }
+          };
+        };
+        var onRejected = function onRejected2(me) {
+          return function(e) {
+            if (curr === me) {
+              reject(e);
+            }
+          };
+        };
+        var _onAbort = function onAbort() {
+          try {
+            var nextValue = getValue();
+            if (isPromiseLike(nextValue)) {
+              continuablePromiseMap.set(nextValue, continuablePromise);
+              curr = nextValue;
+              nextValue.then(onFulfilled(nextValue), onRejected(nextValue));
+              internals.INTERNAL_registerAbortHandler(nextValue, _onAbort);
+            } else {
+              resolve(nextValue);
+            }
+          } catch (e) {
+            reject(e);
+          }
+        };
+        promise.then(onFulfilled(promise), onRejected(promise));
+        internals.INTERNAL_registerAbortHandler(promise, _onAbort);
+      });
+      continuablePromiseMap.set(promise, continuablePromise);
+    }
+    return continuablePromise;
+  };
+  function useAtomValue(atom, options) {
+    var _ref = options || {}, delay = _ref.delay, _ref$unstable_promise = _ref.unstable_promiseStatus, promiseStatus = _ref$unstable_promise === undefined ? !React.use : _ref$unstable_promise;
+    var store = useStore(options);
+    var _useReducer = React.useReducer(function(prev) {
+      var nextValue = store.get(atom);
+      if (Object.is(prev[0], nextValue) && prev[1] === store && prev[2] === atom) {
+        return prev;
+      }
+      return [nextValue, store, atom];
+    }, undefined, function() {
+      return [store.get(atom), store, atom];
+    }), _useReducer$ = _useReducer[0], valueFromReducer = _useReducer$[0], storeFromReducer = _useReducer$[1], atomFromReducer = _useReducer$[2], rerender = _useReducer[1];
+    var value = valueFromReducer;
+    if (storeFromReducer !== store || atomFromReducer !== atom) {
+      rerender();
+      value = store.get(atom);
+    }
+    React.useEffect(function() {
+      var unsub = store.sub(atom, function() {
+        if (promiseStatus) {
+          try {
+            var _value = store.get(atom);
+            if (isPromiseLike(_value)) {
+              attachPromiseStatus(createContinuablePromise(_value, function() {
+                return store.get(atom);
+              }));
+            }
+          } catch (_unused) {}
+        }
+        if (typeof delay === "number") {
+          setTimeout(rerender, delay);
+          return;
+        }
+        rerender();
+      });
+      rerender();
+      return unsub;
+    }, [store, atom, delay, promiseStatus]);
+    React.useDebugValue(value);
+    if (isPromiseLike(value)) {
+      var promise = createContinuablePromise(value, function() {
+        return store.get(atom);
+      });
+      if (promiseStatus) {
+        attachPromiseStatus(promise);
+      }
+      return use(promise);
+    }
+    return value;
+  }
+  function useSetAtom(atom, options) {
+    var store = useStore(options);
+    var setAtom = React.useCallback(function() {
+      if (false) {}
+      for (var _len = arguments.length, args = new Array(_len), _key = 0;_key < _len; _key++) {
+        args[_key] = arguments[_key];
+      }
+      return store.set.apply(store, [atom].concat(args));
+    }, [store, atom]);
+    return setAtom;
+  }
+  function useAtom(atom, options) {
+    return [useAtomValue(atom, options), useSetAtom(atom, options)];
+  }
+  exports2.Provider = Provider;
+  exports2.useAtom = useAtom;
+  exports2.useAtomValue = useAtomValue;
+  exports2.useSetAtom = useSetAtom;
+  exports2.useStore = useStore;
+});
+
+// ../../node_modules/jotai/index.js
+var require_jotai = __commonJS((exports2) => {
+  var vanilla = require_vanilla();
+  var react = require_react();
+  Object.keys(vanilla).forEach(function(k) {
+    if (k !== "default" && !Object.prototype.hasOwnProperty.call(exports2, k))
+      Object.defineProperty(exports2, k, {
+        enumerable: true,
+        get: function() {
+          return vanilla[k];
+        }
+      });
+  });
+  Object.keys(react).forEach(function(k) {
+    if (k !== "default" && !Object.prototype.hasOwnProperty.call(exports2, k))
+      Object.defineProperty(exports2, k, {
+        enumerable: true,
+        get: function() {
+          return react[k];
+        }
+      });
+  });
+});
+
 // dsh-plugins/copis-creation-web/src/client.tsx
 var exports_client = {};
 __export(exports_client, {
-  isSettingsTarget: () => isSettingsTarget,
   inject: () => inject,
   apply: () => apply,
   CreationSidebarNavigation: () => CreationSidebarNavigation,
@@ -119,16 +1105,6 @@ var BookOpen = createLucideIcon("BookOpen", [
   ]
 ]);
 
-// ../../node_modules/lucide-react/dist/esm/icons/bot.js
-var Bot = createLucideIcon("Bot", [
-  ["path", { d: "M12 8V4H8", key: "hb8ula" }],
-  ["rect", { width: "16", height: "12", x: "4", y: "8", rx: "2", key: "enze0r" }],
-  ["path", { d: "M2 14h2", key: "vft8re" }],
-  ["path", { d: "M20 14h2", key: "4cs60a" }],
-  ["path", { d: "M15 13v2", key: "1xurst" }],
-  ["path", { d: "M9 13v2", key: "rq6x2g" }]
-]);
-
 // ../../node_modules/lucide-react/dist/esm/icons/brain.js
 var Brain = createLucideIcon("Brain", [
   [
@@ -164,9 +1140,20 @@ var CalendarClock = createLucideIcon("CalendarClock", [
   ["circle", { cx: "16", cy: "16", r: "6", key: "qoo3c4" }]
 ]);
 
-// ../../node_modules/lucide-react/dist/esm/icons/loader-circle.js
-var LoaderCircle = createLucideIcon("LoaderCircle", [
-  ["path", { d: "M21 12a9 9 0 1 1-6.219-8.56", key: "13zald" }]
+// ../../node_modules/lucide-react/dist/esm/icons/chevron-down.js
+var ChevronDown = createLucideIcon("ChevronDown", [
+  ["path", { d: "m6 9 6 6 6-6", key: "qrunsl" }]
+]);
+
+// ../../node_modules/lucide-react/dist/esm/icons/chevron-up.js
+var ChevronUp = createLucideIcon("ChevronUp", [["path", { d: "m18 15-6-6-6 6", key: "153udz" }]]);
+
+// ../../node_modules/lucide-react/dist/esm/icons/layout-grid.js
+var LayoutGrid = createLucideIcon("LayoutGrid", [
+  ["rect", { width: "7", height: "7", x: "3", y: "3", rx: "1", key: "1g98yp" }],
+  ["rect", { width: "7", height: "7", x: "14", y: "3", rx: "1", key: "6d4xhi" }],
+  ["rect", { width: "7", height: "7", x: "14", y: "14", rx: "1", key: "nxv5o0" }],
+  ["rect", { width: "7", height: "7", x: "3", y: "14", rx: "1", key: "1bb6yr" }]
 ]);
 
 // ../../node_modules/lucide-react/dist/esm/icons/puzzle.js
@@ -184,6 +1171,18 @@ var Puzzle = createLucideIcon("Puzzle", [
 var Search = createLucideIcon("Search", [
   ["circle", { cx: "11", cy: "11", r: "8", key: "4ej97u" }],
   ["path", { d: "m21 21-4.3-4.3", key: "1qie3q" }]
+]);
+
+// ../../node_modules/lucide-react/dist/esm/icons/settings.js
+var Settings = createLucideIcon("Settings", [
+  [
+    "path",
+    {
+      d: "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z",
+      key: "1qme2f"
+    }
+  ],
+  ["circle", { cx: "12", cy: "12", r: "3", key: "1v7zrd" }]
 ]);
 
 // ../../node_modules/lucide-react/dist/esm/icons/timer.js
@@ -213,49 +1212,271 @@ var X = createLucideIcon("X", [
 ]);
 // dsh-plugins/copis-creation-web/src/client.tsx
 var import_react4 = require("react");
-
-// dsh-plugins/copis-creation-web/src/CreationReturnToAgentControl.tsx
-var import_react3 = require("react");
 var import_react_dom = require("react-dom");
+
+// dsh-plugins/copis-creation-web/src/MediaPreview.tsx
+var import_react3 = require("react");
 var jsx_runtime = require("react/jsx-runtime");
-function CreationReturnToAgentControl({ wide, menuRef, onReturn }) {
-  const [host, setHost] = import_react3.useState(null);
-  import_react3.useLayoutEffect(() => {
-    const sidebar = menuRef.current?.closest('[class*="_root"], [class*="SidebarRoot"], [class*="_sidebarCol"], [class*="sidebarCol"], aside');
-    const settings = sidebar?.querySelector('[class*="settingsArea"], [class*="SettingsArea"]');
-    if (!settings?.parentElement)
+function stopMedia(element) {
+  if (!element?.hasAttribute("src"))
+    return;
+  element.pause();
+  element.removeAttribute("src");
+  element.load();
+}
+function MediaPreview({ resourceAddress, content, useResource, useTabInfo, bridge }) {
+  const meta = useResource(resourceAddress);
+  const { tab } = useTabInfo();
+  const path = meta.value?.absolutePath;
+  const version = meta.value?.version;
+  const prepare = bridge?.prepareMediaPreview;
+  const release = bridge?.releaseMediaPreview;
+  const [state, setState] = import_react3.useState({ status: "loading" });
+  const element = import_react3.useRef(null);
+  const lease = import_react3.useRef(null);
+  const reported = import_react3.useRef(false);
+  const callbacks = import_react3.useRef(content);
+  callbacks.current = content;
+  const disposeRef = import_react3.useRef(() => {});
+  const bindElement = import_react3.useCallback((node) => {
+    if (element.current !== node)
+      stopMedia(element.current);
+    element.current = node;
+  }, []);
+  import_react3.useEffect(() => {
+    setState({ status: "loading" });
+    reported.current = false;
+    disposeRef.current = () => {};
+    if (!tab.visible || tab.signal.aborted)
       return;
-    const element = document.createElement("div");
-    element.className = "copis-return-agent-host";
-    settings.before(element);
-    setHost(element);
-    return () => {
-      element.remove();
+    const fail = (error) => {
+      setState({ status: "failed", error });
+      callbacks.current.failed();
     };
-  }, [menuRef]);
-  if (!host)
+    if (!prepare || !release) {
+      fail("音视频预览需要在 Copis 桌面应用中打开");
+      return;
+    }
+    if (!path) {
+      if (meta.status !== "loading")
+        fail("媒体文件不存在或无法定位");
+      return;
+    }
+    let active = true;
+    let url;
+    const releaseUrl = (value) => {
+      Promise.resolve().then(() => release(value)).catch(() => {});
+    };
+    const dispose = () => {
+      if (!active)
+        return;
+      active = false;
+      stopMedia(element.current);
+      if (url) {
+        if (lease.current?.url === url)
+          lease.current = null;
+        releaseUrl(url);
+      }
+    };
+    disposeRef.current = dispose;
+    tab.signal.addEventListener("abort", dispose, { once: true });
+    Promise.resolve().then(() => prepare(path)).then((result) => {
+      if (!active) {
+        if (result.success)
+          releaseUrl(result.url);
+        return;
+      }
+      if (result.success === false) {
+        fail(result.error);
+        return;
+      }
+      url = result.url;
+      lease.current = { url, version: version ?? String(content.revision) };
+      setState({ status: "ready", media: result });
+    }).catch(() => {
+      if (active)
+        fail("媒体文件读取失败，请重试");
+    });
+    return () => {
+      tab.signal.removeEventListener("abort", dispose);
+      dispose();
+    };
+  }, [resourceAddress, content.revision, path, version, meta.status, tab.visible, tab.signal, prepare, release]);
+  import_react3.useEffect(() => {
+    const pauseWhenHidden = () => {
+      if (document.hidden)
+        element.current?.pause();
+    };
+    document.addEventListener("visibilitychange", pauseWhenHidden);
+    return () => document.removeEventListener("visibilitychange", pauseWhenHidden);
+  }, []);
+  if (!tab.visible)
     return null;
-  return import_react_dom.createPortal(/* @__PURE__ */ jsx_runtime.jsxs("button", {
-    type: "button",
-    className: `${wide ? "copis-menu-item" : "copis-rail-menu-item"} copis-return-agent-button`,
-    title: "返回 Agent 模式",
-    "aria-label": "返回 Agent 模式",
-    onClick: onReturn,
+  const onLoadedMetadata = () => {
+    if (state.status !== "ready" || lease.current?.url !== state.media.url || reported.current)
+      return;
+    reported.current = true;
+    callbacks.current.loaded(lease.current.version);
+  };
+  const onError = () => {
+    disposeRef.current();
+    setState({ status: "failed", error: "无法播放此文件，文件可能已删除或媒体编码不受支持" });
+    callbacks.current.failed();
+  };
+  return /* @__PURE__ */ jsx_runtime.jsxs("div", {
+    "data-copis-media-preview": true,
+    style: { padding: 16, display: "flex", flexDirection: "column", gap: 12, width: "100%", height: "100%", minWidth: 0, minHeight: 0, overflow: "hidden", whiteSpace: "normal", boxSizing: "border-box", color: "var(--dsw-alias-label-primary)", background: "var(--dsw-alias-bg-base)" },
     children: [
-      /* @__PURE__ */ jsx_runtime.jsx(Bot, {
-        size: wide ? 16 : 18,
-        strokeWidth: 1.8
+      state.status === "loading" && /* @__PURE__ */ jsx_runtime.jsx("p", {
+        role: "status",
+        children: "正在加载媒体…"
       }),
-      wide && /* @__PURE__ */ jsx_runtime.jsx("span", {
-        children: "返回 Agent 模式"
-      })
+      state.status === "failed" && /* @__PURE__ */ jsx_runtime.jsxs(jsx_runtime.Fragment, {
+        children: [
+          /* @__PURE__ */ jsx_runtime.jsx("p", {
+            role: "alert",
+            children: state.error
+          }),
+          /* @__PURE__ */ jsx_runtime.jsx("button", {
+            type: "button",
+            onClick: () => callbacks.current.reload(),
+            children: "重试"
+          })
+        ]
+      }),
+      state.status === "ready" && (state.media.kind === "video" ? /* @__PURE__ */ jsx_runtime.jsx("video", {
+        ref: bindElement,
+        src: state.media.url,
+        controls: true,
+        playsInline: true,
+        preload: "metadata",
+        "aria-label": "MP4 视频预览",
+        onLoadedMetadata,
+        onError,
+        style: { flex: "1 1 0", width: "100%", height: "100%", minWidth: 0, minHeight: 0, objectFit: "contain", background: "#000", borderRadius: 8 }
+      }, state.media.url) : /* @__PURE__ */ jsx_runtime.jsx("audio", {
+        ref: bindElement,
+        src: state.media.url,
+        controls: true,
+        preload: "metadata",
+        "aria-label": "MP3 音频预览",
+        onLoadedMetadata,
+        onError,
+        style: { width: "100%", minWidth: 0, flexShrink: 0 }
+      }, state.media.url))
     ]
-  }), host);
+  });
+}
+function registerMediaPreview(ctx, getBridge) {
+  const id = "@copis-ext/creation-web/media";
+  ctx.effect(() => ctx.documentPreviews.register({ id, extensions: ["mp4", "mp3"], binaryExtensions: ["mp4", "mp3"], priority: "extension", title: () => "音视频", loading: "renderer" }));
+  ctx.effect(() => ctx.slots.inject("sidebar.right.tab.document", () => ctx.slots.register({ name: "sidebar.right.tab.document", key: id }, (props) => /* @__PURE__ */ jsx_runtime.jsx(MediaPreview, {
+    ...props,
+    bridge: getBridge()
+  }))));
+}
+
+// dsh-plugins/copis-creation-web/src/session-completion.ts
+function registerSessionCompletion(ctx, getBridge, host = {
+  events: window,
+  hasFocus: () => document.hasFocus(),
+  isConversationVisible: () => !document.hidden && !document.body?.classList.contains("copis-subview-active")
+}) {
+  ctx.effect(() => {
+    const controller = new AbortController;
+    const previous = new Map;
+    const generations = new Map;
+    const delivered = new Map;
+    let generationCounter = 0;
+    const isViewed = (id) => host.hasFocus() && host.isConversationVisible() && ctx.sidebarRight.mounted.getSnapshot() === id;
+    const acknowledge = () => {
+      const id = ctx.sidebarRight.mounted.getSnapshot();
+      if (id && isViewed(id))
+        getBridge()?.reportSessionViewed?.(id);
+    };
+    const inspect = async (id, generation) => {
+      try {
+        const history = await ctx.remote.session.events({ address: { kind: "session", sessionId: id }, maxMessages: 1 }, controller.signal);
+        if (!history.ok)
+          return;
+        const end = history.value.records.findLast(({ event }) => event.type === "turn/end")?.event;
+        if (!end || end.data.reason?.kind !== "completed" || end.seq <= (delivered.get(id) ?? -1))
+          return;
+        const state = await ctx.remote.session.state({ sessionId: id }, controller.signal);
+        const row = ctx.sessions.list.getSnapshot().byId?.[id];
+        if (controller.signal.aborted || generations.get(id) !== generation || !row || row.running || !state.ok || state.value.running || state.value.queue?.length || state.value.pendingInput.length || row.projectionValues?.goal && row.projectionValues.goal.goal.phase !== "complete")
+          return;
+        delivered.set(id, end.seq);
+        getBridge()?.reportSessionCompleted?.({
+          sessionId: id,
+          title: row.title || row.displayTitle || "创造模式会话",
+          completionSeq: end.seq,
+          viewed: isViewed(id),
+          windowFocused: host.hasFocus()
+        });
+      } catch {
+        if (!controller.signal.aborted)
+          console.warn("[创造模式通知] 无法确认会话完成状态，已跳过本次提醒");
+      }
+    };
+    const observe = () => {
+      const snapshot = ctx.sessions.list.getSnapshot();
+      if (snapshot.phase && snapshot.phase !== "ready") {
+        previous.clear();
+        generations.clear();
+        return;
+      }
+      const ids = new Set(snapshot.ids ?? Object.keys(snapshot.byId ?? {}));
+      for (const id of previous.keys()) {
+        if (!ids.has(id)) {
+          previous.delete(id);
+          generations.delete(id);
+          delivered.delete(id);
+          getBridge()?.reportSessionViewed?.(id);
+        }
+      }
+      for (const id of ids) {
+        const row = snapshot.byId?.[id];
+        if (!row || row.parentId || row.origin === "subagent")
+          continue;
+        const wasRunning = previous.get(id);
+        previous.set(id, row.running);
+        if (wasRunning !== row.running)
+          generations.set(id, ++generationCounter);
+        if (wasRunning && !row.running)
+          inspect(id, generations.get(id));
+      }
+    };
+    const onMessage = (event) => {
+      const data = event.data;
+      if (data?.type === "COPIS_DSH_OPEN_SESSION" && typeof data.sessionId === "string" && ctx.sessions.list.getSnapshot().byId?.[data.sessionId]) {
+        ctx.uiWorkspace.openSession(data.sessionId);
+        getBridge()?.navigate?.("conversations");
+      }
+      acknowledge();
+    };
+    const stopList = ctx.sessions.list.subscribe(observe);
+    const stopMounted = ctx.sidebarRight.mounted.subscribe(acknowledge);
+    host.events.addEventListener("focus", acknowledge);
+    host.events.addEventListener("message", onMessage);
+    observe();
+    acknowledge();
+    return () => {
+      controller.abort();
+      stopList();
+      stopMounted();
+      host.events.removeEventListener("focus", acknowledge);
+      host.events.removeEventListener("message", onMessage);
+    };
+  });
 }
 
 // dsh-plugins/copis-creation-web/src/client.tsx
 var jsx_runtime2 = require("react/jsx-runtime");
 var CREATION_STYLES_ID = "copis-creation-web-styles";
+var { atom, useAtom } = require_jotai();
+var COLLAPSED_MENU_COUNT = 3;
+var menuExpandedAtom = atom(false);
 var SIDEBAR_MENU_ITEMS = [
   { id: "search", label: "搜索", icon: Search, action: "search" },
   { id: "schedule", label: "日程表", icon: CalendarClock, view: "planning", tab: "schedule" },
@@ -301,14 +1522,6 @@ var CREATION_UI_CSS = `
     display: none !important;
   }
 
-  .copis-return-agent-host {
-    display: flex;
-    flex: none;
-    justify-content: center;
-    margin: 0 0 8px;
-    padding: 0 2px;
-  }
-
   .copis-menu-section {
     box-sizing: border-box;
     display: grid;
@@ -318,6 +1531,34 @@ var CREATION_UI_CSS = `
     margin: 0 0 8px;
     padding: 0 2px;
   }
+
+  .copis-menu-heading,
+  .copis-menu-item {
+    font-size: 14px;
+  }
+
+  .copis-menu-heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 8px 3px;
+    color: var(--dsw-alias-label-secondary, #71717a);
+    font-weight: 600;
+  }
+
+  .copis-menu-section > [data-copis-menu-id],
+  .copis-menu-section > .copis-menu-toggle {
+    margin-inline-start: 16px;
+    width: calc(100% - 16px);
+  }
+
+  .copis-menu-section .copis-menu-toggle {
+    min-height: 26px;
+    color: var(--dsw-alias-label-secondary, #71717a);
+    font-size: 12px;
+  }
+
+  .copis-settings-entry { margin-top: 5px; }
 
   .copis-menu-item {
     appearance: none;
@@ -332,7 +1573,6 @@ var CREATION_UI_CSS = `
     border-radius: 7px;
     background: transparent;
     color: var(--dsw-alias-label-primary, inherit);
-    font-size: 14px;
     font-weight: 400;
     line-height: 1.25;
     text-align: left;
@@ -353,6 +1593,7 @@ var CREATION_UI_CSS = `
     font-weight: 500 !important;
   }
 
+  .copis-menu-heading svg,
   .copis-menu-item svg {
     flex: none;
     width: 15px;
@@ -912,23 +2153,12 @@ var CREATION_UI_CSS = `
     align-items: stretch !important;
   }
 
-  .copis-return-agent-host {
-    display: flex;
-    justify-content: center;
-    width: 100%;
-    min-width: 0;
-  }
-
-  .copis-return-agent-button.copis-menu-item {
-    width: 100%;
-  }
-
   /* 隐藏顶部右上角原生的 session-log-download 及任何 Agent 模式切换按钮 */
   button[class*="sessionLogButton"],
-  button[title*="返回 Agent 模式"]:not(.copis-return-agent-button),
-  button[title*="返回Agent 模式"]:not(.copis-return-agent-button),
-  button[aria-label*="返回 Agent 模式"]:not(.copis-return-agent-button),
-  button[aria-label*="返回Agent 模式"]:not(.copis-return-agent-button),
+  button[title*="返回 Agent 模式"],
+  button[title*="返回Agent 模式"],
+  button[aria-label*="返回 Agent 模式"],
+  button[aria-label*="返回Agent 模式"],
   [data-slot-id="session-log-download"] {
     display: none !important;
   }
@@ -1067,16 +2297,6 @@ var CREATION_UI_CSS = `
     flex-shrink: 0;
   }
 
-  .copis-search-badge-agent {
-    font-size: 10px;
-    padding: 1px 6px;
-    border-radius: 4px;
-    background: rgba(240, 154, 67, 0.15);
-    color: #f09a43;
-    font-weight: 500;
-    flex-shrink: 0;
-  }
-
   .copis-search-footer {
     display: flex;
     align-items: center;
@@ -1088,19 +2308,6 @@ var CREATION_UI_CSS = `
     background: var(--dsw-alias-bg-base, inherit);
     flex-shrink: 0;
   }
-
-  /* 彻底屏蔽 DSH 原生设置弹窗与遮罩层，统一由 Copis 全屏设置面板接管 */
-  [class*="VOzbGW_panel"],
-  [class*="VOzbGW_overlay"],
-  [class*="VOzbGW_mask"],
-  [class*="settingsArea"] [role="dialog"],
-  [class*="SettingsArea"] [role="dialog"],
-  [class*="SettingsPanel"],
-  [class*="settingsPanel"] {
-    display: none !important;
-    visibility: hidden !important;
-    pointer-events: none !important;
-  }
 `;
 function installCreationStyles() {
   if (typeof document === "undefined")
@@ -1111,33 +2318,6 @@ function installCreationStyles() {
   style.id = CREATION_STYLES_ID;
   style.textContent = CREATION_UI_CSS;
   document.head.appendChild(style);
-}
-function isSettingsTarget(target) {
-  if (!target)
-    return false;
-  const btn = target.closest("button");
-  if (!btn)
-    return false;
-  if (btn.closest('[class*="composer"], [class*="Composer"], [class*="uV2eYG"], [class*="_centerCol"], [class*="centerCol"], [class*="chatArea"], [class*="messageList"], [class*="sessionView"], [class*="_detailsCol"]')) {
-    return false;
-  }
-  const inSidebar = Boolean(btn.closest('aside, [class*="SidebarRoot"], [class*="sidebar"], [class*="_sidebarCol"], [class*="footArea"], [class*="FootArea"], [class*="settingsArea"], [class*="SettingsArea"], .copis-creation-sidebar'));
-  if (!inSidebar) {
-    return false;
-  }
-  if (btn.closest('[class*="settingsArea"], [class*="SettingsArea"]'))
-    return true;
-  if (btn.closest('[class*="triggerRow"], [class*="TriggerRow"]') && btn.getAttribute("aria-haspopup") === "dialog")
-    return true;
-  if (btn.matches('button[class*="trigger"][aria-haspopup="dialog"], button[class*="Trigger"][aria-haspopup="dialog"]'))
-    return true;
-  const aria = (btn.getAttribute("aria-label") || btn.getAttribute("title") || "").toLowerCase();
-  if (aria.includes("设置") || aria.includes("setting"))
-    return true;
-  const text = (btn.textContent || "").trim().toLowerCase();
-  if (text.includes("设置") || text.includes("setting"))
-    return true;
-  return false;
 }
 function sendNavigation(view, tab) {
   if (view && view !== "conversations") {
@@ -1181,26 +2361,35 @@ function getInitialHiddenMenuIds() {
 function attachSidebarMenu(element) {
   const sidebar = element.closest('[class*="_root"]') ?? element.closest('[class*="SidebarRoot"]') ?? element.closest('[class*="_sidebarCol"], [class*="sidebarCol"]') ?? element.closest("aside");
   if (!sidebar)
-    return;
+    return null;
   sidebar.classList.add("copis-creation-sidebar");
   const legacySections = sidebar.querySelectorAll('.copis-menu-section:not([data-copis-placement="before-workspaces"]), .copis-rail-menu-section:not([data-copis-placement="before-workspaces"])');
   legacySections.forEach((el) => el.remove());
   const target = sidebar.querySelector('[class*="_regionArea"], [class*="regionArea"]') ?? sidebar.querySelector('button[class*="_newSession"], button[class*="newSession"]');
-  if (target && element.parentElement !== sidebar) {
-    sidebar.insertBefore(element, target);
-  }
+  if (!target?.parentElement)
+    return null;
+  const host = document.createElement("div");
+  host.style.display = "contents";
+  target.before(host);
+  return host;
 }
 var cachedCordisContext = null;
 function CreationSidebarNavigation(props) {
   const [activeView, setActiveView] = import_react4.useState("conversations");
+  const [expanded, setExpanded] = useAtom(menuExpandedAtom);
   const [hiddenMenuIds, setHiddenMenuIds] = import_react4.useState(getInitialHiddenMenuIds);
   const rootRef = import_react4.useRef(null);
+  const [menuHost, setMenuHost] = import_react4.useState(null);
   const isSubviewActive = activeView !== "conversations";
   const effectiveCtx = props.ctx ?? cachedCordisContext;
   const wide = isSubviewActive || Boolean(props.wide) || !props.collapsed && (props.width === undefined || props.width >= 200);
   import_react4.useLayoutEffect(() => {
+    const host = rootRef.current && attachSidebarMenu(rootRef.current);
+    setMenuHost(host);
+    return () => host?.remove();
+  }, [props.collapsed, props.wide]);
+  import_react4.useLayoutEffect(() => {
     if (rootRef.current) {
-      attachSidebarMenu(rootRef.current);
       const sidebar = rootRef.current.closest('[class*="_root"], [class*="SidebarRoot"], [class*="_sidebarCol"], [class*="sidebarCol"], aside');
       if (sidebar && !isSubviewActive && typeof document !== "undefined" && !document.body.classList.contains("copis-subview-active")) {
         const w = sidebar.getBoundingClientRect().width;
@@ -1349,20 +2538,6 @@ function CreationSidebarNavigation(props) {
     window.addEventListener("COPIS_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED", handleHiddenItemsChange);
     return () => window.removeEventListener("COPIS_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED", handleHiddenItemsChange);
   }, []);
-  import_react4.useEffect(() => {
-    const openCopisSettings = (event) => {
-      const target = event.target;
-      if (!isSettingsTarget(target))
-        return;
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-      setActiveView("settings");
-      sendNavigation("settings");
-    };
-    document.addEventListener("click", openCopisSettings, true);
-    return () => document.removeEventListener("click", openCopisSettings, true);
-  }, []);
   const selectItem = (item) => {
     if (item.action === "search") {
       sendSearchRequest();
@@ -1382,82 +2557,107 @@ function CreationSidebarNavigation(props) {
     }
   };
   const visibleMenuItems = SIDEBAR_MENU_ITEMS.filter((item) => !hiddenMenuIds.includes(item.id));
-  const returnControl = /* @__PURE__ */ jsx_runtime2.jsx(CreationReturnToAgentControl, {
-    wide,
-    menuRef: rootRef,
-    onReturn: () => window.copisBridge?.switchMode?.("agent")
-  });
-  if (!wide) {
-    return /* @__PURE__ */ jsx_runtime2.jsxs(jsx_runtime2.Fragment, {
-      children: [
-        /* @__PURE__ */ jsx_runtime2.jsx("div", {
-          ref: rootRef,
-          className: "copis-rail-menu-section",
-          "data-copis-placement": "before-workspaces",
-          children: visibleMenuItems.map((item) => {
-            const Icon2 = item.icon;
-            return /* @__PURE__ */ jsx_runtime2.jsx("button", {
-              type: "button",
-              className: "copis-rail-menu-item",
-              "data-copis-menu-id": item.id,
-              "data-active": item.view === activeView ? "true" : "false",
-              "aria-label": item.label,
-              title: item.label,
-              onClick: () => selectItem(item),
-              children: /* @__PURE__ */ jsx_runtime2.jsx(Icon2, {
-                size: 18,
-                strokeWidth: 1.8
-              })
-            }, item.id);
+  const items = expanded ? visibleMenuItems : visibleMenuItems.slice(0, COLLAPSED_MENU_COUNT);
+  const itemClass = wide ? "copis-menu-item" : "copis-rail-menu-item";
+  const ToggleIcon = expanded ? ChevronUp : ChevronDown;
+  const toggleLabel = expanded ? "收起" : "展开显示";
+  const menu = /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+    className: wide ? "copis-menu-section" : "copis-rail-menu-section",
+    "data-copis-placement": "before-workspaces",
+    role: "group",
+    "aria-label": "Copis功能",
+    children: [
+      wide && /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+        className: "copis-menu-heading",
+        children: [
+          /* @__PURE__ */ jsx_runtime2.jsx(LayoutGrid, {
+            size: 16,
+            strokeWidth: 1.8,
+            "aria-hidden": "true"
+          }),
+          /* @__PURE__ */ jsx_runtime2.jsx("span", {
+            children: "Copis功能"
           })
-        }),
-        returnControl
-      ]
-    });
-  }
+        ]
+      }),
+      items.map((item) => {
+        const Icon2 = item.icon;
+        return /* @__PURE__ */ jsx_runtime2.jsxs("button", {
+          type: "button",
+          className: itemClass,
+          "data-copis-menu-id": item.id,
+          "data-active": item.view === activeView ? "true" : "false",
+          "aria-label": item.label,
+          title: wide ? undefined : item.label,
+          onClick: () => selectItem(item),
+          children: [
+            /* @__PURE__ */ jsx_runtime2.jsx(Icon2, {
+              size: wide ? 16 : 18,
+              strokeWidth: 1.8
+            }),
+            wide && /* @__PURE__ */ jsx_runtime2.jsx("span", {
+              children: item.label
+            }),
+            wide && item.badge && /* @__PURE__ */ jsx_runtime2.jsx("span", {
+              className: `copis-menu-badge ${item.badge === "BETA" ? "copis-menu-badge-beta" : "copis-menu-badge-flexible"}`,
+              children: item.badge
+            }),
+            wide && /* @__PURE__ */ jsx_runtime2.jsx("button", {
+              type: "button",
+              className: "copis-dsh-menu-hide-btn",
+              "aria-label": `隐藏${item.label}`,
+              title: "隐藏此菜单",
+              onClick: (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                handleHideMenuItem(item.id);
+              },
+              children: "隐藏"
+            })
+          ]
+        }, item.id);
+      }),
+      visibleMenuItems.length > COLLAPSED_MENU_COUNT && /* @__PURE__ */ jsx_runtime2.jsxs("button", {
+        type: "button",
+        className: `${itemClass} copis-menu-toggle`,
+        "aria-expanded": expanded,
+        "aria-label": toggleLabel,
+        title: wide ? undefined : toggleLabel,
+        onClick: () => setExpanded(!expanded),
+        children: [
+          /* @__PURE__ */ jsx_runtime2.jsx(ToggleIcon, {
+            size: 14
+          }),
+          wide && /* @__PURE__ */ jsx_runtime2.jsx("span", {
+            children: toggleLabel
+          })
+        ]
+      }),
+      /* @__PURE__ */ jsx_runtime2.jsxs("button", {
+        type: "button",
+        className: `${itemClass} copis-settings-entry`,
+        "aria-label": "Copis 设置",
+        title: wide ? undefined : "Copis 设置",
+        onClick: () => sendNavigation("settings"),
+        children: [
+          /* @__PURE__ */ jsx_runtime2.jsx(Settings, {
+            size: wide ? 16 : 18,
+            strokeWidth: 1.8
+          }),
+          wide && /* @__PURE__ */ jsx_runtime2.jsx("span", {
+            children: "Copis 设置"
+          })
+        ]
+      })
+    ]
+  });
   return /* @__PURE__ */ jsx_runtime2.jsxs(jsx_runtime2.Fragment, {
     children: [
-      /* @__PURE__ */ jsx_runtime2.jsx("div", {
+      /* @__PURE__ */ jsx_runtime2.jsx("span", {
         ref: rootRef,
-        className: "copis-menu-section",
-        "data-copis-placement": "before-workspaces",
-        children: visibleMenuItems.map((item) => {
-          const Icon2 = item.icon;
-          return /* @__PURE__ */ jsx_runtime2.jsxs("button", {
-            type: "button",
-            className: "copis-menu-item",
-            "data-copis-menu-id": item.id,
-            "data-active": item.view === activeView ? "true" : "false",
-            onClick: () => selectItem(item),
-            children: [
-              /* @__PURE__ */ jsx_runtime2.jsx(Icon2, {
-                size: 16,
-                strokeWidth: 1.8
-              }),
-              /* @__PURE__ */ jsx_runtime2.jsx("span", {
-                children: item.label
-              }),
-              item.badge && /* @__PURE__ */ jsx_runtime2.jsx("span", {
-                className: `copis-menu-badge ${item.badge === "BETA" ? "copis-menu-badge-beta" : "copis-menu-badge-flexible"}`,
-                children: item.badge
-              }),
-              /* @__PURE__ */ jsx_runtime2.jsx("button", {
-                type: "button",
-                className: "copis-dsh-menu-hide-btn",
-                onClick: (e) => {
-                  e.stopPropagation();
-                  e.preventDefault();
-                  handleHideMenuItem(item.id);
-                },
-                "aria-label": `隐藏${item.label}`,
-                title: "隐藏此菜单",
-                children: "隐藏"
-              })
-            ]
-          }, item.id);
-        })
+        hidden: true
       }),
-      returnControl
+      menuHost ? import_react_dom.createPortal(menu, menuHost) : menu
     ]
   });
 }
@@ -1503,14 +2703,11 @@ function HighlightSearchText({ text, query }) {
 function CopisSearchModal(props) {
   const [query, setQuery] = import_react4.useState("");
   const [committedQuery, setCommittedQuery] = import_react4.useState("");
-  const [loading, setLoading] = import_react4.useState(false);
   const [hasSearched, setHasSearched] = import_react4.useState(false);
   const [titleResults, setTitleResults] = import_react4.useState([]);
-  const [contentResults, setContentResults] = import_react4.useState([]);
   const [selectedIndex, setSelectedIndex] = import_react4.useState(0);
   const inputRef = import_react4.useRef(null);
   const isComposingRef = import_react4.useRef(false);
-  const searchTokenRef = import_react4.useRef(0);
   import_react4.useEffect(() => {
     if (props.open) {
       setTimeout(() => {
@@ -1520,24 +2717,20 @@ function CopisSearchModal(props) {
       setQuery("");
       setCommittedQuery("");
       setTitleResults([]);
-      setContentResults([]);
       setHasSearched(false);
       setSelectedIndex(0);
     }
   }, [props.open]);
-  const runSearch = import_react4.useCallback(async () => {
+  const runSearch = import_react4.useCallback(() => {
     const q = query.trim();
     if (!q) {
       setTitleResults([]);
-      setContentResults([]);
       setHasSearched(false);
       setCommittedQuery("");
       return;
     }
-    const token = ++searchTokenRef.current;
     setCommittedQuery(q);
     setHasSearched(true);
-    setLoading(true);
     setSelectedIndex(0);
     const qLower = q.toLowerCase();
     const titles = [];
@@ -1550,7 +2743,6 @@ function CopisSearchModal(props) {
             titles.push({
               id,
               title: t,
-              source: "creation",
               updatedAt: s?.updatedAt || s?.createdAt || 0
             });
           }
@@ -1559,99 +2751,34 @@ function CopisSearchModal(props) {
     } catch (err) {
       console.warn("[CopisSearchModal] 读取 DSH 会话失败:", err);
     }
-    try {
-      if (window.copisBridge?.getAgentSessions) {
-        const agentSessions = await window.copisBridge.getAgentSessions();
-        if (token === searchTokenRef.current && Array.isArray(agentSessions)) {
-          for (const s of agentSessions) {
-            if (s?.title && s.title.toLowerCase().includes(qLower)) {
-              titles.push({
-                id: s.id,
-                title: s.title,
-                source: "agent",
-                updatedAt: s.updatedAt || 0
-              });
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.warn("[CopisSearchModal] 读取 Agent 会话失败:", err);
-    }
-    if (token !== searchTokenRef.current)
-      return;
     titles.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     setTitleResults(titles);
-    try {
-      if (window.copisBridge?.searchAgentSessionMessages) {
-        const messageResults = await window.copisBridge.searchAgentSessionMessages(q);
-        if (token === searchTokenRef.current && Array.isArray(messageResults)) {
-          const titleIds = new Set(titles.map((t) => t.id));
-          const contents = messageResults.filter((r) => !titleIds.has(r.sessionId)).map((r) => ({
-            id: r.sessionId,
-            title: r.sessionTitle,
-            source: "agent",
-            snippet: r.snippet,
-            matchStart: r.matchStart,
-            matchLength: r.matchLength
-          }));
-          setContentResults(contents);
-        }
-      }
-    } catch (err) {
-      console.warn("[CopisSearchModal] 搜索消息全文失败:", err);
-    } finally {
-      if (token === searchTokenRef.current) {
-        setLoading(false);
-      }
-    }
   }, [query, props.ctx.sessions]);
-  const allResults = import_react4.useMemo(() => [...titleResults, ...contentResults], [titleResults, contentResults]);
   const navigateToResult = import_react4.useCallback((item) => {
     props.onClose();
-    if (item.source === "creation") {
-      try {
-        if (props.ctx.sessions?.open) {
-          props.ctx.sessions.open(item.id);
-        } else if (props.ctx.sessions?.select) {
-          props.ctx.sessions.select(item.id);
-        } else {
-          const el = document.querySelector(`[data-session-id="${item.id}"]`);
-          el?.click();
-        }
-      } catch {
-        const el = document.querySelector(`[data-session-id="${item.id}"]`);
-        el?.click();
-      }
-    } else {
-      if (window.copisBridge?.openSession) {
-        window.copisBridge.openSession("agent", item.id, item.title);
-      } else if (window.copisBridge?.switchMode) {
-        window.copisBridge.switchMode("agent");
-      }
-    }
-  }, [props.ctx.sessions, props.onClose]);
+    props.ctx.uiWorkspace.openSession(item.id);
+  }, [props.ctx.uiWorkspace, props.onClose]);
   const handleKeyDown = import_react4.useCallback((e) => {
     if (e.key === "Escape") {
       e.preventDefault();
       props.onClose();
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
-      setSelectedIndex((prev) => allResults.length > 0 ? (prev + 1) % allResults.length : 0);
+      setSelectedIndex((prev) => titleResults.length > 0 ? (prev + 1) % titleResults.length : 0);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setSelectedIndex((prev) => allResults.length > 0 ? (prev - 1 + allResults.length) % allResults.length : 0);
+      setSelectedIndex((prev) => titleResults.length > 0 ? (prev - 1 + titleResults.length) % titleResults.length : 0);
     } else if (e.key === "Enter") {
       e.preventDefault();
       if (isComposingRef.current)
         return;
       if (query.trim() !== committedQuery || !hasSearched) {
         runSearch();
-      } else if (allResults[selectedIndex]) {
-        navigateToResult(allResults[selectedIndex]);
+      } else if (titleResults[selectedIndex]) {
+        navigateToResult(titleResults[selectedIndex]);
       }
     }
-  }, [allResults, committedQuery, hasSearched, navigateToResult, props, query, runSearch, selectedIndex]);
+  }, [titleResults, committedQuery, hasSearched, navigateToResult, props, query, runSearch, selectedIndex]);
   if (!props.open)
     return null;
   const isQueryDirty = query.trim() !== committedQuery;
@@ -1693,7 +2820,6 @@ function CopisSearchModal(props) {
                 setQuery("");
                 setCommittedQuery("");
                 setTitleResults([]);
-                setContentResults([]);
                 setHasSearched(false);
                 setSelectedIndex(0);
                 inputRef.current?.focus();
@@ -1715,13 +2841,10 @@ function CopisSearchModal(props) {
             /* @__PURE__ */ jsx_runtime2.jsxs("button", {
               type: "button",
               className: "copis-search-submit-btn",
-              disabled: !query.trim() || loading,
-              onClick: () => void runSearch(),
+              disabled: !query.trim(),
+              onClick: () => runSearch(),
               children: [
-                loading ? /* @__PURE__ */ jsx_runtime2.jsx(LoaderCircle, {
-                  size: 13,
-                  className: "copis-spin"
-                }) : /* @__PURE__ */ jsx_runtime2.jsx(Search, {
+                /* @__PURE__ */ jsx_runtime2.jsx(Search, {
                   size: 13
                 }),
                 /* @__PURE__ */ jsx_runtime2.jsx("span", {
@@ -1738,24 +2861,12 @@ function CopisSearchModal(props) {
               style: { padding: "36px 16px", textAlign: "center", fontSize: "13px", color: "var(--dsw-alias-label-tertiary, #a1a1aa)" },
               children: "输入关键词后按 Enter 或点击搜索开始查找"
             }),
-            hasSearched && loading && allResults.length === 0 && /* @__PURE__ */ jsx_runtime2.jsxs("div", {
-              style: { padding: "36px 16px", textAlign: "center", fontSize: "13px", color: "var(--dsw-alias-label-tertiary, #a1a1aa)", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" },
-              children: [
-                /* @__PURE__ */ jsx_runtime2.jsx(LoaderCircle, {
-                  size: 14,
-                  className: "copis-spin"
-                }),
-                /* @__PURE__ */ jsx_runtime2.jsx("span", {
-                  children: "正在搜索..."
-                })
-              ]
-            }),
-            hasSearched && !loading && allResults.length === 0 && /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+            hasSearched && titleResults.length === 0 && /* @__PURE__ */ jsx_runtime2.jsxs("div", {
               style: { padding: "36px 16px", textAlign: "center", fontSize: "13px", color: "var(--dsw-alias-label-tertiary, #a1a1aa)" },
               children: [
                 '未找到与 "',
                 committedQuery,
-                '" 匹配的会话内容'
+                '" 匹配的会话标题'
               ]
             }),
             titleResults.length > 0 && /* @__PURE__ */ jsx_runtime2.jsxs("div", {
@@ -1775,12 +2886,9 @@ function CopisSearchModal(props) {
                   onClick: () => navigateToResult(item),
                   onMouseEnter: () => setSelectedIndex(idx),
                   children: [
-                    item.source === "creation" ? /* @__PURE__ */ jsx_runtime2.jsx("span", {
+                    /* @__PURE__ */ jsx_runtime2.jsx("span", {
                       className: "copis-search-badge-creation",
                       children: "创造"
-                    }) : /* @__PURE__ */ jsx_runtime2.jsx("span", {
-                      className: "copis-search-badge-agent",
-                      children: "Agent"
                     }),
                     /* @__PURE__ */ jsx_runtime2.jsx("span", {
                       style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "13px", fontWeight: 500 },
@@ -1791,52 +2899,6 @@ function CopisSearchModal(props) {
                     })
                   ]
                 }, `title-${item.id}-${idx}`))
-              ]
-            }),
-            contentResults.length > 0 && /* @__PURE__ */ jsx_runtime2.jsxs("div", {
-              style: { borderTop: "0.5px solid var(--dsw-alias-border-l3, rgba(255, 255, 255, 0.08))", marginTop: "4px", paddingTop: "4px" },
-              children: [
-                /* @__PURE__ */ jsx_runtime2.jsxs("div", {
-                  style: { padding: "6px 14px 2px", fontSize: "11px", fontWeight: 600, color: "var(--dsw-alias-label-tertiary, #a1a1aa)", textTransform: "uppercase" },
-                  children: [
-                    "消息内容匹配 (",
-                    contentResults.length,
-                    ")"
-                  ]
-                }),
-                contentResults.map((item, idx) => {
-                  const globalIdx = titleResults.length + idx;
-                  return /* @__PURE__ */ jsx_runtime2.jsxs("button", {
-                    type: "button",
-                    className: "copis-search-item-row",
-                    "data-selected": selectedIndex === globalIdx ? "true" : "false",
-                    onClick: () => navigateToResult(item),
-                    onMouseEnter: () => setSelectedIndex(globalIdx),
-                    style: { flexDirection: "column", alignItems: "flex-start", gap: "3px" },
-                    children: [
-                      /* @__PURE__ */ jsx_runtime2.jsxs("div", {
-                        style: { display: "flex", alignItems: "center", gap: "8px", width: "100%" },
-                        children: [
-                          /* @__PURE__ */ jsx_runtime2.jsx("span", {
-                            className: "copis-search-badge-agent",
-                            children: "Agent"
-                          }),
-                          /* @__PURE__ */ jsx_runtime2.jsx("span", {
-                            style: { fontSize: "12px", fontWeight: 500, opacity: 0.85, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-                            children: item.title
-                          })
-                        ]
-                      }),
-                      item.snippet && /* @__PURE__ */ jsx_runtime2.jsx("div", {
-                        style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary, #71717a)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%", paddingLeft: "4px" },
-                        children: /* @__PURE__ */ jsx_runtime2.jsx(HighlightSearchText, {
-                          text: item.snippet,
-                          query: committedQuery
-                        })
-                      })
-                    ]
-                  }, `content-${item.id}-${idx}`);
-                })
               ]
             })
           ]
@@ -1867,7 +2929,21 @@ function CopisShellOverlayManager(props) {
   import_react4.useEffect(() => {
     const handleOpenSearch = () => setSearchOpen(true);
     const handleMessage = (event) => {
-      if (event.data && typeof event.data === "object" && (event.data.type === "COPIS_OPEN_SEARCH_MODAL" || event.data.type === "COPIS_OPEN_SEARCH")) {
+      if (event.source && event.source !== window)
+        return;
+      const type = event.data?.type;
+      if (type === "COPIS_DSH_NEW_SESSION") {
+        const id = event.data.requestId;
+        if (typeof id !== "string" || !id || id.length > 128)
+          return;
+        const key = "copis.dsh.lastNewSessionRequest";
+        if (window.sessionStorage.getItem(key) !== id) {
+          setSearchOpen(false);
+          props.ctx.uiWorkspace.startSession();
+          window.sessionStorage.setItem(key, id);
+        }
+        window.copisBridge?.navigate?.("conversations", `dsh-session-accepted:${id}`);
+      } else if (type === "COPIS_OPEN_SEARCH_MODAL" || type === "COPIS_OPEN_SEARCH") {
         setSearchOpen(true);
       }
     };
@@ -1880,19 +2956,20 @@ function CopisShellOverlayManager(props) {
     window.addEventListener("COPIS_OPEN_SEARCH_MODAL", handleOpenSearch);
     window.addEventListener("message", handleMessage);
     window.addEventListener("keydown", handleKeyDown);
+    window.copisBridge?.navigate?.("conversations", "dsh-client-ready");
     return () => {
       window.removeEventListener("COPIS_OPEN_SEARCH_MODAL", handleOpenSearch);
       window.removeEventListener("message", handleMessage);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, []);
+  }, [props.ctx.uiWorkspace]);
   return searchOpen ? /* @__PURE__ */ jsx_runtime2.jsx(CopisSearchModal, {
     open: true,
     onClose: () => setSearchOpen(false),
     ctx: props.ctx
   }) : null;
 }
-var inject = ["slots", "layout", "sessions", "workspaces"];
+var inject = ["slots", "layout", "sessions", "workspaces", "documentPreviews", "remote.session", "sidebarRight", "uiWorkspace"];
 function apply(ctx) {
   cachedCordisContext = ctx;
   console.log("[Copis Creation Web] 客户端插件正在激活...", ctx);
@@ -1908,6 +2985,8 @@ function apply(ctx) {
   }, () => /* @__PURE__ */ jsx_runtime2.jsx(CopisShellOverlayManager, {
     ctx
   })));
+  registerMediaPreview(ctx, () => window.copisBridge);
+  registerSessionCompletion(ctx, () => window.copisBridge);
   console.log("[Copis Creation Web] 客户端插件插槽注入完成");
 }
 

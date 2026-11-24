@@ -2,7 +2,7 @@
  * AppearanceSettings - 外观设置页
  *
  * 主题模式切换（浅色/深色/跟随系统）以及
- * Agent 模式与创造模式的主题色自定义功能。
+ * 创造模式的主题色自定义功能。
  * 通过 Jotai atom 管理状态，持久化到 ~/.copis/settings.json 与 localStorage。
  */
 
@@ -22,16 +22,11 @@ import {
   themeModeAtom,
   systemIsDarkAtom,
   resolvedThemeAtom,
-  agentThemeColorAtom,
-  creationThemeColorAtom,
-  agentThemeColorLightAtom,
-  agentThemeColorDarkAtom,
   creationThemeColorLightAtom,
   creationThemeColorDarkAtom,
   updateThemeMode,
   updateThemeStyle,
   applyThemeToDOM,
-  updateAgentThemeColor,
   updateCreationThemeColor,
 } from '@/atoms/theme'
 import {
@@ -40,12 +35,8 @@ import {
 } from '@/atoms/markdown-font-size'
 import { previewModePreferenceAtom, type PreviewModePreference } from '@/atoms/preview-atoms'
 import {
-  DEFAULT_AGENT_THEME_COLOR,
-  DEFAULT_AGENT_THEME_COLOR_LIGHT,
-  DEFAULT_AGENT_THEME_COLOR_DARK,
   DEFAULT_CREATION_THEME_COLOR_LIGHT,
   DEFAULT_CREATION_THEME_COLOR_DARK,
-  AGENT_THEME_COLOR_PRESETS,
   CREATION_THEME_COLOR_PRESETS,
   type ThemeMode,
   type MarkdownFontSize,
@@ -281,8 +272,6 @@ export function AppearanceSettings(): React.ReactElement {
   const [previewModePref, setPreviewModePref] = useAtom(previewModePreferenceAtom)
 
   // 浅色与深色模式下独立的主题色状态
-  const [agentColorLight, setAgentColorLight] = useAtom(agentThemeColorLightAtom)
-  const [agentColorDark, setAgentColorDark] = useAtom(agentThemeColorDarkAtom)
   const [creationColorLight, setCreationColorLight] = useAtom(creationThemeColorLightAtom)
   const [creationColorDark, setCreationColorDark] = useAtom(creationThemeColorDarkAtom)
 
@@ -307,16 +296,6 @@ export function AppearanceSettings(): React.ReactElement {
 
   const isTargetDark = colorTargetMode === 'dark'
 
-  /** 处理当前目标模式下的 Agent 模式主题色变更 */
-  const handleAgentColorChange = React.useCallback((color?: string) => {
-    if (isTargetDark) {
-      setAgentColorDark(color)
-    } else {
-      setAgentColorLight(color)
-    }
-    updateAgentThemeColor(color, isTargetDark)
-  }, [isTargetDark, setAgentColorDark, setAgentColorLight])
-
   /** 处理当前目标模式下的创造模式主题色变更 */
   const handleCreationColorChange = React.useCallback((color?: string) => {
     if (isTargetDark) {
@@ -328,9 +307,6 @@ export function AppearanceSettings(): React.ReactElement {
   }, [isTargetDark, setCreationColorDark, setCreationColorLight])
 
   // 当前目标模式下的默认主题色
-  const defaultAgentColor = isTargetDark
-    ? DEFAULT_AGENT_THEME_COLOR_DARK
-    : DEFAULT_AGENT_THEME_COLOR_LIGHT
   const defaultCreationColor = isTargetDark
     ? DEFAULT_CREATION_THEME_COLOR_DARK
     : DEFAULT_CREATION_THEME_COLOR_LIGHT
@@ -378,7 +354,7 @@ export function AppearanceSettings(): React.ReactElement {
       {/* 主题色自定义设置 */}
       <SettingsSection
         title="主题色彩"
-        description="分别为浅色模式与深色模式自定义 Agent 模式与创造模式的主题强调色"
+        description="分别设置创造模式在浅色和深色外观下的主题强调色"
       >
         <SettingsCard>
           {/* 目标配色模式分段选择器 */}
@@ -388,16 +364,6 @@ export function AppearanceSettings(): React.ReactElement {
             value={colorTargetMode}
             onValueChange={(val) => setColorTargetMode(val as 'light' | 'dark')}
             options={COLOR_TARGET_OPTIONS}
-          />
-
-          {/* Agent 模式主题色 */}
-          <ThemeColorPickerBlock
-            title={`Agent 模式主题色（${isTargetDark ? '深色' : '浅色'}）`}
-            description={`用于 ${isTargetDark ? '深色' : '浅色'}模式下 Agent 对话的主色调、激活按钮与高亮边框`}
-            currentColor={isTargetDark ? agentColorDark : agentColorLight}
-            defaultColor={defaultAgentColor}
-            presets={AGENT_THEME_COLOR_PRESETS}
-            onChange={handleAgentColorChange}
           />
 
           {/* 创造模式主题色 */}

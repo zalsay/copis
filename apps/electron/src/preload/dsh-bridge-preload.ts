@@ -8,7 +8,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
-import { DSH_CORDIS_IPC_CHANNELS, AGENT_IPC_CHANNELS, type DshClientEvent } from '@copis/shared'
+import { DSH_CORDIS_IPC_CHANNELS, AGENT_IPC_CHANNELS, type DshClientEvent, type DshMediaPreviewResult } from '@copis/shared'
 import { SETTINGS_IPC_CHANNELS } from '../types'
 
 let currentThemeIsDark: boolean | null = null
@@ -183,6 +183,12 @@ async function initThemeSync(): Promise<void> {
 }
 
 const copisBridge = {
+  reportSessionCompleted: (completion: Omit<Extract<DshClientEvent, { type: 'COPIS_DSH_SESSION_COMPLETED' }>, 'type'>) => {
+    ipcRenderer.send(DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT, { ...completion, type: 'COPIS_DSH_SESSION_COMPLETED' })
+  },
+  reportSessionViewed: (sessionId: string) => {
+    ipcRenderer.send(DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT, { type: 'COPIS_DSH_SESSION_VIEWED', sessionId })
+  },
   navigate: (view: string, tab?: string) => {
     ipcRenderer.send(DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT, { type: 'COPIS_NAVIGATE', view, tab })
   },
@@ -222,6 +228,10 @@ const copisBridge = {
       })
     }
   },
+  prepareMediaPreview: (path: string): Promise<DshMediaPreviewResult> =>
+    ipcRenderer.invoke(DSH_CORDIS_IPC_CHANNELS.PREPARE_MEDIA_PREVIEW, path),
+  releaseMediaPreview: (url: string): Promise<boolean> =>
+    ipcRenderer.invoke(DSH_CORDIS_IPC_CHANNELS.RELEASE_MEDIA_PREVIEW, url),
   readFile: (filePath: string, cwd?: string) => {
     return ipcRenderer.invoke(DSH_CORDIS_IPC_CHANNELS.READ_FILE, filePath, cwd)
   },
@@ -922,19 +932,6 @@ function injectCopisThemeAccent(): void {
     body.copis-subview-active [class*="footArea"] {
       align-items: stretch !important;
     }
-
-    /* 彻底屏蔽 DSH 原生设置弹窗与遮罩层，统一由 Copis 全屏设置面板接管 */
-    [class*="VOzbGW_panel"],
-    [class*="VOzbGW_overlay"],
-    [class*="VOzbGW_mask"],
-    [class*="settingsArea"] [role="dialog"],
-    [class*="SettingsArea"] [role="dialog"],
-    [class*="SettingsPanel"],
-    [class*="settingsPanel"] {
-      display: none !important;
-      visibility: hidden !important;
-      pointer-events: none !important;
-    }
   `
   const target = document.head || document.documentElement
   if (target) {
@@ -1188,70 +1185,8 @@ function setupSessionClickInterceptor(): void {
   document.addEventListener('click', onSessionClick, true)
 }
 
-function isDshSettingsTarget(target: HTMLElement | null): boolean {
-  if (!target) return false
-  const btn = target.closest('button')
-  if (!btn) return false
-
-  // 1. 严格排除：Composer 内部、中间对话区、详情抽屉或消息流内部的任何按钮（如上下文用量圆环、模型选择、发送等），严禁误触发系统设置
-  if (
-    btn.closest(
-      '[class*="composer"], [class*="Composer"], [class*="uV2eYG"], [class*="_centerCol"], [class*="centerCol"], [class*="chatArea"], [class*="messageList"], [class*="sessionView"], [class*="_detailsCol"]',
-    )
-  ) {
-    return false
-  }
-
-  // 2. 限制作用域：系统设置按钮必须严格属于侧边栏容器（aside, SidebarRoot, footArea, settingsArea）
-  const inSidebar = Boolean(
-    btn.closest(
-      'aside, [class*="SidebarRoot"], [class*="sidebar"], [class*="_sidebarCol"], [class*="footArea"], [class*="FootArea"], [class*="settingsArea"], [class*="SettingsArea"], .copis-creation-sidebar',
-    ),
-  )
-  if (!inSidebar) {
-    return false
-  }
-
-  // 3. 在侧边栏内，精确匹配设置入口：
-  // 3.1 DSH settingsArea / triggerRow 容器内的设置按钮
-  if (btn.closest('[class*="settingsArea"], [class*="SettingsArea"]')) return true
-  if (btn.closest('[class*="triggerRow"], [class*="TriggerRow"]') && btn.getAttribute('aria-haspopup') === 'dialog') return true
-  if (btn.matches('button[class*="trigger"][aria-haspopup="dialog"], button[class*="Trigger"][aria-haspopup="dialog"]')) return true
-
-  // 3.2 侧边栏内 aria-label 或 title 包含设置/setting
-  const aria = (btn.getAttribute('aria-label') || btn.getAttribute('title') || '').toLowerCase()
-  if (aria.includes('设置') || aria.includes('setting')) return true
-
-  // 3.3 侧边栏内文本包含设置/setting
-  const text = (btn.textContent || '').trim().toLowerCase()
-  if (text.includes('设置') || text.includes('setting')) return true
-
-  return false
-}
-
-function setupSettingsClickInterceptor(): void {
-  if (typeof document === 'undefined') return
-
-  const onSettingsClick = (event: MouseEvent) => {
-    if (event.button !== 0) return
-    const target = event.target as HTMLElement | null
-    if (isDshSettingsTarget(target)) {
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      applySubviewActiveState(true)
-      copisBridge.openSettings()
-      window.postMessage({ type: 'COPIS_OPEN_SETTINGS' }, '*')
-      window.dispatchEvent(new CustomEvent('COPIS_OPEN_SETTINGS'))
-    }
-  }
-
-  document.addEventListener('click', onSettingsClick, true)
-}
-
 if (typeof document !== 'undefined') {
   setupSessionClickInterceptor()
-  setupSettingsClickInterceptor()
 }
 
 if (typeof window !== 'undefined' && window.matchMedia) {

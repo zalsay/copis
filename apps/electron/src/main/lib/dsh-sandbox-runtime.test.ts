@@ -9,7 +9,7 @@ const runtimeRoot = process.env.COPIS_DSH_TEST_RUNTIME_ROOT
 test.skipIf(!runtimeRoot)('Given 官方 DSH 运行时 When 检查包与权限处理 Then 包含同级幂等及空白理由修复且不存在自定义裁剪', () => {
   const root = join(runtimeRoot!, 'node_modules/@deepseek-ai')
   for (const name of ['dsh', 'dsh-tool-bash', 'dsh-sandbox']) {
-    expect(JSON.parse(readFileSync(join(root, name, 'package.json'), 'utf8')).version).toBe('0.2.2-alpha.2')
+    expect(JSON.parse(readFileSync(join(root, name, 'package.json'), 'utf8')).version).toBe('0.2.2-rc.2')
   }
   const bash = readFileSync(join(root, 'dsh-tool-bash/lib/index.js'), 'utf8')
   const sandbox = readFileSync(join(root, 'dsh-sandbox/lib/index.js'), 'utf8')

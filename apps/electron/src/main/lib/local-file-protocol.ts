@@ -11,11 +11,13 @@ import { existsSync, realpathSync, statSync } from 'node:fs'
 import { resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { net } from 'electron'
+import { createLocalMediaResponse } from './local-media-response'
 
 type RegisteredEntry = {
   root: string
   isDirectory: boolean
   createdAt: number
+  ownerId?: number
 }
 
 const registeredEntries = new Map<string, RegisteredEntry>()
@@ -49,7 +51,7 @@ function isInsideDirectory(target: string, root: string): boolean {
   return target === root || target.startsWith(root.endsWith(sep) ? root : root + sep)
 }
 
-function registerEntry(path: string, isDirectory: boolean): string {
+function registerEntry(path: string, isDirectory: boolean, ownerId?: number): string {
   pruneEntries()
   const root = realpathExisting(path)
   const st = statSync(root)
@@ -61,19 +63,39 @@ function registerEntry(path: string, isDirectory: boolean): string {
   }
 
   const token = randomUUID()
-  registeredEntries.set(token, { root, isDirectory, createdAt: Date.now() })
+  registeredEntries.set(token, { root, isDirectory, createdAt: Date.now(), ownerId })
   return `copis-file://${token}`
 }
 
-export function registerCopisFilePath(path: string): string {
-  return registerEntry(path, false)
+export function registerCopisFilePath(path: string, ownerId?: number): string {
+  return registerEntry(path, false, ownerId)
 }
 
 export function registerCopisDirectoryPath(path: string): string {
   return registerEntry(path, true)
 }
 
-export function handleCopisFileRequest(request: Request): Promise<Response> | Response {
+/** 只撤销同一 WebContents 发放的单文件租约，不影响其他页面的预览。 */
+export function revokeCopisFileUrl(value: string, ownerId: number): boolean {
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'copis-file:' || (url.pathname !== '' && url.pathname !== '/')) return false
+    if (registeredEntries.get(url.hostname)?.ownerId !== ownerId) return false
+    return registeredEntries.delete(url.hostname)
+  } catch { return false }
+}
+
+/** 视图销毁时兜底清理，避免依赖 renderer 能否发出最后一次 IPC。 */
+export function revokeCopisFilesForOwner(ownerId: number): number {
+  let count = 0
+  for (const [token, entry] of registeredEntries) {
+    if (entry.ownerId === ownerId) { registeredEntries.delete(token); count += 1 }
+  }
+  return count
+}
+
+export async function handleCopisFileRequest(request: Request): Promise<Response> {
+  pruneEntries()
   let url: URL
   try {
     url = new URL(request.url)
@@ -107,5 +129,12 @@ export function handleCopisFileRequest(request: Request): Promise<Response> | Re
     return new Response('Not Found', { status: 404 })
   }
 
-  return net.fetch(pathToFileURL(target).toString())
+  // 文件租约也必须重查路径，禁止注册后替换为越界符号链接。
+  if (!entry.isDirectory) {
+    try {
+      if (realpathSync(target) !== entry.root) return new Response('Forbidden', { status: 403 })
+    } catch { return new Response('Not Found', { status: 404 }) }
+  }
+  const media = await createLocalMediaResponse(request, target)
+  return media ?? net.fetch(pathToFileURL(target).toString())
 }

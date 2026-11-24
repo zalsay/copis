@@ -17,7 +17,7 @@ const browserWorkflowSource = readFileSync(browserWorkflowSourcePath, 'utf8')
 const webSyncSourcePath = resolve(import.meta.dir, '../ipc/web-sync.ipc.ts')
 const webSyncSource = readFileSync(webSyncSourcePath, 'utf8')
 
-const baselineSha256 = '562514c1bf48d936273f38ecd9d3d1f119b4d2c2df8f1235a2946ee9666ef082'
+const baselineSha256 = '201b5e637af42754299d5b25580bc39f35b7455bc7e5c676645f82fcbf0b257e'
 
 function inventoryFunction(text: string, fileName: string, functionName: string) {
   const file = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true)
@@ -113,8 +113,8 @@ const canonical = entries.map((entry) => `${entry.kind}|${entry.channel}`).join(
 const handleCount = entries.filter((entry) => entry.kind === 'handle').length
 const onCount = entries.filter((entry) => entry.kind === 'on').length
 
-test('迁移前注册契约保持 404 个 handle 和 5 个 on', () => {
-  expect(handleCount).toBe(404)
+test('当前注册契约保持 407 个 handle 和 5 个 on', () => {
+  expect(handleCount).toBe(407)
   expect(onCount).toBe(5)
   expect(new Set(entries.map((entry) => `${entry.kind}|${entry.channel}`)).size).toBe(entries.length)
   expect(createHash('sha256').update(canonical).digest('hex')).toBe(baselineSha256)

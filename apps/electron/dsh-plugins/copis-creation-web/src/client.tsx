@@ -2,26 +2,29 @@ import {
   BookOpen,
   Brain,
   CalendarClock,
+  ChevronDown,
+  ChevronUp,
+  LayoutGrid,
   Puzzle,
   Search,
+  Settings,
   Timer,
   TrendingUp,
   UsersRound,
   X,
-  Loader2,
   type LucideIcon,
 } from 'lucide-react'
 import {
   useCallback,
   useEffect,
   useLayoutEffect,
-  useMemo,
   useRef,
   useState,
   type ReactElement,
-  type RefObject,
 } from 'react'
-import { CreationReturnToAgentControl } from './CreationReturnToAgentControl'
+import { createPortal } from 'react-dom'
+import { registerMediaPreview, type MediaPreviewContext, type MediaPreviewBridge } from './MediaPreview'
+import { registerSessionCompletion, type CompletionContext, type CompletionBridge } from './session-completion'
 
 interface LayoutController {
   toggleSidebar(): void
@@ -60,7 +63,8 @@ interface SessionsService {
   }
 }
 
-interface CordisContext {
+interface CordisContext extends MediaPreviewContext {
+  uiWorkspace: { startSession(): void; openSession(id: string): void }
   slots: {
     inject(name: string, callback: () => unknown): void
     register(
@@ -116,25 +120,28 @@ export interface ReadFileResult {
 
 declare global {
   interface Window {
-    copisBridge?: {
+    copisBridge?: CompletionBridge & {
       navigate?: (view: string, tab?: string) => void
       openSearch?: () => void
       openSettings?: () => void
       hideMenuItem?: (menuId: string) => void
       getHiddenMenuItems?: () => string[]
-      switchMode?: (mode: string) => void
       listDirectory?: (dirPath?: string, cwd?: string) => Promise<DirectoryEntry[]>
       getActiveWorkspacePath?: (cwd?: string) => Promise<string>
       readFile?: (filePath: string, cwd?: string) => Promise<ReadFileResult>
+      prepareMediaPreview?: MediaPreviewBridge['prepareMediaPreview']
+      releaseMediaPreview?: MediaPreviewBridge['releaseMediaPreview']
       showItemInFolder?: (filePath: string, cwd?: string) => Promise<{ success: boolean; error?: string }>
-      getAgentSessions?: () => Promise<any[]>
-      searchAgentSessionMessages?: (query: string) => Promise<any[]>
-      openSession?: (sessionType: 'agent' | 'chat', sessionId: string, title?: string) => void
     }
   }
 }
 
 const CREATION_STYLES_ID = 'copis-creation-web-styles'
+
+// DSH 以普通 script 加载插件，使用 Jotai 的 CommonJS 入口以避免引入 import.meta。
+const { atom, useAtom } = require('jotai') as typeof import('jotai')
+const COLLAPSED_MENU_COUNT = 3
+const menuExpandedAtom = atom(false)
 
 const SIDEBAR_MENU_ITEMS: SidebarMenuItem[] = [
   { id: 'search', label: '搜索', icon: Search, action: 'search' },
@@ -182,14 +189,6 @@ const CREATION_UI_CSS = `
     display: none !important;
   }
 
-  .copis-return-agent-host {
-    display: flex;
-    flex: none;
-    justify-content: center;
-    margin: 0 0 8px;
-    padding: 0 2px;
-  }
-
   .copis-menu-section {
     box-sizing: border-box;
     display: grid;
@@ -199,6 +198,34 @@ const CREATION_UI_CSS = `
     margin: 0 0 8px;
     padding: 0 2px;
   }
+
+  .copis-menu-heading,
+  .copis-menu-item {
+    font-size: 14px;
+  }
+
+  .copis-menu-heading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 8px 3px;
+    color: var(--dsw-alias-label-secondary, #71717a);
+    font-weight: 600;
+  }
+
+  .copis-menu-section > [data-copis-menu-id],
+  .copis-menu-section > .copis-menu-toggle {
+    margin-inline-start: 16px;
+    width: calc(100% - 16px);
+  }
+
+  .copis-menu-section .copis-menu-toggle {
+    min-height: 26px;
+    color: var(--dsw-alias-label-secondary, #71717a);
+    font-size: 12px;
+  }
+
+  .copis-settings-entry { margin-top: 5px; }
 
   .copis-menu-item {
     appearance: none;
@@ -213,7 +240,6 @@ const CREATION_UI_CSS = `
     border-radius: 7px;
     background: transparent;
     color: var(--dsw-alias-label-primary, inherit);
-    font-size: 14px;
     font-weight: 400;
     line-height: 1.25;
     text-align: left;
@@ -234,6 +260,7 @@ const CREATION_UI_CSS = `
     font-weight: 500 !important;
   }
 
+  .copis-menu-heading svg,
   .copis-menu-item svg {
     flex: none;
     width: 15px;
@@ -793,23 +820,12 @@ const CREATION_UI_CSS = `
     align-items: stretch !important;
   }
 
-  .copis-return-agent-host {
-    display: flex;
-    justify-content: center;
-    width: 100%;
-    min-width: 0;
-  }
-
-  .copis-return-agent-button.copis-menu-item {
-    width: 100%;
-  }
-
   /* 隐藏顶部右上角原生的 session-log-download 及任何 Agent 模式切换按钮 */
   button[class*="sessionLogButton"],
-  button[title*="返回 Agent 模式"]:not(.copis-return-agent-button),
-  button[title*="返回Agent 模式"]:not(.copis-return-agent-button),
-  button[aria-label*="返回 Agent 模式"]:not(.copis-return-agent-button),
-  button[aria-label*="返回Agent 模式"]:not(.copis-return-agent-button),
+  button[title*="返回 Agent 模式"],
+  button[title*="返回Agent 模式"],
+  button[aria-label*="返回 Agent 模式"],
+  button[aria-label*="返回Agent 模式"],
   [data-slot-id="session-log-download"] {
     display: none !important;
   }
@@ -948,16 +964,6 @@ const CREATION_UI_CSS = `
     flex-shrink: 0;
   }
 
-  .copis-search-badge-agent {
-    font-size: 10px;
-    padding: 1px 6px;
-    border-radius: 4px;
-    background: rgba(240, 154, 67, 0.15);
-    color: #f09a43;
-    font-weight: 500;
-    flex-shrink: 0;
-  }
-
   .copis-search-footer {
     display: flex;
     align-items: center;
@@ -969,19 +975,6 @@ const CREATION_UI_CSS = `
     background: var(--dsw-alias-bg-base, inherit);
     flex-shrink: 0;
   }
-
-  /* 彻底屏蔽 DSH 原生设置弹窗与遮罩层，统一由 Copis 全屏设置面板接管 */
-  [class*="VOzbGW_panel"],
-  [class*="VOzbGW_overlay"],
-  [class*="VOzbGW_mask"],
-  [class*="settingsArea"] [role="dialog"],
-  [class*="SettingsArea"] [role="dialog"],
-  [class*="SettingsPanel"],
-  [class*="settingsPanel"] {
-    display: none !important;
-    visibility: hidden !important;
-    pointer-events: none !important;
-  }
 `
 
 function installCreationStyles(): void {
@@ -992,47 +985,6 @@ function installCreationStyles(): void {
   style.id = CREATION_STYLES_ID
   style.textContent = CREATION_UI_CSS
   document.head.appendChild(style)
-}
-
-export function isSettingsTarget(target: HTMLElement | null): boolean {
-  if (!target) return false
-  const btn = target.closest('button')
-  if (!btn) return false
-
-  // 1. 严格排除：Composer 内部、中间对话区、详情抽屉或消息流内部的任何按钮（如上下文用量圆环、模型选择、发送等），严禁误触发系统设置
-  if (
-    btn.closest(
-      '[class*="composer"], [class*="Composer"], [class*="uV2eYG"], [class*="_centerCol"], [class*="centerCol"], [class*="chatArea"], [class*="messageList"], [class*="sessionView"], [class*="_detailsCol"]',
-    )
-  ) {
-    return false
-  }
-
-  // 2. 限制作用域：系统设置按钮必须严格属于侧边栏容器（aside, SidebarRoot, footArea, settingsArea）
-  const inSidebar = Boolean(
-    btn.closest(
-      'aside, [class*="SidebarRoot"], [class*="sidebar"], [class*="_sidebarCol"], [class*="footArea"], [class*="FootArea"], [class*="settingsArea"], [class*="SettingsArea"], .copis-creation-sidebar',
-    ),
-  )
-  if (!inSidebar) {
-    return false
-  }
-
-  // 3. 在侧边栏内，精确匹配设置入口：
-  // 3.1 DSH settingsArea / triggerRow 容器内的设置按钮
-  if (btn.closest('[class*="settingsArea"], [class*="SettingsArea"]')) return true
-  if (btn.closest('[class*="triggerRow"], [class*="TriggerRow"]') && btn.getAttribute('aria-haspopup') === 'dialog') return true
-  if (btn.matches('button[class*="trigger"][aria-haspopup="dialog"], button[class*="Trigger"][aria-haspopup="dialog"]')) return true
-
-  // 3.2 侧边栏内 aria-label 或 title 包含设置/setting
-  const aria = (btn.getAttribute('aria-label') || btn.getAttribute('title') || '').toLowerCase()
-  if (aria.includes('设置') || aria.includes('setting')) return true
-
-  // 3.3 侧边栏内文本包含设置/setting
-  const text = (btn.textContent || '').trim().toLowerCase()
-  if (text.includes('设置') || text.includes('setting')) return true
-
-  return false
 }
 
 function sendNavigation(view: CreationView, tab?: string): void {
@@ -1132,12 +1084,12 @@ function getInitialHiddenMenuIds(): string[] {
   }
 }
 
-function attachSidebarMenu(element: HTMLElement): void {
+function attachSidebarMenu(element: HTMLElement): HTMLElement | null {
   const sidebar = (element.closest('[class*="_root"]') ??
     element.closest('[class*="SidebarRoot"]') ??
     element.closest('[class*="_sidebarCol"], [class*="sidebarCol"]') ??
     element.closest('aside')) as HTMLElement | null
-  if (!sidebar) return
+  if (!sidebar) return null
 
   sidebar.classList.add('copis-creation-sidebar')
 
@@ -1151,9 +1103,12 @@ function attachSidebarMenu(element: HTMLElement): void {
     sidebar.querySelector('[class*="_regionArea"], [class*="regionArea"]') ??
     sidebar.querySelector('button[class*="_newSession"], button[class*="newSession"]')
 
-  if (target && element.parentElement !== sidebar) {
-    sidebar.insertBefore(element, target)
-  }
+  if (!target?.parentElement) return null
+  // RC2 的工作区在滚动容器内；Portal 不挪动 Cordis slot 持有的 React 节点。
+  const host = document.createElement('div')
+  host.style.display = 'contents'
+  target.before(host)
+  return host
 }
 
 let cachedCordisContext: CordisContext | null = null
@@ -1165,8 +1120,10 @@ export function CreationSidebarNavigation(props: {
   ctx?: CordisContext
 }): ReactElement {
   const [activeView, setActiveView] = useState<CreationView>('conversations')
+  const [expanded, setExpanded] = useAtom(menuExpandedAtom)
   const [hiddenMenuIds, setHiddenMenuIds] = useState<string[]>(getInitialHiddenMenuIds)
-  const rootRef = useRef<HTMLDivElement>(null)
+  const rootRef = useRef<HTMLSpanElement>(null)
+  const [menuHost, setMenuHost] = useState<HTMLElement | null>(null)
   const isSubviewActive = activeView !== 'conversations'
   const effectiveCtx = props.ctx ?? cachedCordisContext
 
@@ -1177,8 +1134,13 @@ export function CreationSidebarNavigation(props: {
     (!props.collapsed && (props.width === undefined || props.width >= 200))
 
   useLayoutEffect(() => {
+    const host = rootRef.current && attachSidebarMenu(rootRef.current)
+    setMenuHost(host)
+    return () => host?.remove()
+  }, [props.collapsed, props.wide])
+
+  useLayoutEffect(() => {
     if (rootRef.current) {
-      attachSidebarMenu(rootRef.current)
       const sidebar = rootRef.current.closest(
         '[class*="_root"], [class*="SidebarRoot"], [class*="_sidebarCol"], [class*="sidebarCol"], aside',
       ) as HTMLElement | null
@@ -1351,22 +1313,6 @@ export function CreationSidebarNavigation(props: {
     return () => window.removeEventListener('COPIS_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED', handleHiddenItemsChange)
   }, [])
 
-  useEffect(() => {
-    const openCopisSettings = (event: MouseEvent) => {
-      const target = event.target as HTMLElement | null
-      if (!isSettingsTarget(target)) return
-
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      setActiveView('settings')
-      sendNavigation('settings')
-    }
-
-    document.addEventListener('click', openCopisSettings, true)
-    return () => document.removeEventListener('click', openCopisSettings, true)
-  }, [])
-
   const selectItem = (item: SidebarMenuItem) => {
     if (item.action === 'search') {
       sendSearchRequest()
@@ -1387,97 +1333,51 @@ export function CreationSidebarNavigation(props: {
   }
 
   const visibleMenuItems = SIDEBAR_MENU_ITEMS.filter((item) => !hiddenMenuIds.includes(item.id))
-  const returnControl = (
-    <CreationReturnToAgentControl
-      wide={wide}
-      menuRef={rootRef}
-      onReturn={() => window.copisBridge?.switchMode?.('agent')}
-    />
-  )
+  const items = expanded ? visibleMenuItems : visibleMenuItems.slice(0, COLLAPSED_MENU_COUNT)
+  const itemClass = wide ? 'copis-menu-item' : 'copis-rail-menu-item'
+  const ToggleIcon = expanded ? ChevronUp : ChevronDown
+  const toggleLabel = expanded ? '收起' : '展开显示'
 
-  if (!wide) {
-    return (
-      <>
-        <div ref={rootRef} className="copis-rail-menu-section" data-copis-placement="before-workspaces">
-          {visibleMenuItems.map((item) => {
-            const Icon = item.icon
-            return (
-              <button
-                key={item.id}
-                type="button"
-                className="copis-rail-menu-item"
-                data-copis-menu-id={item.id}
-                data-active={item.view === activeView ? 'true' : 'false'}
-                aria-label={item.label}
-                title={item.label}
-                onClick={() => selectItem(item)}
-              >
-                <Icon size={18} strokeWidth={1.8} />
-              </button>
-            )
-          })}
+  const menu = (
+    <div className={wide ? 'copis-menu-section' : 'copis-rail-menu-section'} data-copis-placement="before-workspaces" role="group" aria-label="Copis功能">
+      {wide && (
+        <div className="copis-menu-heading">
+          <LayoutGrid size={16} strokeWidth={1.8} aria-hidden="true" />
+          <span>Copis功能</span>
         </div>
-        {/* 先挂载菜单 ref，再将返回入口放到侧栏底部“更多”的上方。 */}
-        {returnControl}
-      </>
-    )
-  }
-
-  return (
-    <>
-      <div ref={rootRef} className="copis-menu-section" data-copis-placement="before-workspaces">
-        {visibleMenuItems.map((item) => {
-          const Icon = item.icon
-          return (
-            <button
-              key={item.id}
-              type="button"
-              className="copis-menu-item"
-              data-copis-menu-id={item.id}
-              data-active={item.view === activeView ? 'true' : 'false'}
-              onClick={() => selectItem(item)}
-            >
-              <Icon size={16} strokeWidth={1.8} />
-              <span>{item.label}</span>
-              {item.badge && (
-                <span
-                  className={`copis-menu-badge ${
-                    item.badge === 'BETA' ? 'copis-menu-badge-beta' : 'copis-menu-badge-flexible'
-                  }`}
-                >
-                  {item.badge}
-                </span>
-              )}
-              <button
-                type="button"
-                className="copis-dsh-menu-hide-btn"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  e.preventDefault()
-                  handleHideMenuItem(item.id)
-                }}
-                aria-label={`隐藏${item.label}`}
-                title="隐藏此菜单"
-              >
-                隐藏
-              </button>
-            </button>
-          )
-        })}
-      </div>
-      {/* 先挂载菜单 ref，再将返回入口放到侧栏底部“更多”的上方。 */}
-      {returnControl}
-    </>
+      )}
+      {items.map((item) => {
+        const Icon = item.icon
+        return (
+          <button key={item.id} type="button" className={itemClass} data-copis-menu-id={item.id}
+            data-active={item.view === activeView ? 'true' : 'false'} aria-label={item.label} title={wide ? undefined : item.label}
+            onClick={() => selectItem(item)}>
+            <Icon size={wide ? 16 : 18} strokeWidth={1.8} />
+            {wide && <span>{item.label}</span>}
+            {wide && item.badge && <span className={`copis-menu-badge ${item.badge === 'BETA' ? 'copis-menu-badge-beta' : 'copis-menu-badge-flexible'}`}>{item.badge}</span>}
+            {wide && <button type="button" className="copis-dsh-menu-hide-btn" aria-label={`隐藏${item.label}`} title="隐藏此菜单"
+              onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleHideMenuItem(item.id) }}>隐藏</button>}
+          </button>
+        )
+      })}
+      {visibleMenuItems.length > COLLAPSED_MENU_COUNT && (
+        <button type="button" className={`${itemClass} copis-menu-toggle`} aria-expanded={expanded} aria-label={toggleLabel}
+          title={wide ? undefined : toggleLabel} onClick={() => setExpanded(!expanded)}>
+          <ToggleIcon size={14} />{wide && <span>{toggleLabel}</span>}
+        </button>
+      )}
+      <button type="button" className={`${itemClass} copis-settings-entry`} aria-label="Copis 设置" title={wide ? undefined : 'Copis 设置'}
+        onClick={() => sendNavigation('settings')}>
+        <Settings size={wide ? 16 : 18} strokeWidth={1.8} />{wide && <span>Copis 设置</span>}
+      </button>
+    </div>
   )
+  return <><span ref={rootRef} hidden />{menuHost ? createPortal(menu, menuHost) : menu}</>
 }
 
 interface CopisSearchItem {
   id: string
   title: string
-  source: 'creation' | 'agent'
-  snippet?: string
-  matchStart?: number
-  matchLength?: number
   updatedAt?: number
 }
 
@@ -1524,14 +1424,11 @@ export function CopisSearchModal(props: {
 }): ReactElement | null {
   const [query, setQuery] = useState('')
   const [committedQuery, setCommittedQuery] = useState('')
-  const [loading, setLoading] = useState(false)
   const [hasSearched, setHasSearched] = useState(false)
   const [titleResults, setTitleResults] = useState<CopisSearchItem[]>([])
-  const [contentResults, setContentResults] = useState<CopisSearchItem[]>([])
   const [selectedIndex, setSelectedIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const isComposingRef = useRef(false)
-  const searchTokenRef = useRef(0)
 
   // 聚焦输入框
   useEffect(() => {
@@ -1543,33 +1440,29 @@ export function CopisSearchModal(props: {
       setQuery('')
       setCommittedQuery('')
       setTitleResults([])
-      setContentResults([])
       setHasSearched(false)
       setSelectedIndex(0)
     }
   }, [props.open])
 
   // 执行搜索
-  const runSearch = useCallback(async () => {
+  const runSearch = useCallback(() => {
     const q = query.trim()
     if (!q) {
       setTitleResults([])
-      setContentResults([])
       setHasSearched(false)
       setCommittedQuery('')
       return
     }
 
-    const token = ++searchTokenRef.current
     setCommittedQuery(q)
     setHasSearched(true)
-    setLoading(true)
     setSelectedIndex(0)
 
     const qLower = q.toLowerCase()
     const titles: CopisSearchItem[] = []
 
-    // 1. 检索当前创造模式本地会话列表
+    // 仅检索可在 DSH 中打开的会话标题。
     try {
       const listSnapshot = props.ctx.sessions?.list?.getSnapshot()
       if (listSnapshot?.byId) {
@@ -1579,7 +1472,6 @@ export function CopisSearchModal(props: {
             titles.push({
               id,
               title: t,
-              source: 'creation',
               updatedAt: s?.updatedAt || s?.createdAt || 0,
             })
           }
@@ -1589,88 +1481,14 @@ export function CopisSearchModal(props: {
       console.warn('[CopisSearchModal] 读取 DSH 会话失败:', err)
     }
 
-    // 2. 检索 Agent 模式历史会话标题
-    try {
-      if (window.copisBridge?.getAgentSessions) {
-        const agentSessions = await window.copisBridge.getAgentSessions()
-        if (token === searchTokenRef.current && Array.isArray(agentSessions)) {
-          for (const s of agentSessions) {
-            if (s?.title && s.title.toLowerCase().includes(qLower)) {
-              titles.push({
-                id: s.id,
-                title: s.title,
-                source: 'agent',
-                updatedAt: s.updatedAt || 0,
-              })
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('[CopisSearchModal] 读取 Agent 会话失败:', err)
-    }
-
-    if (token !== searchTokenRef.current) return
     titles.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
     setTitleResults(titles)
-
-    // 3. 检索消息全文
-    try {
-      if (window.copisBridge?.searchAgentSessionMessages) {
-        const messageResults = await window.copisBridge.searchAgentSessionMessages(q)
-        if (token === searchTokenRef.current && Array.isArray(messageResults)) {
-          const titleIds = new Set(titles.map((t) => t.id))
-          const contents: CopisSearchItem[] = messageResults
-            .filter((r) => !titleIds.has(r.sessionId))
-            .map((r) => ({
-              id: r.sessionId,
-              title: r.sessionTitle,
-              source: 'agent',
-              snippet: r.snippet,
-              matchStart: r.matchStart,
-              matchLength: r.matchLength,
-            }))
-          setContentResults(contents)
-        }
-      }
-    } catch (err) {
-      console.warn('[CopisSearchModal] 搜索消息全文失败:', err)
-    } finally {
-      if (token === searchTokenRef.current) {
-        setLoading(false)
-      }
-    }
   }, [query, props.ctx.sessions])
-
-  const allResults = useMemo(
-    () => [...titleResults, ...contentResults],
-    [titleResults, contentResults],
-  )
 
   const navigateToResult = useCallback((item: CopisSearchItem) => {
     props.onClose()
-    if (item.source === 'creation') {
-      try {
-        if (props.ctx.sessions?.open) {
-          props.ctx.sessions.open(item.id)
-        } else if (props.ctx.sessions?.select) {
-          props.ctx.sessions.select(item.id)
-        } else {
-          const el = document.querySelector(`[data-session-id="${item.id}"]`) as HTMLElement | null
-          el?.click()
-        }
-      } catch {
-        const el = document.querySelector(`[data-session-id="${item.id}"]`) as HTMLElement | null
-        el?.click()
-      }
-    } else {
-      if (window.copisBridge?.openSession) {
-        window.copisBridge.openSession('agent', item.id, item.title)
-      } else if (window.copisBridge?.switchMode) {
-        window.copisBridge.switchMode('agent')
-      }
-    }
-  }, [props.ctx.sessions, props.onClose])
+    props.ctx.uiWorkspace.openSession(item.id)
+  }, [props.ctx.uiWorkspace, props.onClose])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -1678,20 +1496,20 @@ export function CopisSearchModal(props: {
       props.onClose()
     } else if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setSelectedIndex((prev) => (allResults.length > 0 ? (prev + 1) % allResults.length : 0))
+      setSelectedIndex((prev) => (titleResults.length > 0 ? (prev + 1) % titleResults.length : 0))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setSelectedIndex((prev) => (allResults.length > 0 ? (prev - 1 + allResults.length) % allResults.length : 0))
+      setSelectedIndex((prev) => (titleResults.length > 0 ? (prev - 1 + titleResults.length) % titleResults.length : 0))
     } else if (e.key === 'Enter') {
       e.preventDefault()
       if (isComposingRef.current) return
       if (query.trim() !== committedQuery || !hasSearched) {
-        void runSearch()
-      } else if (allResults[selectedIndex]) {
-        navigateToResult(allResults[selectedIndex])
+        runSearch()
+      } else if (titleResults[selectedIndex]) {
+        navigateToResult(titleResults[selectedIndex])
       }
     }
-  }, [allResults, committedQuery, hasSearched, navigateToResult, props, query, runSearch, selectedIndex])
+  }, [titleResults, committedQuery, hasSearched, navigateToResult, props, query, runSearch, selectedIndex])
 
   if (!props.open) return null
 
@@ -1731,7 +1549,6 @@ export function CopisSearchModal(props: {
                 setQuery('')
                 setCommittedQuery('')
                 setTitleResults([])
-                setContentResults([])
                 setHasSearched(false)
                 setSelectedIndex(0)
                 inputRef.current?.focus()
@@ -1753,10 +1570,10 @@ export function CopisSearchModal(props: {
           <button
             type="button"
             className="copis-search-submit-btn"
-            disabled={!query.trim() || loading}
-            onClick={() => void runSearch()}
+            disabled={!query.trim()}
+            onClick={() => runSearch()}
           >
-            {loading ? <Loader2 size={13} className="copis-spin" /> : <Search size={13} />}
+            <Search size={13} />
             <span>搜索</span>
           </button>
         </div>
@@ -1769,16 +1586,9 @@ export function CopisSearchModal(props: {
             </div>
           )}
 
-          {hasSearched && loading && allResults.length === 0 && (
-            <div style={{ padding: '36px 16px', textAlign: 'center', fontSize: '13px', color: 'var(--dsw-alias-label-tertiary, #a1a1aa)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-              <Loader2 size={14} className="copis-spin" />
-              <span>正在搜索...</span>
-            </div>
-          )}
-
-          {hasSearched && !loading && allResults.length === 0 && (
+          {hasSearched && titleResults.length === 0 && (
             <div style={{ padding: '36px 16px', textAlign: 'center', fontSize: '13px', color: 'var(--dsw-alias-label-tertiary, #a1a1aa)' }}>
-              未找到与 "{committedQuery}" 匹配的会话内容
+              未找到与 "{committedQuery}" 匹配的会话标题
             </div>
           )}
 
@@ -1796,11 +1606,7 @@ export function CopisSearchModal(props: {
                   onClick={() => navigateToResult(item)}
                   onMouseEnter={() => setSelectedIndex(idx)}
                 >
-                  {item.source === 'creation' ? (
-                    <span className="copis-search-badge-creation">创造</span>
-                  ) : (
-                    <span className="copis-search-badge-agent">Agent</span>
-                  )}
+                  <span className="copis-search-badge-creation">创造</span>
                   <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '13px', fontWeight: 500 }}>
                     <HighlightSearchText text={item.title} query={committedQuery} />
                   </span>
@@ -1809,39 +1615,6 @@ export function CopisSearchModal(props: {
             </div>
           )}
 
-          {contentResults.length > 0 && (
-            <div style={{ borderTop: '0.5px solid var(--dsw-alias-border-l3, rgba(255, 255, 255, 0.08))', marginTop: '4px', paddingTop: '4px' }}>
-              <div style={{ padding: '6px 14px 2px', fontSize: '11px', fontWeight: 600, color: 'var(--dsw-alias-label-tertiary, #a1a1aa)', textTransform: 'uppercase' }}>
-                消息内容匹配 ({contentResults.length})
-              </div>
-              {contentResults.map((item, idx) => {
-                const globalIdx = titleResults.length + idx
-                return (
-                  <button
-                    key={`content-${item.id}-${idx}`}
-                    type="button"
-                    className="copis-search-item-row"
-                    data-selected={selectedIndex === globalIdx ? 'true' : 'false'}
-                    onClick={() => navigateToResult(item)}
-                    onMouseEnter={() => setSelectedIndex(globalIdx)}
-                    style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '3px' }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%' }}>
-                      <span className="copis-search-badge-agent">Agent</span>
-                      <span style={{ fontSize: '12px', fontWeight: 500, opacity: 0.85, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {item.title}
-                      </span>
-                    </div>
-                    {item.snippet && (
-                      <div style={{ fontSize: '12px', color: 'var(--dsw-alias-label-secondary, #71717a)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: '100%', paddingLeft: '4px' }}>
-                        <HighlightSearchText text={item.snippet} query={committedQuery} />
-                      </div>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-          )}
         </div>
 
         {/* 底部快捷键提示 */}
@@ -1863,11 +1636,20 @@ export function CopisShellOverlayManager(props: { ctx: CordisContext }): ReactEl
   useEffect(() => {
     const handleOpenSearch = () => setSearchOpen(true)
     const handleMessage = (event: MessageEvent) => {
-      if (
-        event.data &&
-        typeof event.data === 'object' &&
-        (event.data.type === 'COPIS_OPEN_SEARCH_MODAL' || event.data.type === 'COPIS_OPEN_SEARCH')
-      ) {
+      if (event.source && event.source !== window) return
+      const type = event.data?.type
+      if (type === 'COPIS_DSH_NEW_SESSION') {
+        const id = event.data.requestId
+        if (typeof id !== 'string' || !id || id.length > 128) return
+        // 宿主串行派发；同一原生网页重载后也只需记住最后一条已接收的命令。
+        const key = 'copis.dsh.lastNewSessionRequest'
+        if (window.sessionStorage.getItem(key) !== id) {
+          setSearchOpen(false)
+          props.ctx.uiWorkspace.startSession()
+          window.sessionStorage.setItem(key, id)
+        }
+        window.copisBridge?.navigate?.('conversations', `dsh-session-accepted:${id}`)
+      } else if (type === 'COPIS_OPEN_SEARCH_MODAL' || type === 'COPIS_OPEN_SEARCH') {
         setSearchOpen(true)
       }
     }
@@ -1881,20 +1663,21 @@ export function CopisShellOverlayManager(props: { ctx: CordisContext }): ReactEl
     window.addEventListener('COPIS_OPEN_SEARCH_MODAL', handleOpenSearch)
     window.addEventListener('message', handleMessage)
     window.addEventListener('keydown', handleKeyDown)
+    window.copisBridge?.navigate?.('conversations', 'dsh-client-ready')
 
     return () => {
       window.removeEventListener('COPIS_OPEN_SEARCH_MODAL', handleOpenSearch)
       window.removeEventListener('message', handleMessage)
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [])
+  }, [props.ctx.uiWorkspace])
 
   return searchOpen ? (
     <CopisSearchModal open onClose={() => setSearchOpen(false)} ctx={props.ctx} />
   ) : null
 }
 
-export const inject = ['slots', 'layout', 'sessions', 'workspaces']
+export const inject = ['slots', 'layout', 'sessions', 'workspaces', 'documentPreviews', 'remote.session', 'sidebarRight', 'uiWorkspace']
 
 export function apply(ctx: CordisContext): void {
   cachedCordisContext = ctx
@@ -1920,6 +1703,9 @@ export function apply(ctx: CordisContext): void {
       () => <CopisShellOverlayManager ctx={ctx} />,
     ),
   )
+
+  registerMediaPreview(ctx, () => window.copisBridge)
+  registerSessionCompletion(ctx as unknown as CompletionContext, () => window.copisBridge)
 
   console.log('[Copis Creation Web] 客户端插件插槽注入完成')
 }

@@ -2,8 +2,6 @@ import { afterEach, beforeEach, expect, mock, test } from 'bun:test'
 import { parseHTML } from 'linkedom'
 import * as React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { CreationSidebarNavigation, CopisShellOverlayManager, apply } from './client'
 
 const act = (React as typeof React & { act: typeof import('react-dom/test-utils').act }).act
@@ -33,54 +31,21 @@ async function renderSidebar(wide: boolean) {
   })
 }
 
-test('Given 新版 DSH 侧栏 When Copis 导航挂载 Then 底部更多上方常驻返回 Agent 入口且仅通过既有桥发送一次切换', async () => {
-  await renderSidebar(true)
-  const button = sidebar.querySelector<HTMLButtonElement>('.copis-return-agent-button')
-  expect(button).not.toBeNull()
-  expect(sidebar.querySelector('[class*="_settingsArea"]')?.previousElementSibling?.className).toBe('copis-return-agent-host')
-  expect(sidebar.querySelector('.copis-return-agent-host')?.parentElement?.className).toBe('hHd-Xa_footArea')
-  expect(button!.textContent).toContain('返回 Agent 模式')
-  await act(async () => { button!.dispatchEvent(new window.Event('click', { bubbles: true })) })
-  expect(switchMode).toHaveBeenCalledTimes(1)
-  expect(switchMode).toHaveBeenCalledWith('agent')
-})
-
-test('Given 侧栏展开或折叠并卸载 When 导航更新 Then 入口保持可访问且没有重复或残留节点', async () => {
-  await renderSidebar(true)
-  await renderSidebar(false)
-  expect(sidebar.querySelectorAll('.copis-return-agent-host')).toHaveLength(1)
-  expect(sidebar.querySelector('.copis-return-agent-button')?.getAttribute('aria-label')).toBe('返回 Agent 模式')
-  expect(sidebar.querySelector('.copis-return-agent-button span')).toBeNull()
-  await act(async () => { root!.unmount() })
-  root = null
-  expect(sidebar.querySelector('.copis-return-agent-host')).toBeNull()
-})
-
-test('Given 保留旧版右上角按钮隐藏规则 When 检查插件和 preload Then 不误隐藏底部返回入口', () => {
-  for (const file of [join(import.meta.dir, 'client.tsx'), join(import.meta.dir, '../../../src/preload/dsh-bridge-preload.ts')]) {
-    const source = readFileSync(file, 'utf8')
-    expect(source).toContain('button[title*="返回 Agent 模式"]:not(.copis-return-agent-button)')
-    expect(source).toContain('button[aria-label*="返回 Agent 模式"]:not(.copis-return-agent-button)')
+test('Given DSH 侧栏 When 展开或折叠 Then 保留官方更多且不再挂载返回 Agent 入口', async () => {
+  for (const wide of [true, false]) {
+    await renderSidebar(wide)
+    expect(sidebar.querySelector('[class*="settingsArea"]')?.textContent).toContain('更多')
+    expect(sidebar.querySelector('.copis-return-agent-host, .copis-return-agent-button')).toBeNull()
+    expect(sidebar.textContent).not.toContain('返回 Agent 模式')
   }
+  expect(switchMode).not.toHaveBeenCalled()
 })
-
-
-test('Given 旧版语义化 aside 侧栏 When 返回入口挂载 Then 继续兼容既有宿主', async () => {
-  await act(async () => { root!.unmount() })
-  document.body.innerHTML = '<aside id="legacy-sidebar" class="SidebarRoot_root"></aside>'
-  sidebar = document.getElementById('legacy-sidebar')!
-  root = createRoot(sidebar)
-  await renderSidebar(true)
-  expect(sidebar.querySelector('[class*="_settingsArea"]')?.previousElementSibling?.className).toBe('copis-return-agent-host')
-  expect(sidebar.querySelector('.copis-return-agent-host')?.parentElement?.className).toBe('hHd-Xa_footArea')
-  expect(sidebar.querySelector('.copis-return-agent-button')).not.toBeNull()
-})
-
 
 test('Given 官方详情侧栏 When Copis 插件注册 Then 不再注入重复的自定义右上角操作项', () => {
   const slots: string[] = []
-  apply({ slots: { inject: (name: string, register: () => void) => { slots.push(name); register() }, register: () => {} } } as any)
-  expect(slots).toEqual(['sidebar.footer.action', 'shell.overlay'])
+  const emptySource = { getSnapshot: () => ({}), subscribe: () => () => {} }
+  apply({ effect: (fn: () => unknown) => fn(), sessions: { list: emptySource }, sidebarRight: { mounted: { ...emptySource, getSnapshot: () => undefined } }, documentPreviews: { register: () => () => {} }, slots: { inject: (name: string, register: () => void) => { slots.push(name); register() }, register: () => {} } } as any)
+  expect(slots).toEqual(['sidebar.footer.action', 'shell.overlay', 'sidebar.right.tab.document'])
 })
 
 test('Given 创造模式根层 When 自定义侧栏移除 Then 不渲染抽屉且搜索仍可打开关闭', async () => {
@@ -91,4 +56,60 @@ test('Given 创造模式根层 When 自定义侧栏移除 Then 不渲染抽屉�
   expect(document.querySelector('.copis-search-modal-card')).not.toBeNull()
   await act(async () => { document.querySelector('.copis-search-modal-backdrop')!.dispatchEvent(new window.Event('click', { bubbles: true })) })
   expect(document.querySelector('.copis-search-modal-card')).toBeNull()
+})
+
+test('Given 会话页启动或重载 When 就绪后重投未确认命令 Then 每条命令只新建一次且重复回执不丢失', async () => {
+  const startSession = mock(() => {})
+  const navigate = mock((_view: string, _tab?: string) => {})
+  Object.assign(window.copisBridge!, { navigate })
+  const values = new Map<string, string>()
+  Object.assign(window, { sessionStorage: { getItem: (k: string) => values.get(k), setItem: (k: string, v: string) => values.set(k, v) } })
+  const mount = (key: string) => act(async () => { root!.render(<CopisShellOverlayManager key={key} ctx={{ uiWorkspace: { startSession } } as any} />) })
+  const send = (id: string) => act(async () => { window.dispatchEvent(Object.assign(new window.Event('message'), { data: { type: 'COPIS_DSH_NEW_SESSION', requestId: id } })) })
+  await mount('初次启动')
+  expect(navigate).toHaveBeenCalledWith('conversations', 'dsh-client-ready')
+  await send('one'); await mount('重载'); await send('one'); await send('two')
+  expect(startSession).toHaveBeenCalledTimes(2)
+  expect(navigate.mock.calls.map(([, tag]) => tag)).toEqual(['dsh-client-ready', 'dsh-session-accepted:one', 'dsh-client-ready', 'dsh-session-accepted:one', 'dsh-session-accepted:two'])
+  expect(switchMode).not.toHaveBeenCalled()
+})
+
+test('Copis功能默认前三项，可展开和收起，工作区前的设置始终走 Copis 入口', async () => {
+  const openSettings = mock(() => {})
+  Object.assign(window.copisBridge!, { openSettings })
+  await renderSidebar(true)
+  const ids = () => Array.from(sidebar.querySelectorAll('[data-copis-menu-id]'), el => el.getAttribute('data-copis-menu-id'))
+  const toggle = () => sidebar.querySelector<HTMLButtonElement>('button[aria-expanded]')!
+  expect(sidebar.querySelector('[aria-label="Copis功能"]')?.textContent).toContain('Copis功能')
+  expect(ids()).toEqual(['search', 'schedule', 'automations'])
+  expect(toggle().textContent).toContain('展开显示')
+  await act(async () => toggle().click())
+  expect(ids()).toHaveLength(9)
+  expect(toggle().textContent).toContain('收起')
+  await act(async () => toggle().click())
+  expect(ids()).toHaveLength(3)
+  const settings = sidebar.querySelector<HTMLButtonElement>('[aria-label="Copis 设置"]')!
+  expect(sidebar.querySelector('.regionArea')?.previousElementSibling?.querySelector('[aria-label="Copis 设置"]')).toBe(settings)
+  await act(async () => settings.click())
+  expect(openSettings).toHaveBeenCalledTimes(1)
+})
+
+test('已隐藏的项目不占名额，剩余仅三项时隐藏展开按钮，窄栏保留设置', async () => {
+  Object.assign(window.copisBridge!, { getHiddenMenuItems: () => ['search', 'knowledge', 'expert-team', 'group-chat', 'agent-skills', 'fund-stock'] })
+  await renderSidebar(false)
+  expect(Array.from(sidebar.querySelectorAll('[data-copis-menu-id]'), el => el.getAttribute('data-copis-menu-id'))).toEqual(['schedule', 'automations', 'memory'])
+  expect(sidebar.querySelector('button[aria-expanded]')).toBeNull()
+  expect(sidebar.querySelector('[aria-label="Copis 设置"]')).not.toBeNull()
+})
+
+
+test('RC2 将工作区嵌套在滚动容器时，Copis 菜单仍在其前，卸载时不留节点', async () => {
+  await act(async () => root!.render(<>
+    <div className="hHd-Xa_scrollArea"><div className="regionArea" /></div>
+    <div className="hHd-Xa_footArea"><CreationSidebarNavigation wide /></div>
+  </>))
+  const region = sidebar.querySelector('.regionArea')!
+  expect(region.previousElementSibling?.querySelector('[aria-label="Copis功能"]')).not.toBeNull()
+  await act(async () => root!.render(<div className="hHd-Xa_scrollArea"><div className="regionArea" /></div>))
+  expect(sidebar.querySelector('[aria-label="Copis功能"]')).toBeNull()
 })

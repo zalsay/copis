@@ -1,4 +1,7 @@
 .copis-working-settings-view {
+  --ui-primary: var(--creation-ui-primary);
+  --ui-primary-background: var(--creation-ui-primary-background);
+  --ui-primary-foreground: var(--creation-ui-primary-foreground);
   display: flex;
   width: 100%;
   height: 100%;

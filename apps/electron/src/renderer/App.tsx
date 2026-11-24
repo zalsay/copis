@@ -11,7 +11,6 @@ import { FunctionalModuleUpdateGate } from './components/functional-modules/Func
 import { PlanningReminderRail } from './components/planning/PlanningReminderRail'
 import { environmentCheckDialogOpenAtom } from './atoms/environment'
 import { workingAuthStateAtom } from './atoms/working-atoms'
-import { useCreateSession } from './hooks/useCreateSession'
 import type { AppShellContextType } from './contexts/AppShellContext'
 
 export default function App(): React.ReactElement {
@@ -19,7 +18,6 @@ export default function App(): React.ReactElement {
 
   const workingAuthState = useAtomValue(workingAuthStateAtom)
   const setWorkingAuthState = useSetAtom(workingAuthStateAtom)
-  const { createAgent } = useCreateSession()
   const [isLoading, setIsLoading] = React.useState(true)
   const [showOnboarding, setShowOnboarding] = React.useState(false)
 
@@ -45,16 +43,7 @@ export default function App(): React.ReactElement {
     initialize()
   }, [setWorkingAuthState])
 
-  // 完成 onboarding 回调：创建欢迎 Agent 会话
-  const handleOnboardingComplete = async () => {
-    setShowOnboarding(false)
-
-    try {
-      await createAgent({ draft: true })
-    } catch (error) {
-      console.error('[App] 创建欢迎 Agent 会话失败:', error)
-    }
-  }
+  const handleOnboardingComplete = () => setShowOnboarding(false)
 
   // 加载中状态
   if (isLoading) {

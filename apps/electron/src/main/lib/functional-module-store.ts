@@ -7,9 +7,9 @@ import type { FunctionalModuleFormat } from '@copis/shared'
 const ARCHIVE_PAYLOAD_FILE = '.artifact.tar.gz'
 const MAX_ARCHIVE_UNPACKED_BYTES = 512 * 1024 * 1024
 
-/** 新版官方 DSH 含文档与语音运行时；仅为该模块提供有界的较大解包预算。 */
+/** 官方 DSH RC2 解包后超过 1 GiB；仅为该模块提供有界的较大解包预算。 */
 export function getFunctionalModuleArchiveLimit(name: string): number {
-  return name === 'dsh' ? 1024 * 1024 * 1024 : MAX_ARCHIVE_UNPACKED_BYTES
+  return name === 'dsh' ? 1536 * 1024 * 1024 : MAX_ARCHIVE_UNPACKED_BYTES
 }
 const TAR_TYPE_PAX_GLOBAL_EXTENDED_HEADER = 'g'.charCodeAt(0)
 const TAR_TYPE_PAX_EXTENDED_HEADER = 'x'.charCodeAt(0)

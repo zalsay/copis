@@ -19,7 +19,7 @@ mock.module('electron', () => ({ ipcMain: h.ipcMain, app: {}, nativeTheme: { on:
 mock.module('../lib/settings-service', () => ({ getSettings: () => ({}), updateSettings }))
 mock.module('../lib/user-profile-service', () => ({ getUserProfile: () => ({}), updateUserProfile: () => ({}) }))
 mock.module('../lib/dsh-cordis-service', () => ({ syncCopisModelConfigToDsh: async () => {} }))
-mock.module('../lib/dsh-view-manager', () => ({ syncThemeToDshView: () => {}, syncHiddenSidebarMenuItemsToDshView: () => {} }))
+mock.module('../lib/dsh-view-manager', () => ({ isDshViewSender: () => false, syncThemeToDshView: () => {}, syncHiddenSidebarMenuItemsToDshView: () => {} }))
 mock.module('../lib/theme-sync', () => ({ syncNativeThemeSource: () => {}, resolveIsDark: () => false }))
 mock.module('../lib/dsh-model-config', () => ({ shouldSyncDshCopisDefaults: () => false }))
 mock.module('../lib/tutorial-service', () => ({ getTutorialContent: () => '' }))

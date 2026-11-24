@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { Glasses, Globe2, Lightbulb, LoaderCircle, Plus, X } from 'lucide-react'
+import { Glasses, Globe2, LoaderCircle, Plus, X } from 'lucide-react'
 import type { WebTabsSnapshot } from '@copis/shared'
 import { activeWebTabIdAtom, webTabsAtom } from '@/atoms/web-tabs'
 import { cn } from '@/lib/utils'
@@ -21,20 +21,6 @@ import {
 } from '@/lib/platform'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { CopisLogo } from '@/lib/model-logo'
-import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuLabel,
-  ContextMenuRadioGroup,
-  ContextMenuRadioItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from '@/components/ui/context-menu'
-import { CopisCreationConfirmDialog } from '@/components/creation/CopisCreationConfirmDialog'
-import { useCopisModeSwitcher } from '@/hooks/useCopisModeSwitcher'
-import type { AppMode } from '@/atoms/app-mode'
-
 function applySnapshot(
   snapshot: WebTabsSnapshot,
   setTabs: (tabs: WebTabsSnapshot['tabs']) => void,
@@ -74,14 +60,6 @@ export function WebTabBar(): React.ReactElement {
   const pointerListenersCleanupRef = React.useRef<(() => void) | null>(null)
   const suppressedClickTabIdRef = React.useRef<string | null>(null)
   const tabButtonRefs = React.useRef(new Map<string, HTMLButtonElement>())
-  const {
-    currentMode,
-    confirmDialogOpen,
-    setConfirmDialogOpen,
-    handleSwitchMode,
-    executeSwitchToCreation,
-  } = useCopisModeSwitcher()
-
   const apply = React.useCallback((snapshot: WebTabsSnapshot): void => {
     applySnapshot(snapshot, setTabs, setActiveTabId)
   }, [setActiveTabId, setTabs])
@@ -293,14 +271,8 @@ export function WebTabBar(): React.ReactElement {
     void activate(tabId)
   }, [activate])
 
-  const handleHomeModeSwitch = React.useCallback((nextMode: AppMode): void => {
-    // 共享模式切换逻辑会统一退出活动网页页签，保证各个入口行为一致。
-    handleSwitchMode(nextMode)
-  }, [handleSwitchMode])
-
   return (
-    <>
-      <div className="relative z-[70] flex h-[38px] shrink-0 items-end border-b border-border/70 bg-[hsl(var(--tabbar-surface))] text-foreground">
+    <div className="relative z-[70] flex h-[38px] shrink-0 items-end border-b border-border/70 bg-[hsl(var(--tabbar-surface))] text-foreground">
       <div
         aria-hidden="true"
         className={cn(
@@ -317,9 +289,7 @@ export function WebTabBar(): React.ReactElement {
       >
         <WebHomeTab
           active={activeTabId === null}
-          currentMode={currentMode}
           onClick={() => void activate(null)}
-          onSwitchMode={handleHomeModeSwitch}
         />
 
         {tabs.map((tab) => (
@@ -354,70 +324,32 @@ export function WebTabBar(): React.ReactElement {
           <TooltipContent side="bottom">新建网页</TooltipContent>
         </Tooltip>
       </div>
-      </div>
-      <CopisCreationConfirmDialog
-        open={confirmDialogOpen}
-        onOpenChange={setConfirmDialogOpen}
-        onConfirm={executeSwitchToCreation}
-      />
-    </>
+    </div>
   )
 }
 
-function WebHomeTab({
-  active,
-  currentMode,
-  onClick,
-  onSwitchMode,
-}: {
-  active: boolean
-  currentMode: AppMode
-  onClick: () => void
-  onSwitchMode: (nextMode: AppMode) => void
-}): React.ReactElement {
-  const handleModeChange = (value: string): void => {
-    if (value === 'agent' || value === 'creation') onSwitchMode(value)
-  }
-
+function WebHomeTab({ active, onClick }: { active: boolean; onClick: () => void }): React.ReactElement {
   return (
-    <ContextMenu>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <ContextMenuTrigger asChild>
-            <button
-              type="button"
-              aria-label="打开 Copis 首页"
-              aria-current={active ? 'page' : undefined}
-              className={cn(
-                'web-tab-shape titlebar-no-drag group relative mb-0 flex h-[34px] min-w-[36px] max-w-[180px] flex-1 items-center gap-2 px-2.5 text-xs transition-colors',
-                active
-                  ? 'bg-muted text-foreground shadow-[0_-1px_0_hsl(var(--border)/0.6)]'
-                  : 'bg-content-area text-muted-foreground hover:bg-accent/70 hover:text-foreground',
-              )}
-              onClick={onClick}
-            >
-              <img src={CopisLogo} alt="" className="size-3.5 shrink-0 rounded object-cover" />
-              <span className="min-w-0 flex-1 truncate text-left font-medium">Copis 首页</span>
-            </button>
-          </ContextMenuTrigger>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Copis 首页</TooltipContent>
-      </Tooltip>
-      <ContextMenuContent className="min-w-44">
-        <ContextMenuLabel>切换工作模式</ContextMenuLabel>
-        <ContextMenuSeparator />
-        <ContextMenuRadioGroup value={currentMode} onValueChange={handleModeChange}>
-          <ContextMenuRadioItem value="agent">
-            <CopisLogoIcon className="mr-1 size-3.5 text-[var(--ui-primary)]" />
-            <span>Agent 模式</span>
-          </ContextMenuRadioItem>
-          <ContextMenuRadioItem value="creation">
-            <Lightbulb className="mr-1 size-3.5 text-[var(--creation-ui-primary)]" />
-            <span>创造模式</span>
-          </ContextMenuRadioItem>
-        </ContextMenuRadioGroup>
-      </ContextMenuContent>
-    </ContextMenu>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label="打开 Copis 首页"
+          aria-current={active ? 'page' : undefined}
+          className={cn(
+            'web-tab-shape titlebar-no-drag group relative mb-0 flex h-[34px] min-w-[36px] max-w-[180px] flex-1 items-center gap-2 px-2.5 text-xs transition-colors',
+            active
+              ? 'bg-muted text-foreground shadow-[0_-1px_0_hsl(var(--border)/0.6)]'
+              : 'bg-content-area text-muted-foreground hover:bg-accent/70 hover:text-foreground',
+          )}
+          onClick={onClick}
+        >
+          <img src={CopisLogo} alt="" className="size-3.5 shrink-0 rounded object-cover" />
+          <span className="min-w-0 flex-1 truncate text-left font-medium">Copis 首页</span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">Copis 首页</TooltipContent>
+    </Tooltip>
   )
 }
 

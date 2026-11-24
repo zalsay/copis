@@ -78,6 +78,9 @@ export function patchDshHeroLogoSource(source: string, lightLogoSvg: string): st
     return source
   }
 
+  const compactHero = /function HeroFish\(\{hovering\}\)\{.*?\}(?=function HeroShell\()/
+  if (compactHero.test(source)) return source.replace(compactHero, () => createHeroFishReplacement(lightLogoSvg))
+
   if (!HERO_FISH_PATTERN.test(source)) {
     throw new Error('DSH 创造模式 HeroFish 组件未找到匹配结构')
   }

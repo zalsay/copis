@@ -89,8 +89,8 @@ import {
   codexAppServerStatusAtom,
 } from './atoms/professional-mode-atoms'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
-import { tabsAtom, activeTabIdAtom, getPersistableTabState, sanitizePersistedTabs } from './atoms/tab-atoms'
-import type { TabItem } from './atoms/tab-atoms'
+import { useGlobalDshNotifications } from './hooks/useGlobalDshNotifications'
+import { tabsAtom, activeTabIdAtom, getPersistableTabState } from './atoms/tab-atoms'
 import { agentToolsAtom } from './atoms/agent-tool-atoms'
 import { feishuBotStatesAtom } from './atoms/feishu-atoms'
 import { dingtalkBotStatesAtom } from './atoms/dingtalk-atoms'
@@ -907,6 +907,7 @@ function ProfessionalModeInitializer(): null {
  */
 function AgentListenersInitializer(): null {
   useGlobalAgentListeners()
+  useGlobalDshNotifications()
   return null
 }
 
@@ -1053,27 +1054,6 @@ function DingTalkInitializer(): null {
  */
 
 /**
- * 旧版（分屏时代）持久化结构——仅用于向后兼容读取迁移。
- * 新版已扁平化为 { tabs, activeTabId }；旧版是 { tabs, splitLayout }。
- */
-interface LegacyTabStateWithSplitLayout {
-  splitLayout?: {
-    focusedPanelIndex?: number
-    panels?: Array<{ activeTabId?: string | null }>
-  }
-}
-
-/** 从旧版 splitLayout 结构中提取原焦点面板的 activeTabId */
-function extractLegacyActiveTabId(tabState: unknown): string | null {
-  if (!tabState || typeof tabState !== 'object') return null
-  const legacy = tabState as LegacyTabStateWithSplitLayout
-  const panels = legacy.splitLayout?.panels
-  if (!Array.isArray(panels) || panels.length === 0) return null
-  const focusedIndex = legacy.splitLayout?.focusedPanelIndex ?? 0
-  return panels[focusedIndex]?.activeTabId ?? panels[0]?.activeTabId ?? null
-}
-
-/**
  * 网页增量同步初始化组件
  *
  * - 启动时加载初始同步状态（WebSyncState）
@@ -1111,80 +1091,13 @@ function TabStatePersistenceInitializer(): null {
   useEffect(() => {
     store.set(appModeAtom, normalizeAppMode(store.get(appModeAtom)))
 
-    Promise.all([
-      window.electronAPI.getSettings(),
-      window.electronAPI.listAgentSessions(),
-    ]).then(([settings, agentSessions]) => {
-      // 优先从 settings.appMode 恢复模式，兜底回退到 localStorage 缓存值
-      const persistedMode = normalizeAppMode(settings.appMode ?? store.get(appModeAtom))
-      store.set(appModeAtom, persistedMode)
-      if (persistedMode === 'creation') {
-        store.set(agentRuntimeAtom, 'dsh')
-        store.set(activeViewAtom, 'conversations')
-      } else {
-        store.set(agentRuntimeAtom, 'pi')
-      }
-
-      const tabState = settings.tabState
-      const validSessionIds = new Set(agentSessions.map((s) => s.id))
-
-      // 过滤旧版 Scratch/Preview/Chat 入口，只恢复有效 Agent 会话。
-      const validTabs = sanitizePersistedTabs(tabState?.tabs, validSessionIds)
-
-      // 旧配置没有可恢复 Tab 时，优先进入上次工作区中的最近 Agent 会话。
-      const sortByUpdatedAt = <T extends { updatedAt: number }>(items: T[]): T[] =>
-        [...items].sort((a, b) => b.updatedAt - a.updatedAt)
-      const preferredAgentSessions = sortByUpdatedAt(
-        agentSessions.filter((session) =>
-          !session.archived && (!settings.agentWorkspaceId || session.workspaceId === settings.agentWorkspaceId)
-        ),
-      )
-      const recentAgentSession = preferredAgentSessions[0] ?? sortByUpdatedAt(
-        agentSessions.filter((session) => !session.archived),
-      )[0]
-      const fallbackTab: TabItem | null = recentAgentSession
-        ? { id: recentAgentSession.id, type: 'agent', sessionId: recentAgentSession.id, title: recentAgentSession.title }
-        : null
-      const tabsToRestore = validTabs.length > 0 ? validTabs : fallbackTab ? [fallbackTab] : []
-      if (tabsToRestore.length === 0) {
-        restoredRef.current = true
-        return
-      }
-
-      const validTabIds = new Set(tabsToRestore.map((t) => t.id))
-
-      // 恢复 activeTabId（校验有效性）
-      let restoredActiveTabId: string | null = null
-      if (tabState?.activeTabId && validTabIds.has(tabState.activeTabId)) {
-        restoredActiveTabId = tabState.activeTabId
-      } else {
-        // 向后兼容：从旧版 splitLayout 结构中恢复原焦点面板的 activeTabId
-        const legacyId = extractLegacyActiveTabId(tabState)
-        if (legacyId && validTabIds.has(legacyId)) {
-          restoredActiveTabId = legacyId
-        } else {
-          restoredActiveTabId = tabsToRestore[0]?.id ?? null
-        }
-      }
-
-      const activeTab = tabsToRestore.find((t) => t.id === restoredActiveTabId) ?? tabsToRestore[0] ?? null
-      store.set(tabsAtom, tabsToRestore)
-      store.set(activeTabIdAtom, activeTab?.id ?? null)
-
-      // 同步模式、当前 Agent 会话和工作区。
-      if (activeTab?.type === 'agent') {
-        if (persistedMode !== 'creation') {
-          store.set(appModeAtom, 'agent')
-        }
-        store.set(currentAgentSessionIdAtom, activeTab.sessionId)
-        const session = agentSessions.find((item) => item.id === activeTab.sessionId)
-        if (session?.workspaceId) store.set(currentAgentWorkspaceIdAtom, session.workspaceId)
-        if (session?.agentRuntime === 'codex') {
-          store.set(professionalModeAtom, true)
-        }
-      }
-
-      console.log(`[TabRestore] 已恢复当前会话入口，历史标签 ${tabsToRestore.length} 个已收敛到左侧列表`)
+    window.electronAPI.getSettings().then(() => {
+      // 历史 Agent 标签不再恢复或作为新会话的兜底；网页标签由独立状态恢复。
+      store.set(appModeAtom, 'creation')
+      store.set(agentRuntimeAtom, 'dsh')
+      store.set(activeViewAtom, 'conversations')
+      store.set(tabsAtom, [])
+      store.set(activeTabIdAtom, null)
     }).catch((err) => console.error('[TabRestore] 恢复标签页失败:', err))
       .finally(() => { restoredRef.current = true })
   }, [store])

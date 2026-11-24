@@ -105,20 +105,19 @@ describe('外观设置主题色自定义功能契约 (BDD)', () => {
     }
   })
 
-  test('AppearanceSettings 视图源码契约与浅深色模式独立配置统一 UI', () => {
+  test('外观设置仅展示创造模式主题色，并保留浅深色独立配色', () => {
     const filePath = path.resolve(__dirname, 'AppearanceSettings.tsx')
     const content = fs.readFileSync(filePath, 'utf-8')
 
-    // 契约：必须包含两套模式的主题色设置区块
-    expect(content).toContain('Agent 模式主题色')
+    // 只移除旧界面入口，不改变兼容旧设置的底层主题逻辑。
+    expect(content).not.toContain('Agent 模式主题色')
     expect(content).toContain('创造模式主题色')
-    expect(content).toContain('agentThemeColorAtom')
-    expect(content).toContain('creationThemeColorAtom')
-    expect(content).toContain('agentThemeColorLightAtom')
-    expect(content).toContain('agentThemeColorDarkAtom')
+    expect(content).not.toContain('agentThemeColorAtom')
+    expect(content).not.toContain('agentThemeColorLightAtom')
+    expect(content).not.toContain('agentThemeColorDarkAtom')
     expect(content).toContain('creationThemeColorLightAtom')
     expect(content).toContain('creationThemeColorDarkAtom')
-    expect(content).toContain('updateAgentThemeColor')
+    expect(content).not.toContain('updateAgentThemeColor')
     expect(content).toContain('updateCreationThemeColor')
     expect(content).toContain('ThemeColorPickerBlock')
     expect(content).toContain('恢复默认')
@@ -138,4 +137,11 @@ describe('外观设置主题色自定义功能契约 (BDD)', () => {
     // 契约：移除手写全宽分割线，由 SettingsCard 统一优雅处理
     expect(content).not.toContain('-mx-4 sm:-mx-6')
   })
+})
+
+test('Copis 设置在自身范围内使用创造模式强调色及选中背景', () => {
+  const css = fs.readFileSync(path.resolve(__dirname, '../app-shell/CopisWorkingSettingsPanel.css'), 'utf8')
+  const settings = css.match(/\.copis-working-settings-view\s*\{([^}]+)\}/)?.[1]
+  expect(settings).toContain('--ui-primary: var(--creation-ui-primary);')
+  expect(settings).toContain('--ui-primary-background: var(--creation-ui-primary-background);')
 })

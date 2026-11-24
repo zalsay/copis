@@ -209,63 +209,17 @@ describe('CopisCreationWebView 侧边栏宽度与原生视图布局契约', () =
     expect(viewBounds.height).toBe(800)
   })
 
-  test('Given 创造模式接收到 COPIS_SWITCH_MODE 事件 When 目标为 agent 模式 Then 自动切换模式为 agent 并匹配恢复工作区会话', () => {
-    let currentMode: string = 'creation'
-    let currentActiveView: string = 'conversations'
-    let openedSessionId: string | null = null
-
-    const mockSessions = [
-      { id: 'session-dsh-1', workspaceId: 'ws-default', mode: 'creation', agentRuntime: 'dsh', archived: false, title: '创造会话' },
-      { id: 'session-agent-2', workspaceId: 'ws-default', mode: 'agent', agentRuntime: 'pi', archived: false, title: '常规 Agent 会话' },
-    ]
-
-    const handleBackToAgent = (targetWorkspaceId: string) => {
-      currentMode = 'agent'
-      currentActiveView = 'conversations'
-      const matched = mockSessions.find(
-        (s) => !s.archived && s.workspaceId === targetWorkspaceId && s.mode !== 'creation' && s.agentRuntime !== 'dsh',
-      )
-      if (matched) {
-        openedSessionId = matched.id
-      }
-    }
-
-    const onClientEvent = (e: { type: string; mode?: string }) => {
-      if (e.type === 'COPIS_SWITCH_MODE' && e.mode === 'agent') {
-        handleBackToAgent('ws-default')
-      }
-    }
-
-    onClientEvent({ type: 'COPIS_SWITCH_MODE', mode: 'agent' })
-    expect(currentMode).toBe('agent')
-    expect(currentActiveView).toBe('conversations')
-    expect(openedSessionId as string | null).toBe('session-agent-2')
+  test('Given 旧插件请求切回 Agent When 处理模式事件 Then 不创建或打开旧会话', () => {
+    const { readFileSync } = require('node:fs')
+    const { join } = require('node:path')
+    const source = readFileSync(join(__dirname, 'CopisCreationWebView.tsx'), 'utf8')
+    expect(source).toContain("setAppModeAndRuntime('creation')")
+    expect(source).not.toContain('handleBackToAgent')
+    expect(source).not.toContain('createAgent(')
+    expect(source).not.toContain("openSession('agent'")
   })
 
-  test('Given DSH 侧边栏模式切换点击 Agent 模式 When 触发切换弹窗 Then 弹窗状态打开并可通过“返回Agent 模式”按钮执行切换', () => {
-    let switchModeModalOpen = false
-    let emittedEvent: { type: string; mode: string } | null = null
-
-    // 1. 点击左菜单 tab 切换中的 Agent 模式按钮
-    const onTabClick = () => {
-      switchModeModalOpen = true
-    }
-
-    onTabClick()
-    expect(switchModeModalOpen).toBe(true)
-
-    // 2. 点击弹窗中的“返回Agent 模式”按钮
-    const handleConfirmSwitchToAgent = () => {
-      switchModeModalOpen = false
-      emittedEvent = { type: 'COPIS_SWITCH_MODE', mode: 'agent' }
-    }
-
-    handleConfirmSwitchToAgent()
-    expect(switchModeModalOpen).toBe(false)
-    expect(emittedEvent as { type: string; mode: string } | null).toEqual({ type: 'COPIS_SWITCH_MODE', mode: 'agent' })
-  })
-
-  test('Given 创造模式与返回按钮 When 检查视觉契约规范 Then 右上角返回图标使用 ui-primary，创造模式使用 creation-ui-primary', () => {
+  test('Given DSH 启动失败 When 查看操作 Then 可打开设置且不返回旧模式', () => {
     const { readFileSync } = require('node:fs')
     const { join } = require('node:path')
     const viewSource = readFileSync(join(__dirname, 'CopisCreationWebView.tsx'), 'utf8')
@@ -282,8 +236,8 @@ describe('CopisCreationWebView 侧边栏宽度与原生视图布局契约', () =
     expect(viewSource).not.toContain('<div className="absolute top-3.5 right-6 z-50">')
     expect(viewSource).not.toContain('<X className=')
 
-    // 3. 返回 Agent 模式按钮的 CopisLogoIcon 图标使用 ui-primary 色
-    expect(viewSource).toContain('<CopisLogoIcon className="w-3.5 h-3.5 mr-1.5 text-[var(--ui-primary)]" />')
+    expect(viewSource).toContain('打开设置')
+    expect(viewSource).not.toContain('返回 Agent 模式')
 
     // 4. 创造模式加载态使用 creation-ui-primary 体系
     expect(viewSource).toContain('text-[var(--creation-ui-primary)]')

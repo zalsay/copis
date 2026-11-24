@@ -53,8 +53,7 @@ import {
   notificationSoundsAtom,
   sendDesktopNotification,
 } from '@/atoms/notifications'
-import { appModeAtom } from '@/atoms/app-mode'
-import { tabsAtom, activeTabIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
+import { tabsAtom, activeTabIdAtom, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom } from '@/atoms/agent-atoms'
 import { channelsAtom } from '@/atoms/model-atoms'
@@ -458,21 +457,6 @@ export function useGlobalAgentListeners(): void {
     /** 正在执行的 AI 浏览器工具：toolUseId → { toolName, sessionId, startedAt } */
     const pendingBrowserTools = new Map<string, { toolName: string; sessionId: string; startedAt: number }>()
 
-    /** 构建导航到指定会话的回调 */
-    const makeNavigateToSession = (sessionId: string, sessionTitle: string) => () => {
-      const tabs = store.get(tabsAtom)
-      const result = openTab(tabs, { type: 'agent', sessionId, title: sessionTitle })
-      store.set(tabsAtom, result.tabs)
-      store.set(activeTabIdAtom, result.activeTabId)
-      store.set(appModeAtom, 'agent')
-      store.set(currentAgentSessionIdAtom, sessionId)
-      const sessions = store.get(agentSessionsAtom)
-      const session = sessions.find((s) => s.id === sessionId)
-      if (session?.workspaceId) {
-        store.set(currentAgentWorkspaceIdAtom, session.workspaceId)
-      }
-    }
-
     /** 获取会话标题 */
     const getSessionTitle = (sessionId: string): string => {
       const sessions = store.get(agentSessionsAtom)
@@ -576,7 +560,6 @@ export function useGlobalAgentListeners(): void {
           playSound: enabled && soundEnabled,
           soundType,
           sounds,
-          onNavigate: makeNavigateToSession(sessionId, sessionTitle),
         }
       )
     }
@@ -1145,7 +1128,6 @@ export function useGlobalAgentListeners(): void {
                 playSound: enabled && soundEnabled,
                 soundType: 'taskComplete',
                 sounds,
-                onNavigate: makeNavigateToSession(data.sessionId, sessionTitle),
               }
             )
           },
@@ -1345,15 +1327,6 @@ export function useGlobalAgentListeners(): void {
     const cleanupTodoAgentSessionReady = window.electronAPI.onTodoAgentSessionReady(({ todo, session }) => {
       unstable_batchedUpdates(() => {
         store.set(agentSessionsAtom, (prev) => upsertAgentSession(prev, session))
-        const result = openTab(store.get(tabsAtom), { type: 'agent', sessionId: session.id, title: session.title })
-        store.set(tabsAtom, result.tabs)
-        store.set(activeTabIdAtom, result.activeTabId)
-        store.set(appModeAtom, 'agent')
-        store.set(currentAgentSessionIdAtom, session.id)
-        if (session.workspaceId) {
-          store.set(currentAgentWorkspaceIdAtom, session.workspaceId)
-          void window.electronAPI.updateSettings({ agentWorkspaceId: session.workspaceId }).catch(console.error)
-        }
         store.set(agentPendingPromptAtom, {
           sessionId: session.id,
           message: buildTodoAgentPrompt(todo.id, session.agentRuntime === 'pi'),

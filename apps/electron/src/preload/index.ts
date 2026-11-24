@@ -190,6 +190,7 @@ import type {
   WatchlistItem,
   FundStockTerminalStatus,
   DshCordisStatus,
+  DshMediaPreviewResult,
   DshViewBounds,
   DshClientEvent,
   WebSyncState,
@@ -1372,6 +1373,8 @@ export interface ElectronAPI {
 
   // ===== DSH 创造模式 Cordis Web =====
   dshCordis: {
+    prepareMediaPreview: (path: string) => Promise<DshMediaPreviewResult>
+    releaseMediaPreview: (url: string) => Promise<boolean>
     getStatus: () => Promise<DshCordisStatus>
     start: () => Promise<DshCordisStatus>
     stop: () => Promise<DshCordisStatus>
@@ -3002,6 +3005,10 @@ const electronAPI: ElectronAPI = {
 
   // ===== DSH 创造模式 Cordis Web =====
   dshCordis: {
+    prepareMediaPreview: (path: string): Promise<DshMediaPreviewResult> =>
+      ipcRenderer.invoke(DSH_CORDIS_IPC_CHANNELS.PREPARE_MEDIA_PREVIEW, path),
+    releaseMediaPreview: (url: string): Promise<boolean> =>
+      ipcRenderer.invoke(DSH_CORDIS_IPC_CHANNELS.RELEASE_MEDIA_PREVIEW, url),
     getStatus: (): Promise<DshCordisStatus> =>
       ipcRenderer.invoke(DSH_CORDIS_IPC_CHANNELS.GET_STATUS),
     start: (): Promise<DshCordisStatus> =>

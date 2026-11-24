@@ -20,18 +20,15 @@ import {
   ExternalLink,
 } from 'lucide-react'
 import { COPIS_OFFICIAL_URL } from '@/components/functional-modules/functional-module-startup-ui'
-import { CopisLogoIcon } from '@/components/ui/copis-logo-icon'
-import { dshCordisStatusAtom, normalizeAppMode, setAppModeAndRuntimeAtom } from '@/atoms/app-mode'
-import { agentSessionsAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
+import { dshCordisStatusAtom, setAppModeAndRuntimeAtom } from '@/atoms/app-mode'
 import { activeViewAtom } from '@/atoms/active-view'
+import { acknowledgeDshNewSessionAtom, dshReturnToSessionAtom, pendingDshNewSessionsAtom } from '@/atoms/dsh-navigation'
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
 import { planningTabAtom } from '@/atoms/planning-atoms'
 import { workingSettingsOpenAtom } from '@/atoms/working-atoms'
 import { activeWebTabIdAtom } from '@/atoms/web-tabs'
 import { automationFormAtom } from '@/atoms/automation-atoms'
 import { resolvedThemeAtom, agentThemeColorAtom, creationThemeColorAtom } from '@/atoms/theme'
-import { useOpenSession } from '@/hooks/useOpenSession'
-import { useCreateSession } from '@/hooks/useCreateSession'
 import { CopisWorkingFeedbackDialog } from '@/components/app-shell/CopisWorkingFeedbackDialog'
 import { Button } from '@/components/ui/button'
 import { PlanningView } from '@/components/planning/PlanningView'
@@ -72,11 +69,11 @@ export function CopisCreationWebView(): React.ReactElement {
   const workingSettingsOpen = useAtomValue(workingSettingsOpenAtom)
   const activeWebTabId = useAtomValue(activeWebTabIdAtom)
   const automationFormOpen = useAtomValue(automationFormAtom).open
-  const agentSessions = useAtomValue(agentSessionsAtom)
-  const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const setActiveView = useSetAtom(activeViewAtom)
-  const openSession = useOpenSession()
-  const { createAgent } = useCreateSession()
+  const [clientGeneration, setClientGeneration] = useState(0)
+  const [pendingRequestId] = useAtomValue(pendingDshNewSessionsAtom)
+  const returnToSession = useAtomValue(dshReturnToSessionAtom)
+  const acknowledgeNewSession = useSetAtom(acknowledgeDshNewSessionAtom)
   const resolvedTheme = useAtomValue(resolvedThemeAtom)
   const agentThemeColor = useAtomValue(agentThemeColorAtom)
   const creationThemeColor = useAtomValue(creationThemeColorAtom)
@@ -171,38 +168,20 @@ export function CopisCreationWebView(): React.ReactElement {
     })
   }, [resolvedTheme, agentThemeColor, creationThemeColor, status.running, status.url])
 
-  // 切回 Agent 模式并自动恢复当前工作区的 Agent 会话
-  const handleBackToAgent = useCallback(() => {
-    setAppModeAndRuntime('agent')
-    setActiveView('conversations')
-    const matchedSession = agentSessions.find(
-      (s) => !s.archived && s.workspaceId === currentWorkspaceId && s.mode !== 'creation' && s.agentRuntime !== 'dsh',
-    )
-    if (matchedSession) {
-      openSession('agent', matchedSession.id, matchedSession.title)
-    } else {
-      createAgent({
-        draft: true,
-        mode: 'agent',
-        agentRuntime: 'pi',
-      })
-    }
-  }, [setAppModeAndRuntime, setActiveView, agentSessions, currentWorkspaceId, openSession, createAgent])
-
   // 2. 监听 DSH 客户端事件（通过 preload IPC 与 message 双向监听）
   useEffect(() => {
     const handleClientEvent = (e: DshClientEvent) => {
       if (!e || typeof e !== 'object') return
       if (e.type === 'COPIS_SWITCH_MODE' && e.mode) {
-        const nextMode = normalizeAppMode(e.mode)
-        if (nextMode === 'agent') {
-          handleBackToAgent()
-        } else {
-          setAppModeAndRuntime(nextMode)
-          setActiveView('conversations')
-        }
+        setAppModeAndRuntime('creation')
+        setCreationSubView(null)
+        setActiveView('conversations')
       } else if (e.type === 'COPIS_NAVIGATE') {
-        if (e.view === 'conversations') {
+        if (e.view === 'conversations' && e.tab === 'dsh-client-ready') {
+          setClientGeneration((n) => n + 1)
+        } else if (e.view === 'conversations' && e.tab?.startsWith('dsh-session-accepted:')) {
+          acknowledgeNewSession(e.tab.slice('dsh-session-accepted:'.length))
+        } else if (e.view === 'conversations') {
           setCreationSubView(null)
           setActiveView('conversations')
           void window.electronAPI?.dshCordis?.dispatchToClient?.({
@@ -261,11 +240,6 @@ export function CopisCreationWebView(): React.ReactElement {
         void window.electronAPI?.dshCordis?.dispatchToClient?.({
           type: 'COPIS_OPEN_SEARCH_MODAL',
         })
-      } else if (e.type === 'COPIS_OPEN_SESSION') {
-        if (e.sessionType === 'agent') {
-          handleBackToAgent()
-          openSession('agent', e.sessionId, e.title || '会话')
-        }
       } else if (e.type === 'COPIS_OPEN_SETTINGS') {
         setCreationSubView('settings')
         void window.electronAPI?.dshCordis?.dispatchToClient?.({
@@ -302,7 +276,7 @@ export function CopisCreationWebView(): React.ReactElement {
       unsubIpc?.()
       window.removeEventListener('message', onMsg)
     }
-  }, [handleBackToAgent, setAppModeAndRuntime, setActiveView, setPlanningTab, setWorkingSettingsOpen, status.url, dshSidebarWidth, workingSettingsOpen, activeWebTabId, openSession])
+  }, [setAppModeAndRuntime, setActiveView, acknowledgeNewSession, setPlanningTab, setWorkingSettingsOpen, status.url, dshSidebarWidth, workingSettingsOpen, activeWebTabId])
 
   // 创造模式下如果从全局快捷键触发了 searchDialogOpen，转发给 DSH 客户端打开原生搜索浮层并重置
   useEffect(() => {
@@ -339,6 +313,21 @@ export function CopisCreationWebView(): React.ReactElement {
       )
     }
   }, [status.url, workingSettingsOpen, activeWebTabId])
+
+  const lastReturnToSession = useRef(returnToSession)
+  useEffect(() => {
+    if (lastReturnToSession.current === returnToSession) return
+    lastReturnToSession.current = returnToSession
+    closeSubView()
+  }, [returnToSession, closeSubView])
+
+  useEffect(() => {
+    if (!pendingRequestId || !status.running || !status.url) return
+    closeSubView()
+    // 页面已加载时立即发送；若启动或重载时错过消息，插件挂载后会触发再次发送。
+    void window.electronAPI.dshCordis.dispatchToClient({ type: 'COPIS_DSH_NEW_SESSION', requestId: pendingRequestId })
+      .catch((error: unknown) => console.error('[创造模式] 投递新会话请求失败:', error))
+  }, [clientGeneration, pendingRequestId, closeSubView, status.running, status.url])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -592,15 +581,8 @@ export function CopisCreationWebView(): React.ReactElement {
                   <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
                   打开官网
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleBackToAgent}
-                  disabled={installingModule}
-                  className="titlebar-no-drag text-muted-foreground hover:text-foreground"
-                >
-                  <CopisLogoIcon className="w-3.5 h-3.5 mr-1.5 text-[var(--ui-primary)]" />
-                  返回 Agent 模式
+                <Button variant="ghost" size="sm" onClick={() => setWorkingSettingsOpen(true)}>
+                  打开设置
                 </Button>
               </div>
             </div>

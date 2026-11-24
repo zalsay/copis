@@ -31,7 +31,7 @@ mock.module('./CopisWorkingPaymentModal', () => ({
   ),
 }))
 mock.module('./SearchDialog', () => ({
-  SearchDialog: () => null,
+  SearchDialog: () => <div data-testid="old-search" />,
 }))
 mock.module('@/components/web-browser', () => ({
   WebBrowserSurface: () => <div data-testid="web-browser-surface" />,
@@ -222,7 +222,7 @@ describe('AppShell 模式自适应布局', () => {
     expect(store.get(appModeAtom)).toBe('creation')
   })
 
-  test('Given appMode 为 agent When 渲染 AppShell Then 外层侧边栏正常显示', () => {
+  test('Given 恢复旧 agent 值 When 渲染 AppShell Then 只挂载工作台而不挂载旧侧栏和搜索', () => {
     const store = createStore()
     store.set(appModeAtom, 'agent')
     const html = renderToStaticMarkup(
@@ -230,7 +230,9 @@ describe('AppShell 模式自适应布局', () => {
         <AppShell contextValue={{}} />
       </Provider>,
     )
-    expect(html).toContain('data-testid="sidebar"')
+    expect(html).not.toContain('data-testid="sidebar"')
+    expect(html).not.toContain('data-testid="old-search"')
+    expect(html).toContain('data-testid="main-area"')
   })
 })
 

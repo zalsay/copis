@@ -7,6 +7,7 @@ const MARKER = 'static copisLastComposerInput = "";'
 /** 补丁直接调用 DSH 输入模型的 setDraft，保留 Lexical 的文本状态和撤销语义。 */
 export function patchDshComposerHistorySource(source: string): string {
   if (source.includes(MARKER)) return source
+  const compact = source.includes('SessionInputShell=class{')
   const submitAnchor = source.includes('submit(mode = "queue", source) {')
     ? 'submit(mode = "queue", source) {'
     : 'submit(mode = "queue") {'
@@ -27,7 +28,13 @@ export function patchDshComposerHistorySource(source: string): string {
     ['const arrow = (key) => (event) => {', `const arrow = (key) => (event) => {
       if ((key === "up" || key === "down") && (event?.shiftKey || event?.ctrlKey || event?.metaKey || event?.altKey)) return false;`],
   ]
-  for (const [anchor, replacement] of replacements) {
+  const rc2Anchors = [
+    ['SessionInputShell=class{', `SessionInputShell=class{${MARKER}`],
+    ['submit(mode=`queue`,source,allowEmpty=false){', replacements[1]![1].replace(submitAnchor, 'submit(mode=`queue`,source,allowEmpty=false){')],
+    ['return this.deps.inputTriggers?.()?.arbitrate(key,composing)??`pass`', replacements[2]![1].replace('this.imageIds', 'this.attachmentIds')],
+    ['const arrow=key=>event=>{', replacements[3]![1]],
+  ] as const
+  for (const [anchor, replacement] of compact ? rc2Anchors : replacements) {
     if (source.split(anchor).length !== 2) throw new Error('DSH Composer 输入历史组件结构与受支持版本不匹配')
     source = source.replace(anchor, replacement)
   }

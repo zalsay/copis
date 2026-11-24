@@ -24,7 +24,7 @@ test('Given DSH 0.1.2 与 0.1.3 侧栏 When 插件挂载 Then 菜单使用稳定
   expect(source).not.toContain('before-new-session')
   expect(source).toContain('button[class*="_newSession"], button[class*="newSession"]')
   expect(source).toContain('[class*="_regionArea"], [class*="regionArea"]')
-  expect(source).toContain('sidebar.insertBefore(element, target)')
+  expect(source).toContain('target.before(host)')
   expect(source).toContain("sidebar.classList.add('copis-creation-sidebar')")
   expect(source).not.toContain("ctx.slots.inject('sidebar.brand.mark'")
   expect(source).not.toContain("ctx.slots.inject('conversation.composer.dock'")
@@ -40,18 +40,18 @@ test('Given 创造模式左侧菜单栏 When 检查样式与 DOM 契约 Then 包
   expect(preloadSource).toContain('legacySections.forEach((el) => el.remove())')
 })
 
-test('Given 用户位于创造模式 When 操作搜索和设置 Then 事件进入 Copis 桥而非 DSH 默认页面', () => {
+test('Given 用户位于创造模式 When 操作显式 Copis 搜索和设置入口 Then 保留既有应用桥', () => {
   expect(source).toContain('window.copisBridge.openSearch()')
-  expect(source).toContain("sendNavigation('settings')")
+  expect(source).toContain('window.copisBridge.openSettings()')
   expect(source).toContain('event.stopImmediatePropagation()')
 })
 
-test('Given 创造模式左栏 When 插件加载 Then 提供返回入口而不重复旧模式切换器和 DSH Header', () => {
+test('Given 创造模式左栏 When 插件加载 Then 不提供返回旧模式的入口且不重复 DSH Header', () => {
   expect(source).not.toContain('ModeSwitcher')
   expect(source).not.toContain('copis-mode-switcher')
   expect(source).not.toContain('sendModeSwitch')
-  expect(source).toContain('<CreationReturnToAgentControl')
-  expect(source).toContain("window.copisBridge?.switchMode?.('agent')")
+  expect(source).not.toContain('<CreationReturnToAgentControl')
+  expect(source).not.toContain("window.copisBridge?.switchMode?.('agent')")
   expect(source).toContain('[class*="_logoRow"]')
   expect(source).toContain('[class*="_localBuildBrand"]')
   expect(preloadSource).toContain('[class*="_logoRow"]')
@@ -159,26 +159,6 @@ test('Given 创造模式激活子功能视图 When 检查新会话按钮切换�
   expect(source).toContain("topBtn.setAttribute('aria-label', '返回会话 (Esc)')")
 })
 
-test('Given 创造模式侧栏底部设置入口 When 用户点击设置 Then 拦截 DSH 原生设置并进入 Copis 全屏设置', () => {
-  // 1. client.tsx 与 preload 均包含 DSH 原生设置弹窗屏蔽规则
-  expect(source).toContain('[class*="VOzbGW_panel"]')
-  expect(source).toContain('[class*="VOzbGW_overlay"]')
-  expect(source).toContain('[class*="VOzbGW_mask"]')
-  expect(preloadSource).toContain('[class*="VOzbGW_panel"]')
-  expect(preloadSource).toContain('[class*="VOzbGW_overlay"]')
-  expect(preloadSource).toContain('[class*="VOzbGW_mask"]')
-
-  // 2. 具备精确判定 DSH 设置按钮并全局捕获拦截的机制
-  expect(source).toContain('isSettingsTarget')
-  expect(source).toContain('settingsArea')
-  expect(source).toContain('triggerRow')
-  expect(source).toContain("setActiveView('settings')")
-  expect(source).toContain("sendNavigation('settings')")
-  expect(source).toContain('window.copisBridge?.openSettings')
-  expect(preloadSource).toContain('setupSettingsClickInterceptor')
-  expect(preloadSource).toContain('copisBridge.openSettings()')
-})
-
 test('Given 创造模式与 Agent 模式视觉对齐契约 When 检查菜单栏与右上角按钮 Then 文字大小14px、圆角7px、动态主题色绑定完全对齐', () => {
   // 1. 宽侧栏菜单项对齐 Agent 模式：font-size: 14px; border-radius: 7px; min-height: 31px;
   expect(source).toContain('font-size: 14px;')
@@ -217,10 +197,10 @@ test('Given 创造模式内建搜索浮层 When 检查组件与样式契约 Then
   expect(source).toContain('background: rgba(0, 0, 0, 0.45);')
   expect(source).toContain('backdrop-filter: blur(2px);')
 
-  // 3. 支持关键词输入、会话匹配、消息全文检索与高亮
+  // 3. 支持关键词输入、DSH 会话标题匹配与高亮，不读取旧 Agent 历史
   expect(source).toContain('HighlightSearchText')
-  expect(source).toContain('getAgentSessions')
-  expect(source).toContain('searchAgentSessionMessages')
+  expect(source).not.toContain('getAgentSessions')
+  expect(source).not.toContain('searchAgentSessionMessages')
   expect(source).toContain('navigateToResult')
 
   // 4. 支持快捷键（Enter 搜索/打开，Esc 关闭，Arrow 导航，Cmd/Ctrl+K 唤起）
@@ -248,18 +228,6 @@ test('Given 创造模式侧栏菜单项 When 检查专家团队与群聊协作 T
   expect(source).toContain("id: 'group-chat', label: '群聊协作', icon: UsersRound, view: 'group-chat'")
   expect(source).not.toContain("badge: 'BETA'")
   expect(source).not.toContain("badge: '灵活'")
-})
-
-test('Given 创造模式 Composer 内部按钮（如上下文用量圆环） When 执行 isSettingsTarget 判定 Then 严禁误判为设置入口', () => {
-  // 1. client 源码契约：排除 composer 与 对话区按钮，限制必须在侧栏容器内
-  expect(source).toContain('[class*="composer"]')
-  expect(source).toContain('[class*="_centerCol"]')
-  expect(source).toContain('inSidebar')
-
-  // 2. preload 脚本契约：同步排除 composer 与 对话区按钮，限制必须在侧栏容器内
-  expect(preloadSource).toContain('[class*="composer"]')
-  expect(preloadSource).toContain('[class*="_centerCol"]')
-  expect(preloadSource).toContain('inSidebar')
 })
 
 test('Given 创造模式 Composer 圆环与视口 When 悬浮弹出 Tooltip Then 包含横向滚动条抑制与 Tooltip 边界定位保护', () => {
@@ -341,7 +309,7 @@ test('Given 创造模式智能体团队 (Team) 检查器 When 检查协同与任
 
 test('Given 创造模式工作区文件检查器 When 解析当前会话与工作区 CWD Then 包含响应式订阅、多源 fallback 与零短路加载', () => {
   // 1. client.tsx 声明注入 workspaces 服务，并声明 getActiveWorkspacePath bridge 接口
-  expect(source).toContain("export const inject = ['slots', 'layout', 'sessions', 'workspaces']")
+  expect(source).toContain("export const inject = ['slots', 'layout', 'sessions', 'workspaces', 'documentPreviews', 'remote.session', 'sidebarRight', 'uiWorkspace']")
   expect(source).toContain('getActiveWorkspacePath?: (cwd?: string) => Promise<string>')
   expect(preloadSource).toContain('getActiveWorkspacePath: (cwd?: string) => {')
 

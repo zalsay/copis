@@ -12,10 +12,13 @@ import { join } from 'node:path'
 import { DSH_CORDIS_IPC_CHANNELS, type DshViewBounds, type DshClientEvent } from '@copis/shared'
 import { getSettings } from './settings-service'
 import { resolveIsDark } from './theme-sync'
+import { handleCopisFileRequest } from './local-file-protocol'
 
 let hostWindow: BrowserWindow | null = null
 let dshView: WebContentsView | null = null
 let currentUrl: string | null = null
+let fileProtocolRegistered = false
+let focusOnNextShow = false
 let lastBounds: DshViewBounds = { x: 0, y: 0, width: 0, height: 0, visible: false }
 
 function isHostAvailable(): boolean {
@@ -62,6 +65,11 @@ export function ensureDshView(url: string): WebContentsView | null {
   })
 
   const contents = dshView.webContents
+  // DSH 使用独立持久化 Session，不能只在默认 Session 注册媒体协议。
+  if (!fileProtocolRegistered) {
+    contents.session.protocol.handle('copis-file', handleCopisFileRequest)
+    fileProtocolRegistered = true
+  }
 
   contents.setWindowOpenHandler(({ url: openUrl }) => {
     if (openUrl.startsWith('http:') || openUrl.startsWith('https:')) {
@@ -113,6 +121,11 @@ export function ensureDshView(url: string): WebContentsView | null {
   return dshView
 }
 
+/** 新增媒体 IPC 只信任当前托管视图，不能由普通网页或已销毁的旧视图申请。 */
+export function isDshViewSender(id: number): boolean {
+  return !!dshView && !dshView.webContents.isDestroyed() && dshView.webContents.id === id
+}
+
 function applyDshViewBounds(): void {
   if (!dshView || dshView.webContents.isDestroyed() || !isHostAvailable()) return
 
@@ -125,6 +138,10 @@ function applyDshViewBounds(): void {
       height: Math.round(height),
     })
     dshView.setVisible(true)
+    if (focusOnNextShow) {
+      focusOnNextShow = false
+      dshView.webContents.focus()
+    }
   } else {
     dshView.setVisible(false)
   }
@@ -140,6 +157,10 @@ export function updateDshViewBounds(bounds: DshViewBounds): void {
 export function dispatchToDshClient(payload: unknown): void {
   if (dshView && !dshView.webContents.isDestroyed()) {
     dshView.webContents.send(DSH_CORDIS_IPC_CHANNELS.DISPATCH_EVENT_TO_CLIENT, payload)
+    if (payload && typeof payload === 'object' && 'type' in payload && payload.type === 'COPIS_DSH_OPEN_SESSION') {
+      if (lastBounds.visible && lastBounds.width > 0 && lastBounds.height > 0) dshView.webContents.focus()
+      else focusOnNextShow = true
+    }
   }
 }
 
@@ -184,6 +205,7 @@ export function getDshView(): WebContentsView | null {
 
 /** 销毁 DSH View */
 export function destroyDshView(): void {
+  focusOnNextShow = false
   if (!dshView) return
   try {
     if (isHostAvailable()) {

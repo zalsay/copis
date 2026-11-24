@@ -36,9 +36,9 @@ export {
 }
 
 export const DSH_PACKAGE = '@deepseek-ai/dsh'
-export const DSH_PACKAGE_VERSION = '0.2.2-alpha.2'
+export const DSH_PACKAGE_VERSION = '0.2.2-rc.2'
 export const DSH_VERSION = DSH_PACKAGE_VERSION
-export const DSH_INTEGRITY = 'sha512-mdcpgF8D1eFQV8Gu3T/sYLkBwfw9h/Li0uPIxXyby1VybJgrFg8BU1Le40FiMnN+heL7k3zOMuAVe7sFq/JO4w=='
+export const DSH_INTEGRITY = 'sha512-J727r2C471x2cYXGjqZ0D9T1ZyaYQDFH/Ynx8iq+85oslM4nky5YTBnbAuTtxMhW7nhY8wuAEfjjFCQ+K6Swgw=='
 export const DSH_ENTRYPOINT = 'bin/dsh'
 const DSH_RUNTIME_ENTRYPOINT = 'node_modules/@deepseek-ai/dsh/lib/bin.js'
 const DSH_MODEL_SELECTION_CLIENT_ENTRYPOINT = 'node_modules/@deepseek-ai/dsh-client-ui-model-selection/lib/client.js'
@@ -82,9 +82,8 @@ export function main(): void {
     const runtimeRoot = join(moduleRoot, 'runtime')
     installOfficialCli(runtimeRoot, join(staging, 'package-cache'))
     patchDshComposerModelSelectionRuntime(runtimeRoot)
-    patchDshDetailsPanelFilePreviewRuntime(runtimeRoot)
+    validateNativeDshDetails(runtimeRoot)
     patchDshCordisPanelRuntime(runtimeRoot)
-    patchDshSidebarRuntime(runtimeRoot)
     patchDshHeroLogoRuntime(
       runtimeRoot,
       resolve('apps/electron/resources/copis-logos/main-logo-metal-light.svg'),
@@ -128,8 +127,34 @@ export function patchDshComposerModelSelectionRuntime(runtimeRoot: string): void
   writeFileSync(entrypoint, patchDshComposerModelSelectionSource(source), 'utf8')
 }
 
+/** RC2 已将详情与文件预览迁出旧 Chat，检查实际注册的原生模块。 */
+export function validateNativeDshDetails(runtimeRoot: string): void {
+  const providers = { 'sidebar-right': 'sidebarRight', 'sidebar-files': 'sidebar.right.tab', 'sidebar-documentpreview': 'documentPreviews' }
+  for (const [name, marker] of Object.entries(providers)) {
+    const entry = join(runtimeRoot, `node_modules/@deepseek-ai/dsh-client-ui-${name}/lib/client.js`)
+    if (!isFile(entry) || !readFileSync(entry, 'utf8').includes(marker)) {
+      throw new Error(`官方 DSH 缺少原生详情服务: ${name}`)
+    }
+  }
+}
+
 /** 导出纯文本变换，供构建期测试验证官方 bundle 的结构锚点。 */
 export function patchDshComposerModelSelectionSource(source: string): string {
+  // RC2 的浏览器 bundle 为压缩格式，保留同一触发器行为，不重排其他上游代码。
+  const compactModelLabel = 'const modelLabel=waiting?t(`trigger.loading`):currentChoice?.model.name??t(`trigger.fallback`);'
+  if (source.includes(compactModelLabel)) {
+    if (source.includes('const triggerLabel=triggerModelLabel;') && source.includes('children:triggerModelLabel')) return source
+    const replacements = [
+      ['const triggerLabel=effortLabel===void 0?modelLabel:`${modelLabel} · ${effortLabel}`;', `${DSH_MODEL_SELECT_TRIGGER_MODEL_LABEL}const triggerLabel=triggerModelLabel;`],
+      ['className:ModelSelect_module_css_default.triggerLabel,children:currentChoice===void 0?modelLabel:renderModelLabel(currentChoice.group.provider,currentChoice.model,`trigger`,true)', 'className:ModelSelect_module_css_default.triggerLabel,children:triggerModelLabel'],
+      ['effortLabel!==void 0&&(0,react_jsx_runtime.jsx)(`span`,{className:ModelSelect_module_css_default.triggerEffort,children:effortLabel}),', ''],
+    ] as const
+    for (const [anchor, replacement] of replacements) {
+      if (source.split(anchor).length !== 2) throw new Error('DSH RC2 Composer 模型选择组件结构不匹配')
+      source = source.replace(anchor, () => replacement)
+    }
+    return source
+  }
   const triggerChildMatches = source.match(DSH_MODEL_SELECT_TRIGGER_CHILD_PATTERN)
   const triggerEffortMatches = source.match(DSH_MODEL_SELECT_TRIGGER_EFFORT_PATTERN)
   const originalModelLabelMatches = source.match(DSH_MODEL_SELECT_MODEL_LABEL_PATTERN)
@@ -163,6 +188,13 @@ export function patchDshCordisPanelRuntime(runtimeRoot: string): void {
 }
 
 export function patchDshCordisPanelSource(source: string): string {
+  const compactTitle = '"panel.title":`Cordis 插件`'
+  if (source.includes('"panel.title":`Copis 请您确认`')) return source
+  if (source.includes(compactTitle)) {
+    if (source.split(compactTitle).length !== 2) throw new Error('DSH RC2 Cordis Panel 标题结构不匹配')
+    return source.replace(compactTitle, '"panel.title":`Copis 请您确认`')
+      .replace('"panel.plugins.aria":`Cordis 插件`', '"panel.plugins.aria":`Copis 请您确认`')
+  }
   if (source.includes('"panel.title": "Copis 请您确认"')) {
     return source
   }
@@ -243,14 +275,15 @@ function writeLaunchers(moduleRoot: string, platform: FunctionalModulePlatform):
   chmodSync(launcher, 0o755)
 }
 
-function createArchive(moduleRoot: string, output: string): void {
+export function createArchive(moduleRoot: string, output: string): void {
   const archiveTar = join(dirname(moduleRoot), 'dsh.tar')
   const temporaryOutput = `${output}.${process.pid}.tmp`
   mkdirSync(dirname(output), { recursive: true })
   try {
-    execFileSync('tar', ['--format=pax', '-cf', archiveTar, '-C', moduleRoot, '.'], {
+    // 禁止 BSD tar 从扩展属性生成 AppleDouble，同时排除暂存目录里已有的附属文件。
+    execFileSync('tar', ['--format=pax', '--exclude=._*', '-cf', archiveTar, '-C', moduleRoot, '.'], {
       stdio: 'inherit',
-      env: { ...process.env, LC_ALL: 'C' },
+      env: { ...process.env, LC_ALL: 'C', COPYFILE_DISABLE: '1' },
     })
     writeFileSync(temporaryOutput, gzipSync(readFileSync(archiveTar), { mtime: 0 }), { mode: 0o644 })
     renameSync(temporaryOutput, output)

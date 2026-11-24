@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useCallback } from 'react'
+import { toast } from 'sonner'
 import { useAtomValue, useSetAtom, useAtom, useStore } from 'jotai'
 import { appModeAtom } from '@/atoms/app-mode'
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
@@ -17,24 +18,16 @@ import {
   tabsAtom,
   activeTabIdAtom,
   sidebarCollapsedAtom,
-  openTab,
 } from '@/atoms/tab-atoms'
 import { shortcutOverridesAtom, sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { shortcutGuideOpenAtom } from '@/atoms/shortcut-guide'
 import {
-  agentPendingPromptAtom,
   agentSessionDraftHtmlAtom,
   agentSessionDraftsAtom,
-  agentSessionsAtom,
   currentAgentSessionIdAtom,
-  agentChannelIdAtom,
-  agentModelIdAtom,
-  currentAgentWorkspaceIdAtom,
-  agentWorkspacesAtom,
-  agentAttachedFilesMapAtom,
 } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
-import { useCreateSession } from '@/hooks/useCreateSession'
+import { requestDshNewSessionAtom, showDshConversationAtom } from '@/atoms/dsh-navigation'
 import { useShortcut } from '@/hooks/useShortcut'
 import { useCloseTab } from '@/hooks/useCloseTab'
 import { workingSettingsOpenAtom } from '@/atoms/working-atoms'
@@ -42,7 +35,6 @@ import {
   initShortcutRegistry,
   updateShortcutOverrides,
 } from '@/lib/shortcut-registry'
-import { getFileParentPath } from '@/lib/file-utils'
 import {
   VOICE_DICTATION_CLEAR_PREVIEW_EVENT,
   VOICE_DICTATION_PREVIEW_EVENT,
@@ -61,7 +53,11 @@ export function GlobalShortcuts(): null {
   const setShortcutOverrides = useSetAtom(shortcutOverridesAtom)
   const shortcutOverrides = useAtomValue(shortcutOverridesAtom)
   const setSendWithCmdEnter = useSetAtom(sendWithCmdEnterAtom)
-  const { createAgent } = useCreateSession()
+  const store = useStore()
+  const requestDshNewSession = useCallback(() => {
+    store.set(showDshConversationAtom)
+    store.set(requestDshNewSessionAtom)
+  }, [store])
 
   // Tab 管理（用于关闭标签页）
   const activeTabId = useAtomValue(activeTabIdAtom)
@@ -142,13 +138,8 @@ export function GlobalShortcuts(): null {
     }, []),
   )
 
-  // Cmd+N → 新建 Agent 会话
-  useShortcut(
-    'new-session',
-    useCallback(() => {
-      void createAgent({ draft: true })
-    }, [createAgent]),
-  )
+  // 宿主获得焦点时将新建会话交给 DSH。
+  useShortcut('new-session', requestDshNewSession)
 
   // Cmd+B → 切换侧边栏
   useShortcut(
@@ -183,119 +174,10 @@ export function GlobalShortcuts(): null {
     }, []),
   )
 
-  // ===== 快速任务窗口 → 创建会话并自动发送 =====
-
-  const store = useStore()
-
-  useEffect(() => {
-    const cleanup = window.electronAPI.onQuickTaskOpenSession(async (data) => {
-      try {
-        // 快速任务统一进入 Agent 会话。
-        store.set(appModeAtom, 'agent')
-        store.set(activeViewAtom, 'conversations')
-
-        {
-          // Agent 模式：创建会话 + 保存附件到 session 目录
-          const channelId = store.get(agentChannelIdAtom) || undefined
-          const modelId = store.get(agentModelIdAtom) || undefined
-          const configuredWorkspaceId = store.get(currentAgentWorkspaceIdAtom) || undefined
-          let workspaces = store.get(agentWorkspacesAtom)
-          if (
-            workspaces.length === 0
-            || (configuredWorkspaceId && !workspaces.some((workspace) => workspace.id === configuredWorkspaceId))
-          ) {
-            try {
-              workspaces = await window.electronAPI.listAgentWorkspaces()
-              store.set(agentWorkspacesAtom, workspaces)
-            } catch (error) {
-              console.error('[快速任务] 加载 Agent 工作区失败:', error)
-            }
-          }
-          const workspace = workspaces.find((item) => item.id === configuredWorkspaceId)
-            ?? workspaces.find((item) => item.slug === 'default')
-            ?? workspaces[0]
-          const workspaceId = workspace?.id ?? configuredWorkspaceId
-          if (workspace && workspace.id !== configuredWorkspaceId) {
-            store.set(currentAgentWorkspaceIdAtom, workspace.id)
-            void window.electronAPI.updateSettings({ agentWorkspaceId: workspace.id }).catch(console.error)
-          }
-          const meta = await window.electronAPI.createAgentSession(
-            undefined,
-            channelId,
-            workspaceId,
-            modelId,
-          )
-          // 更新 atom 状态
-          store.set(agentSessionsAtom, (prev) => [meta, ...prev])
-          store.set(currentAgentSessionIdAtom, meta.id)
-
-          // 处理附件：保存到 session 目录，构建 file references
-          let fileReferences = ''
-          const additionalDirectories = new Set<string>()
-          if (data.files && data.files.length > 0) {
-            try {
-              const allRefs: Array<{ filename: string; targetPath: string }> = []
-              for (const file of data.files) {
-                if (!file.sourcePath) continue
-                const attachedFiles = await window.electronAPI.attachFile({
-                  sessionId: meta.id,
-                  filePath: file.sourcePath,
-                })
-                store.set(agentAttachedFilesMapAtom, (prev) => {
-                  const map = new Map(prev)
-                  map.set(meta.id, attachedFiles)
-                  return map
-                })
-                allRefs.push({ filename: file.filename, targetPath: file.sourcePath })
-                const parentPath = getFileParentPath(file.sourcePath)
-                if (parentPath) additionalDirectories.add(parentPath)
-              }
-
-              const filesToSave = data.files.filter((f) => f.base64).map((f) => ({
-                filename: f.filename,
-                data: f.base64!,
-              }))
-              if (workspace && filesToSave.length > 0) {
-                const saved = await window.electronAPI.saveFilesToAgentSession({
-                  workspaceSlug: workspace.slug,
-                  sessionId: meta.id,
-                  files: filesToSave,
-                })
-                allRefs.push(...saved)
-              }
-
-              if (allRefs.length > 0) {
-                const refs = allRefs.map((f) => `- ${f.filename}: ${f.targetPath}`).join('\n')
-                fileReferences = `<attached_files>\n${refs}\n</attached_files>\n\n`
-              }
-            } catch (error) {
-              console.error('[快速任务] 保存 Agent 附件失败:', error)
-            }
-          }
-
-          // 打开新标签页
-          const currentTabs = store.get(tabsAtom)
-          const result = openTab(currentTabs, {
-            type: 'agent',
-            sessionId: meta.id,
-            title: data.text.slice(0, 30),
-          })
-          store.set(tabsAtom, result.tabs)
-          store.set(activeTabIdAtom, result.activeTabId)
-
-          // 设置待发送消息（附件引用已内联到消息文本中）
-          store.set(agentPendingPromptAtom, {
-            sessionId: meta.id,
-            message: fileReferences + data.text,
-            ...(additionalDirectories.size > 0 && { additionalDirectories: Array.from(additionalDirectories) }),
-          })
-        }
-      } catch (error) {
-        console.error('[快速任务] 创建会话失败:', error)
-      }
-    })
-    return cleanup
-  }, [store])
+  // 快速任务仍属于旧 Agent 执行路径，不能静默创建不可见的旧会话。
+  useEffect(() => window.electronAPI.onQuickTaskOpenSession(() => {
+    toast.error('快速任务暂不支持创造模式，请在会话中创建任务')
+  }), [])
 
   // ===== 语音输入 → 写入当前 Copis 输入框 =====
 
@@ -360,47 +242,14 @@ export function GlobalShortcuts(): null {
   // ===== 菜单栏 → 打开 / 创建会话 =====
 
   useEffect(() => {
-    const cleanupOpen = window.electronAPI.onTrayOpenAgentSession(async (data) => {
-      try {
-        const sessions = await window.electronAPI.listAgentSessions()
-        const session = sessions.find((item) => item.id === data.sessionId)
-        if (!session) return
-
-        store.set(agentSessionsAtom, sessions)
-        store.set(appModeAtom, 'agent')
-        store.set(activeViewAtom, 'conversations')
-        store.set(currentAgentSessionIdAtom, session.id)
-
-        if (session.workspaceId) {
-          store.set(currentAgentWorkspaceIdAtom, session.workspaceId)
-          window.electronAPI.updateSettings({
-            agentWorkspaceId: session.workspaceId,
-          }).catch(console.error)
-        }
-
-        const currentTabs = store.get(tabsAtom)
-        const result = openTab(currentTabs, {
-          type: 'agent',
-          sessionId: session.id,
-          title: session.title || data.title,
-        })
-        store.set(tabsAtom, result.tabs)
-        store.set(activeTabIdAtom, result.activeTabId)
-      } catch (error) {
-        console.error('[菜单栏] 打开 Agent 会话失败:', error)
-      }
-    })
-
-    const cleanupCreate = window.electronAPI.onTrayCreateSession(async () => {
-      store.set(appModeAtom, 'agent')
-      store.set(activeViewAtom, 'conversations')
-      await createAgent()
-    })
+    // 旧会话 ID 不属于 DSH；忽略旧托盘导航以免误打开或创建会话。
+    const cleanupOpen = window.electronAPI.onTrayOpenAgentSession(() => {})
+    const cleanupCreate = window.electronAPI.onTrayCreateSession(requestDshNewSession)
 
     return () => {
       cleanupOpen()
       cleanupCreate()
     }
-  }, [store, createAgent])
+  }, [requestDshNewSession])
   return null
 }

@@ -1,11 +1,3 @@
-/**
- * App Mode Atom - 应用模式状态
- *
- * 模式：
- * - 'agent': 标准智能体模式（Pi runtime 底座，多标签页，对话与工具）
- * - 'creation': 创造模式（DSH Cordis Web 底座，全 Web 自更新与 HMR）
- */
-
 import { atom } from 'jotai'
 import { atomWithStorage } from 'jotai/utils'
 import type { DshCordisStatus } from '@copis/shared'
@@ -13,15 +5,16 @@ import { agentRuntimeAtom } from './agent-atoms'
 
 export type AppMode = 'agent' | 'creation'
 
-export function normalizeAppMode(value: unknown): AppMode {
-  if (value === 'creation' || value === 'dsh' || value === 'ptc') {
-    return 'creation'
-  }
-  return 'agent'
+export function normalizeAppMode(_value: unknown): AppMode {
+  return 'creation'
 }
 
-/** App 模式，自动持久化到 localStorage */
-export const appModeAtom = atomWithStorage<AppMode>('copis-app-mode', 'agent')
+const storedAppModeAtom = atomWithStorage<AppMode>('copis-app-mode', 'creation')
+/** 旧配置及旧调用均不能切回标准 Agent 前端。 */
+export const appModeAtom = atom(
+  (get) => normalizeAppMode(get(storedAppModeAtom)),
+  (_get, set, value: AppMode) => set(storedAppModeAtom, normalizeAppMode(value)),
+)
 
 /** 创造模式进入确认弹窗：是否勾选了“下次不再提醒”，自动持久化到 localStorage */
 export const creationModeSkipConfirmAtom = atomWithStorage<boolean>(
@@ -40,11 +33,7 @@ export const setAppModeAndRuntimeAtom = atom(
   (_get, set, nextMode: AppMode) => {
     const normalized = normalizeAppMode(nextMode)
     set(appModeAtom, normalized)
-    if (normalized === 'creation') {
-      set(agentRuntimeAtom, 'dsh')
-    } else {
-      set(agentRuntimeAtom, 'pi')
-    }
+    set(agentRuntimeAtom, 'dsh')
     if (typeof window !== 'undefined' && window.electronAPI?.updateSettings) {
       window.electronAPI.updateSettings({ appMode: normalized }).catch(console.error)
     }

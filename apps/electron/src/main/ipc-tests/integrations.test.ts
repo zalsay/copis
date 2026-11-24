@@ -46,7 +46,7 @@ mock.module('../lib/dsh-cordis-service', () => ({
   startDshCordisServer: async () => {}, stopDshCordisServer: () => {}, stopDshCordisServerAndWait: async () => {},
   setDshStatusChangeBroadcaster: (listener: typeof broadcast) => { broadcast = listener },
 }))
-mock.module('../lib/dsh-view-manager', () => ({ ensureDshView: () => {}, updateDshViewBounds: () => {}, dispatchToDshClient: () => {} }))
+mock.module('../lib/dsh-view-manager', () => ({ isDshViewSender: () => false, ensureDshView: () => {}, updateDshViewBounds: () => {}, dispatchToDshClient: () => {} }))
 
 beforeEach(async () => {
   for (const fn of [restart, stop, startAll, cancelLogin, logout, liveSend, destroyedSend]) fn.mockClear()

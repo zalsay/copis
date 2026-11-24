@@ -10,6 +10,8 @@ describe('DSH Cordis 模式 IPC 与共享类型契约', () => {
     expect(DSH_CORDIS_IPC_CHANNELS.RELOAD).toBe('dsh-cordis:reload')
     expect(DSH_CORDIS_IPC_CHANNELS.ON_STATUS_CHANGE).toBe('dsh-cordis:status-change')
     expect(DSH_CORDIS_IPC_CHANNELS.READ_FILE).toBe('dsh-cordis:read-file')
+    expect(DSH_CORDIS_IPC_CHANNELS.PREPARE_MEDIA_PREVIEW).toBe('dsh-cordis:prepare-media-preview')
+    expect(DSH_CORDIS_IPC_CHANNELS.RELEASE_MEDIA_PREVIEW).toBe('dsh-cordis:release-media-preview')
     expect(DSH_CORDIS_IPC_CHANNELS.SHOW_ITEM_IN_FOLDER).toBe('dsh-cordis:show-item-in-folder')
     expect(DSH_CORDIS_IPC_CHANNELS.LIST_DIRECTORY).toBe('dsh-cordis:list-directory')
     expect(DSH_CORDIS_IPC_CHANNELS.GET_ACTIVE_WORKSPACE_PATH).toBe('dsh-cordis:get-active-workspace-path')

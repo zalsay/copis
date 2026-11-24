@@ -13,6 +13,7 @@ import { calculateDockBadgeCount, countPendingRequests } from '@/lib/dock-badge-
 import type { AgentQueuedMessage } from '@/lib/agent-message-queue'
 import { sanitizeAgentSessions } from '@/lib/agent-session-list'
 import { chromeDesktopSessionStateAtom } from './chrome-desktop-atoms'
+import { unviewedDshSessionIdsAtom } from './dsh-notifications'
 
 /** 活动状态 */
 export type ActivityStatus = 'pending' | 'running' | 'completed' | 'error' | 'backgrounded'
@@ -675,7 +676,7 @@ export const dockBadgeCountAtom = atom<number>((get) => {
   // Chrome 选窗确认不经过通用权限队列，但同样需要用户审批。
   const pendingChromeAuthorizationCount = get(chromeDesktopSessionStateAtom)?.state === 'awaiting_user' ? 1 : 0
   return calculateDockBadgeCount({
-    unviewedCompletedCount: get(unviewedCompletedSessionIdsAtom).size,
+    unviewedCompletedCount: get(unviewedCompletedSessionIdsAtom).size + get(unviewedDshSessionIdsAtom).size,
     pendingPermissionCount: countPendingRequests(get(allPendingPermissionRequestsAtom)) + pendingChromeAuthorizationCount,
     pendingAskUserCount: countPendingRequests(get(allPendingAskUserRequestsAtom)),
     pendingExitPlanCount: countPendingRequests(get(allPendingExitPlanRequestsAtom)),

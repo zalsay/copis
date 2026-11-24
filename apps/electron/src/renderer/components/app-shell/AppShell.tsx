@@ -21,7 +21,6 @@ import { activeViewAtom } from '@/atoms/active-view'
 import { interfaceVariantAtom } from '@/atoms/theme'
 import { CopisWorkingSettingsPanel } from './CopisWorkingSettingsPanel'
 import { CopisWorkingPaymentModal } from './CopisWorkingPaymentModal'
-import { SearchDialog } from './SearchDialog'
 import { detectIsWindows, WINDOW_CONTROLS_INSET_RIGHT } from '@/lib/platform'
 import { cn } from '@/lib/utils'
 import { workingAuthStateAtom, workingHistorySelectionAtom, workingSettingsOpenAtom, workingVipStatusAtom } from '@/atoms/working-atoms'
@@ -204,9 +203,6 @@ export function AppShell({ contextValue }: AppShellProps): React.ReactElement {
           isWindows ? WINDOW_CONTROLS_INSET_RIGHT : 'right-0'
         )}
       />
-
-      {/* Windows 自定义窗口控制按钮（最小化/最大化/关闭） */}
-      <SearchDialog />
 
       <div className="shell-bg relative flex h-screen w-screen flex-col overflow-hidden bg-gradient-to-br from-zinc-50 to-zinc-100 dark:from-zinc-950 dark:to-zinc-900">
         <WebTabBar />

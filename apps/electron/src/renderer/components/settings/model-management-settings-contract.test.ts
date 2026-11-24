@@ -67,3 +67,9 @@ describe('模型管理用户友好、保存与测试连接功能契约', () => {
   })
 })
 
+
+test('模型管理不挂载专业模式卡片，保留代理和自定义模型', () => {
+  expect(settingsSource).not.toContain('ProfessionalModeCard')
+  expect(settingsSource).toContain('<ProxySettingsCard')
+  expect(settingsSource).toContain('添加模型')
+})
