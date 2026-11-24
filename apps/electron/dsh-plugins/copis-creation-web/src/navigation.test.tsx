@@ -109,7 +109,7 @@ test('RC2 将工作区嵌套在滚动容器时，Copis 菜单仍在其前，卸�
     <div className="hHd-Xa_footArea"><CreationSidebarNavigation wide /></div>
   </>))
   const region = sidebar.querySelector('.regionArea')!
-  expect(region.previousElementSibling?.querySelector('[aria-label="Copis功能"]')).not.toBeNull()
+  expect(region.firstElementChild?.querySelector('[aria-label="Copis功能"]')).toBeTruthy()
   await act(async () => root!.render(<div className="hHd-Xa_scrollArea"><div className="regionArea" /></div>))
   expect(sidebar.querySelector('[aria-label="Copis功能"]')).toBeNull()
 })

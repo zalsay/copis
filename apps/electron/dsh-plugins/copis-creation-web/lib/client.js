@@ -2370,7 +2370,11 @@ function attachSidebarMenu(element) {
     return null;
   const host = document.createElement("div");
   host.style.display = "contents";
-  target.before(host);
+  if (target.parentElement.matches('[class*="_scrollArea"]') && target.matches('[class*="regionArea"]')) {
+    target.prepend(host);
+  } else {
+    target.before(host);
+  }
   return host;
 }
 var cachedCordisContext = null;

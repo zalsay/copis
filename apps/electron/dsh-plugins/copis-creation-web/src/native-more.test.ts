@@ -57,6 +57,7 @@ test.skipIf(process.platform === 'linux' && !process.env.DISPLAY)(
       expect(cases).toHaveLength(2)
       for (const result of cases) {
         if (result.wide) {
+          expect(result.menuFitsWorkspace, '菜单应占用工作区内容列且不能与工作区重叠').toBe(true)
           expect(result.heading?.font).toBe('14px')
           expect(result.heading?.iconWidth).toBeGreaterThan(0)
           expect(result.heading).toEqual(result.settings)

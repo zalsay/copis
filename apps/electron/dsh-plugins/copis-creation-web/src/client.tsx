@@ -1107,7 +1107,12 @@ function attachSidebarMenu(element: HTMLElement): HTMLElement | null {
   // RC2 的工作区在滚动容器内；Portal 不挪动 Cordis slot 持有的 React 节点。
   const host = document.createElement('div')
   host.style.display = 'contents'
-  target.before(host)
+  // RC2 滚动区的首尾列仅用于留白；菜单必须放在中间内容列内部，而非作为网格的自动布局项。
+  if (target.parentElement.matches('[class*="_scrollArea"]') && target.matches('[class*="regionArea"]')) {
+    target.prepend(host)
+  } else {
+    target.before(host)
+  }
   return host
 }
 

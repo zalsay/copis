@@ -12,7 +12,10 @@ function Sidebar({ wide }: { wide: boolean }) {
   const [settingsOpen, setSettingsOpen] = React.useState(false)
   return <>
     <CreationSidebarNavigation wide={wide} collapsed={!wide} />
-    <div className="hHd-Xa_regionArea" />
+    <div className="hHd-Xa_scrollArea" style={wide ? { display: 'grid', gridTemplateColumns: '4px minmax(0, 1fr) 6px', gridTemplateRows: '8px max-content 2px max-content' } : undefined}>
+      <nav style={{ gridArea: '2 / 2' }}>插件</nav>
+      <div className="hHd-Xa_regionArea" style={{ gridArea: '4 / 2', display: 'flex', flexDirection: 'column', minWidth: 0 }}><div data-workspaces>工作区</div></div>
+    </div>
     <div className="hHd-Xa_footArea">
       <div className="hHd-Xa_settingsArea">
         <button data-native-more aria-haspopup="menu" aria-label="更多" onClick={() => { nativeOpens++; setOpen(true) }}>
@@ -39,6 +42,9 @@ async function runMoreCases() {
         return el ? { font: getComputedStyle(el).fontSize, iconWidth: icon?.width, iconLeft: icon?.left, textLeft: el.querySelector('span')?.getBoundingClientRect().left } : null
       }
       const heading = metrics('.copis-menu-heading'), settings = metrics('.copis-settings-entry')
+      const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect()
+      const menuBounds = box('[aria-label="Copis功能"]'), workspaceBounds = box('[data-workspaces]')
+      const menuFitsWorkspace = Math.abs(menuBounds.width - workspaceBounds.width) < 1 && menuBounds.bottom <= workspaceBounds.top
       const before = nativeOpens
       const click = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 })
       // 点击嵌套 SVG 路径，覆盖实际鼠标落点而非只测试 button 本身。
@@ -55,7 +61,7 @@ async function runMoreCases() {
         const style = getComputedStyle(node)
         return style.display !== 'none' && style.visibility !== 'hidden' && style.pointerEvents !== 'none'
       }
-      cases.push({ wide, heading, settings, item: metrics('[data-copis-menu-id="search"]'), toggle: metrics('.copis-menu-toggle'), nativeOpenedOnce: nativeOpens === before + 1, prevented: click.defaultPrevented, menuVisible, panelVisible: visible(panel), overlayVisible: visible(overlay), copisSubviewActive: document.body.classList.contains('copis-subview-active') })
+      cases.push({ wide, menuFitsWorkspace, heading, settings, item: metrics('[data-copis-menu-id="search"]'), toggle: metrics('.copis-menu-toggle'), nativeOpenedOnce: nativeOpens === before + 1, prevented: click.defaultPrevented, menuVisible, panelVisible: visible(panel), overlayVisible: visible(overlay), copisSubviewActive: document.body.classList.contains('copis-subview-active') })
     }
     // 明确的 Copis 设置 API 不应随原生接管逻辑一起被删除。
     ;(window as any).copisBridge.openSettings()
