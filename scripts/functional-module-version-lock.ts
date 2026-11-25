@@ -47,7 +47,7 @@ export function loadFunctionalModuleVersionLocks(
   }
 }
 
-/** 锁定模块始终以配置文件版本为准，忽略部署参数和环境变量中的临时版本。 */
+/** 锁定模块以配置文件版本为准；DSH 归档版本也必须一致。 */
 export function applyFunctionalModuleVersionLocks(
   modules: readonly FunctionalModuleBinaryInput[],
   locks: FunctionalModuleVersionLocks,
@@ -55,6 +55,9 @@ export function applyFunctionalModuleVersionLocks(
   return modules.map((module) => {
     if (!isLockedModule(module.module)) return module
     const version = locks[module.module]
+    if (module.module === 'dsh' && module.version !== version) {
+      throw new Error(`DSH 归档版本 ${module.version} 与版本锁 ${version} 不一致，请重新准备归档`)
+    }
     const locked = { ...module, version }
     if (module.module === 'chrome-desktop-cli') {
       locked.entrypoint = `copis-chrome-${version}-darwin-${module.arch}/mcc`
@@ -82,7 +85,9 @@ export function excludeUnchangedLockedModules(
     // Chrome 顶层目录包含独立版本；远端更新版本的不同入口不能触发回退发布。
     if (module.module === 'chrome-desktop-cli' && publishedVersion && compareStableVersions(locks[module.module], publishedVersion) < 0) return false
     if (publishedArtifact && compareModuleContract(module, publishedArtifact) !== 0) return true
-    return !publishedVersion || compareStableVersions(locks[module.module], publishedVersion) > 0
+    return !publishedVersion || (module.module === 'dsh'
+      ? Bun.semver.order(locks.dsh, publishedVersion)
+      : compareStableVersions(locks[module.module], publishedVersion)) > 0
   })
 }
 
@@ -104,7 +109,8 @@ export function lockedFunctionalModuleNames(): readonly LockedModuleName[] {
 }
 
 function validateVersion(value: unknown, name: string, path: string): string {
-  if (typeof value !== 'string' || !/^\d+\.\d+\.\d+$/.test(value)) {
+  const pattern = name === 'dsh' ? /^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/ : /^\d+\.\d+\.\d+$/
+  if (typeof value !== 'string' || !pattern.test(value)) {
     throw new Error(`功能模块版本锁配置缺少合法 ${name} 版本：${path}`)
   }
   return value

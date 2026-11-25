@@ -32,13 +32,13 @@ function moduleArtifact(
   version: string,
   content: string,
   required: boolean,
-): Record<string, unknown> {
+) {
   return {
     version,
     url: `https://download.example.com/copis/modules/stable/darwin-arm64/${name}-${version}`,
     sha256: createHash('sha256').update(content).digest('hex'),
     size: Buffer.byteLength(content),
-    format: 'binary',
+    format: 'binary' as const,
     entrypoint: name === 'officecli' ? 'bin/officecli' : 'bin/copis-http-api-server',
     required,
   }
@@ -108,6 +108,15 @@ describe('COS 功能模块统一管理', () => {
       version: '0.2.0',
       required: true,
     })
+  })
+
+  test('旧清单将邮箱工具标为必选时，手动检查仍显示为可选', async () => {
+    const status = await checkFunctionalModule('agently-cli', {
+      rootDir: createRoot(),
+      artifactOverride: { ...moduleArtifact('officecli', '1.2.3', 'mail', true),
+        name: 'agently-cli', platform: 'darwin', arch: 'arm64' },
+    })
+    expect(status).toMatchObject({ required: false, installed: false, availableVersion: '1.2.3' })
   })
 
   test('安装 OfficeCLI 只下载目标模块并写入 active', async () => {
@@ -252,10 +261,10 @@ describe('COS 功能模块统一管理', () => {
   test('模块状态注册表包含全部模块且必要模块正确标记', () => {
     const statuses = getFunctionalModuleStatuses(createRoot())
 
-    expect(statuses.map((item) => item.name)).toEqual(['node-runtime', 'rust-http-api', 'officecli', 'alipay-bot', 'playwright-core', 'python-runtime', 'agently-cli', 'dsh', ...(process.platform === 'darwin' ? ['chrome-desktop-cli'] : []), 'codex-cli'])
+    expect(statuses.map((item) => item.name)).toEqual(['node-runtime', 'rust-http-api', 'officecli', 'alipay-bot', 'playwright-core', 'python-runtime', 'agently-cli', 'dsh', ...(process.platform === 'darwin' ? ['chrome-desktop-cli'] : []), 'codex-cli', 'pi-worker', 'pi-web-extension', 'default-resources'])
     expect(statuses.find((item) => item.name === 'node-runtime')?.required).toBe(true)
     expect(statuses.find((item) => item.name === 'rust-http-api')?.required).toBe(true)
-    expect(statuses.find((item) => item.name === 'officecli')?.required).toBe(true)
+    expect(statuses.find((item) => item.name === 'officecli')?.required).toBe(false)
     expect(statuses.find((item) => item.name === 'alipay-bot')?.required).toBe(true)
     expect(statuses.find((item) => item.name === 'agently-cli')?.required).toBe(false)
     expect(statuses.find((item) => item.name === 'dsh')?.required).toBe(false)

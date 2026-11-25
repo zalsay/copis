@@ -1,5 +1,5 @@
 import { chmod, copyFile, lstat, mkdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import type { FunctionalModuleFormat } from '@copis/shared'
@@ -136,6 +136,7 @@ export async function cacheFunctionalModule(
 export async function assembleFunctionalModule(
   paths: FunctionalModulePaths,
   packageInfo: FunctionalModulePackage,
+  onExtractProgress?: (fraction: number) => void,
 ): Promise<string> {
   validateModulePackage(packageInfo)
   if (!moduleCacheComplete(paths, packageInfo)) {
@@ -158,7 +159,7 @@ export async function assembleFunctionalModule(
       await mkdir(dirname(temporaryPath), { recursive: true })
       await copyFile(sourcePath, temporaryPath)
     } else {
-      await extractTarGz(sourcePath, temporaryDir, getFunctionalModuleArchiveLimit(packageInfo.name))
+      await extractTarGz(sourcePath, temporaryDir, getFunctionalModuleArchiveLimit(packageInfo.name), onExtractProgress)
     }
     if (!existsSync(temporaryPath)) {
       throw new Error(`归档模块缺少入口文件: ${packageInfo.entrypoint}`)
@@ -213,7 +214,7 @@ export async function activateFunctionalModule(
       },
     },
   }
-  await writeJsonAtomically(paths.activeFile, next)
+  writeJsonAtomically(paths.activeFile, next)
 }
 
 /** 将一个已经完成的旧版本重新写回 active 指针，用于更新失败后的恢复。 */
@@ -241,7 +242,7 @@ export async function deactivateFunctionalModule(
   if (!(name in current.modules)) return
   const modules = { ...current.modules }
   delete modules[name]
-  await writeJsonAtomically(paths.activeFile, { modules } satisfies ActiveFunctionalModulesFile)
+  writeJsonAtomically(paths.activeFile, { modules } satisfies ActiveFunctionalModulesFile)
 }
 
 /** 只判断 active 中是否有记录，用于区分未安装与无法通过完整性检查的安装。 */
@@ -324,23 +325,24 @@ function readActiveFile(paths: FunctionalModulePaths): ActiveFunctionalModulesFi
   }
 }
 
-async function writeJsonAtomically(path: string, value: unknown): Promise<void> {
+/** 主进程中同步完成 active 指针的读改写，避免同时安装不同组件时丢失记录。 */
+function writeJsonAtomically(path: string, value: unknown): void {
   const temporaryPath = `${path}.${process.pid}.${Date.now()}.tmp`
-  await mkdir(dirname(path), { recursive: true })
-  await writeFile(temporaryPath, JSON.stringify(value, null, 2), 'utf-8')
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(temporaryPath, JSON.stringify(value, null, 2), 'utf-8')
   try {
-    await rename(temporaryPath, path)
+    renameSync(temporaryPath, path)
   } catch (error) {
     const backupPath = `${path}.${process.pid}.backup`
     try {
-      if (existsSync(path)) await rename(path, backupPath)
-      await rename(temporaryPath, path)
-      await rm(backupPath, { force: true })
+      if (existsSync(path)) renameSync(path, backupPath)
+      renameSync(temporaryPath, path)
+      rmSync(backupPath, { force: true })
     } catch (replaceError) {
-      if (existsSync(backupPath) && !existsSync(path)) await rename(backupPath, path)
+      if (existsSync(backupPath) && !existsSync(path)) renameSync(backupPath, path)
       throw new Error(`写入功能模块 active 文件失败: ${path}`, { cause: replaceError })
     } finally {
-      await rm(temporaryPath, { force: true })
+      rmSync(temporaryPath, { force: true })
     }
   }
 }
@@ -392,7 +394,12 @@ function moduleCachePayloadName(packageInfo: FunctionalModulePackage): string {
   return packageInfo.format === 'binary' ? packageInfo.entrypoint : ARCHIVE_PAYLOAD_FILE
 }
 
-async function extractTarGz(sourcePath: string, targetDir: string, maxOutputLength: number): Promise<void> {
+async function extractTarGz(
+  sourcePath: string,
+  targetDir: string,
+  maxOutputLength: number,
+  onProgress?: (fraction: number) => void,
+): Promise<void> {
   let tar: Buffer
   try {
     tar = gunzipSync(await readFile(sourcePath), { maxOutputLength })
@@ -403,10 +410,12 @@ async function extractTarGz(sourcePath: string, targetDir: string, maxOutputLeng
   await mkdir(targetDir, { recursive: true })
   const symlinks: Array<{ path: string; target: string }> = []
   let offset = 0
+  let lastReportedPercent = 0
   while (offset + 512 <= tar.length) {
     const header = tar.subarray(offset, offset + 512)
     if (header.every((byte) => byte === 0)) {
       await validateArchiveSymlinks(targetDir, symlinks)
+      onProgress?.(1)
       return
     }
 
@@ -463,6 +472,13 @@ async function extractTarGz(sourcePath: string, targetDir: string, maxOutputLeng
       throw new Error(`tar.gz 功能模块不支持的条目类型: ${String.fromCharCode(type)}`)
     }
     offset = dataStart + Math.ceil(size / 512) * 512
+    if (onProgress) {
+      const percent = Math.floor(offset / tar.length * 100)
+      if (percent > lastReportedPercent && percent < 100) {
+        lastReportedPercent = percent
+        onProgress(percent / 100)
+      }
+    }
   }
 
   throw new Error('tar.gz 功能模块缺少结束标记')

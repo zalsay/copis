@@ -84,6 +84,7 @@ export function CopisCreationWebView(): React.ReactElement {
   const [startError, setStartError] = useState<string | null>(null)
   const [installingModule, setInstallingModule] = useState(false)
   const [installProgressText, setInstallProgressText] = useState<string | null>(null)
+  const [installPercentage, setInstallPercentage] = useState(0)
   const [creationSubView, setCreationSubView] = useState<CreationSubView>(null)
   const [dshSidebarWidth, setDshSidebarWidth] = useState(280)
 
@@ -377,6 +378,7 @@ export function CopisCreationWebView(): React.ReactElement {
         const moduleStatus = await window.electronAPI.checkFunctionalModule('dsh')
         if (shouldInstallDshModule(moduleStatus)) {
           setInstallingModule(true)
+          setInstallPercentage(0)
           setInstallProgressText(moduleStatus.installed
             ? `发现创造模式 v${moduleStatus.availableVersion ?? '新版本'}，正在更新...`
             : '正在准备安装创造模式模块...')
@@ -388,6 +390,7 @@ export function CopisCreationWebView(): React.ReactElement {
           const previousRuntime = await window.electronAPI.dshCordis.getStatus()
           if (previousRuntime.running) await window.electronAPI.dshCordis.stop()
           setInstallProgressText('创造模式模块已更新，正在启动 Web+...')
+          setInstallPercentage(100)
         }
       }
 
@@ -441,12 +444,14 @@ export function CopisCreationWebView(): React.ReactElement {
 
     try {
       setInstallingModule(true)
+      setInstallPercentage(0)
       setInstallProgressText('正在准备安装创造模式模块...')
       setStartError(null)
 
       const moduleStatus = await window.electronAPI.installFunctionalModule({ name: 'dsh' })
       if (moduleStatus.installed) {
         setInstallProgressText('模块安装完成，正在启动创造模式...')
+        setInstallPercentage(100)
         await ensureServiceRunning()
       } else {
         setStartError(moduleStatus.error || '创造模式模块安装未完成，请重试。')
@@ -464,16 +469,19 @@ export function CopisCreationWebView(): React.ReactElement {
   useEffect(() => {
     if (!installingModule || !window.electronAPI?.onFunctionalModuleProgress) return
     const unsubscribe = window.electronAPI.onFunctionalModuleProgress((payload) => {
-      if (payload.name === 'dsh') {
-        const percent = Math.round((payload.progress ?? 0) * 100)
+      if (payload.name === 'dsh' && payload.phase !== 'error') {
+        setInstallPercentage(Math.round(payload.progress * 100))
         if (payload.phase === 'manifest') {
           setInstallProgressText('正在获取模块更新信息...')
         } else if (payload.phase === 'download') {
-          setInstallProgressText(`正在下载创造模式模块 (${percent}%)...`)
+          const percent = payload.totalBytes && payload.downloadedBytes !== undefined
+            ? `（${Math.round(payload.downloadedBytes / payload.totalBytes * 100)}%）`
+            : ''
+          setInstallProgressText(`正在下载创造模式模块${percent}...`)
         } else if (payload.phase === 'verify') {
           setInstallProgressText('正在验证模块完整性...')
         } else if (payload.phase === 'install') {
-          setInstallProgressText('正在解压并安装模块...')
+          setInstallProgressText(`${payload.detail}。首次安装可能需要几分钟。`)
         } else if (payload.phase === 'activate') {
           setInstallProgressText('正在激活创造模式模块...')
         } else if (payload.phase === 'done') {
@@ -491,7 +499,7 @@ export function CopisCreationWebView(): React.ReactElement {
   }, [ensureServiceRunning])
 
   const isReady = status.running && Boolean(status.url)
-  const isActualError = !isReady && !starting && Boolean(startError || status.error || installingModule)
+  const isActualError = !isReady && !starting && !installingModule && Boolean(startError || status.error)
   const isLoading = !isReady && !isActualError
   const errorMessage = startError || status.error || ''
   const isMissingDsh = isDshModuleMissingError(errorMessage)
@@ -510,34 +518,44 @@ export function CopisCreationWebView(): React.ReactElement {
                 <Loader2 className="w-5 h-5 animate-spin absolute -bottom-1 -right-1 text-[var(--creation-ui-primary)]" />
               </div>
               <div>
-                <h3 className="text-base font-semibold text-foreground">正在启动 Copis 创造模式</h3>
+                <h3 className="text-base font-semibold text-foreground">
+                  {installingModule ? '正在安装创造模式模块' : '正在启动 Copis 创造模式'}
+                </h3>
                 <p className="text-xs text-muted-foreground mt-1 max-w-sm">
-                  加载微内核插件体系与原生 Chromium 视图容器...
+                  {installingModule
+                    ? installProgressText || '正在准备安装创造模式模块...'
+                    : '正在启动创造模式服务...'}
                 </p>
               </div>
+              {installingModule && (
+                <div className="flex w-full max-w-xs items-center gap-3">
+                  <div
+                    role="progressbar"
+                    aria-label="创造模式模块安装进度"
+                    aria-valuenow={installPercentage}
+                    aria-valuetext={installProgressText ?? undefined}
+                    className="h-2 flex-1 overflow-hidden rounded-full bg-[var(--creation-ui-primary-background)]"
+                  >
+                    <div
+                      className="h-full rounded-full bg-[var(--creation-ui-primary)] transition-[width] duration-200"
+                      style={{ width: `${installPercentage}%` }}
+                    />
+                  </div>
+                  <span className="w-10 text-right text-xs tabular-nums text-muted-foreground">{installPercentage}%</span>
+                </div>
+              )}
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center h-full gap-4 text-center px-6">
-              <div
-                className={cn(
-                  'w-12 h-12 rounded-2xl flex items-center justify-center transition-colors',
-                  installingModule
-                    ? 'bg-[var(--creation-ui-primary-background)] text-[var(--creation-ui-primary)]'
-                    : 'bg-destructive/10 text-destructive',
-                )}
-              >
-                {installingModule ? (
-                  <Loader2 className="w-6 h-6 animate-spin" />
-                ) : (
-                  <AlertCircle className="w-6 h-6" />
-                )}
+              <div className="w-12 h-12 rounded-2xl flex items-center justify-center bg-destructive/10 text-destructive">
+                <AlertCircle className="w-6 h-6" />
               </div>
               <div>
                 <h3 className="text-base font-semibold text-foreground">
-                  {installingModule ? '正在安装创造模式模块' : 'Copis 创造模式启动失败'}
+                  Copis 创造模式启动失败
                 </h3>
                 <p className="text-xs text-muted-foreground mt-1 max-w-md">
-                  {formatCreationErrorMessage(installProgressText || errorMessage)}
+                  {formatCreationErrorMessage(errorMessage)}
                 </p>
               </div>
               <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
@@ -546,22 +564,16 @@ export function CopisCreationWebView(): React.ReactElement {
                     variant="default"
                     size="sm"
                     onClick={handleInstallModule}
-                    disabled={installingModule}
                     className="titlebar-no-drag bg-[var(--creation-ui-primary)] text-white hover:bg-[var(--creation-ui-primary)]/90 shadow-sm"
                   >
-                    {installingModule ? (
-                      <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                    ) : (
-                      <Download className="w-3.5 h-3.5 mr-1.5" />
-                    )}
-                    {installingModule ? '正在安装创造模式模块...' : '安装创造模式模块'}
+                    <Download className="w-3.5 h-3.5 mr-1.5" />
+                    安装创造模式模块
                   </Button>
                 )}
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={handleRetry}
-                  disabled={installingModule}
                   className="titlebar-no-drag"
                 >
                   <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
@@ -575,7 +587,6 @@ export function CopisCreationWebView(): React.ReactElement {
                       console.error('[CopisCreationWebView] 打开官网失败:', error)
                     })
                   }}
-                  disabled={installingModule}
                   className="titlebar-no-drag"
                 >
                   <ExternalLink className="w-3.5 h-3.5 mr-1.5" />

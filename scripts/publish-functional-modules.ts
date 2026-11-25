@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { desktopModuleInputs } from './prepare-desktop-extras'
 import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -51,6 +52,7 @@ const REQUIRED_PUBLISHED_MODULES = [
 ] as const
 
 async function main(): Promise<void> {
+  const desktopExtras = hasFlag('--desktop-extras')
   const rustOnly = hasFlag('--rust') || process.env.COPIS_RUST_ONLY === '1'
   const officeCliOnly = hasFlag('--officecli') || process.env.COPIS_OFFICECLI_ONLY === '1'
   const nodeRuntimeOnly = hasFlag('--node-runtime') || process.env.COPIS_NODE_RUNTIME_ONLY === '1'
@@ -64,8 +66,8 @@ async function main(): Promise<void> {
   const platform = parsePlatform(getOption('--platform') ?? process.env.COPIS_MODULE_PLATFORM ?? process.platform)
   const arch = parseArchitecture(getOption('--arch') ?? process.env.COPIS_MODULE_ARCH ?? process.arch)
   if (chromeDesktopCliOnly && platform !== 'darwin') throw new Error('chrome-desktop-cli 仅支持 macOS (darwin)')
-  if (Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) + Number(pythonRuntimeOnly) + Number(agentlyCliOnly) + Number(dshOnly) + Number(codexCliOnly) + Number(chromeDesktopCliOnly) > 1) {
-    throw new Error('--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli、--dsh、--codex-cli 与 --chrome-desktop-cli 不能同时使用')
+  if (Number(desktopExtras) + Number(rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) + Number(pythonRuntimeOnly) + Number(agentlyCliOnly) + Number(dshOnly) + Number(codexCliOnly) + Number(chromeDesktopCliOnly) > 1) {
+    throw new Error('--desktop-extras、--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli、--dsh、--codex-cli 与 --chrome-desktop-cli 不能同时使用')
   }
 
   const secretId = requiredEnv('COS_SECRET_ID')
@@ -152,7 +154,7 @@ async function main(): Promise<void> {
       : getOption('--codex-cli-archive')
         ?? process.env.COPIS_CODEX_CLI_ARCHIVE?.trim()
         ?? join(electronDir, 'resources/codex-cli', `${platform}-${arch}.tar.gz`)
-    const modules = applyFunctionalModuleVersionLocks(buildFunctionalModuleBinaryInputs({
+    const modules = desktopExtras ? desktopModuleInputs(platform, arch, version) : applyFunctionalModuleVersionLocks(buildFunctionalModuleBinaryInputs({
       rustOnly,
       officeCliOnly,
       nodeRuntimeOnly,
@@ -207,10 +209,10 @@ async function main(): Promise<void> {
     }
     const releaseInput = {
       channel,
-      clientMinVersion: getOption('--client-min-version')
+      clientMinVersion: desktopExtras ? undefined : getOption('--client-min-version')
         ?? process.env.COPIS_MODULE_CLIENT_MIN_VERSION?.trim()
         ?? packageMetadata.version,
-      clientUpdate: readClientUpdate(),
+      clientUpdate: desktopExtras ? undefined : readClientUpdate(),
       clientUpdatePlatform: { platform, arch },
       publicBaseUrl,
       prefix,
@@ -739,7 +741,7 @@ export function buildFunctionalModuleBinaryInputs(
   const chromeDesktopCliOnly = input.chromeDesktopCliOnly ?? false
   if (chromeDesktopCliOnly && input.platform !== 'darwin') throw new Error('chrome-desktop-cli 仅支持 macOS (darwin)')
   if (Number(input.rustOnly) + Number(officeCliOnly) + Number(nodeRuntimeOnly) + Number(alipayBotOnly) + Number(playwrightCoreOnly) + Number(pythonRuntimeOnly) + Number(agentlyCliOnly) + Number(dshOnly) + Number(codexCliOnly) + Number(chromeDesktopCliOnly) > 1) {
-    throw new Error('--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli、--dsh、--codex-cli 与 --chrome-desktop-cli 不能同时使用')
+    throw new Error('--desktop-extras、--rust、--officecli、--node-runtime、--alipay-bot、--playwright-core、--python-runtime、--agently-cli、--dsh、--codex-cli 与 --chrome-desktop-cli 不能同时使用')
   }
   const modules: FunctionalModuleBinaryInput[] = []
   if (!officeCliOnly && !nodeRuntimeOnly && !alipayBotOnly && !playwrightCoreOnly && !pythonRuntimeOnly && !agentlyCliOnly && !dshOnly && !codexCliOnly && !chromeDesktopCliOnly) {

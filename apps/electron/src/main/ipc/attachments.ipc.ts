@@ -7,7 +7,7 @@ import { readAttachmentAsBase64, openFileDialog, openFileOrFolderDialog } from '
 import { saveFilesToAgentSession, saveFilesToWorkspaceFiles } from '../lib/agent-service'
 import { getWorkspaceFilesDir } from '../lib/config-paths'
 import { getAgentWorkspaceBySlug, getAgentWorkspaceSourceRoot } from '../lib/agent-workspace-manager'
-import { getBundledResourcesDir } from '../lib/bundled-resources'
+import { getBrandLogoDirectory, getBundledResourcesDir } from '../lib/bundled-resources'
 
 export function registerAttachmentsIpcHandlers(): void {
   // ===== 附件管理相关 =====
@@ -49,6 +49,13 @@ export function registerAttachmentsIpcHandlers(): void {
     }
   )
 
+  ipcMain.handle(ATTACHMENT_IPC_CHANNELS.GET_BRAND_LOGO_DIRECTORY_URL, async () => {
+    const dir = getBrandLogoDirectory()
+    if (!existsSync(join(dir, 'copis-black.png'))) return null
+    const { registerCopisDirectoryPath } = await import('../lib/local-file-protocol')
+    return registerCopisDirectoryPath(dir)
+  })
+
   // 保存应用内置资源文件到用户选择的位置（原生 Save As 对话框）
   ipcMain.handle(
     ATTACHMENT_IPC_CHANNELS.SAVE_RESOURCE_FILE_AS,
@@ -58,8 +65,9 @@ export function registerAttachmentsIpcHandlers(): void {
       const { join, normalize, sep, extname: pathExtname } = await import('node:path')
 
       // 解析到应用内置 resources 目录（dev 用 __dirname/resources，prod 用 process.resourcesPath）
-      const resourcesDir = normalize(getBundledResourcesDir())
-      const fullPath = normalize(join(resourcesDir, resourceRelativePath))
+      const isBrandLogo = /^copis-logos\/copis-[a-z0-9-]+\.png$/.test(resourceRelativePath)
+      const resourcesDir = normalize(isBrandLogo ? getBrandLogoDirectory() : getBundledResourcesDir())
+      const fullPath = normalize(join(resourcesDir, isBrandLogo ? basename(resourceRelativePath) : resourceRelativePath))
 
       // 安全校验：防止路径穿越（追加 sep 防止 resources-evil 绕过）
       if (!fullPath.startsWith(resourcesDir + sep)) {

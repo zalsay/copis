@@ -20,7 +20,7 @@ compression: normal
 
 # ASAR 打包配置
 # 启用 ASAR 归档，仅解包 native addon 和必须从真实文件系统读取的资源。
-# Pi Worker 已编译进 resources/bin/{platform}-{arch}/copis(.exe)，纯 JS 依赖保留在 app.asar 中。
+# Pi Worker 作为独立功能模块分发。
 asar: true
 asarUnpack:
   - "node_modules/@silvia-odwyer/**"
@@ -33,9 +33,11 @@ npmRebuild: false
 
 # 通用文件配置
 files:
-  - dist/**/*
-  # 打包版通过自包含 copis(.exe) 启动 Pi Worker；JS Worker 仅供开发热重载。
-  - "!dist/pi-rpc-worker.cjs"
+  - dist/renderer/**/*
+  - dist/main.cjs
+  - dist/preload.cjs
+  - dist/dsh-bridge-preload.cjs
+  - dist/web-javascript-prompt-preload.cjs
   # 排除 build:resources 脚本拷到 dist/resources 的副本（electron-builder 已通过
   # buildResources 从 resources/ 直接使用 icon/plist，避免产物里重复打包一份）
   - "!dist/resources/**"
@@ -47,6 +49,7 @@ files:
   # 排除 workspace 包的 symlink（代码已被 esbuild/Vite 打包到 dist/ 中）
   - "!node_modules/@copis/**"
   # 排除明确只在开发/构建期使用的大体积包。
+  - "!node_modules/pi-web-access/**"
   - "!node_modules/electron/**"
   - "!node_modules/electron-builder/**"
   - "!node_modules/electronmon/**"
@@ -71,38 +74,12 @@ extraResources:
     to: dsh-plugins
     filter:
       - "**/*"
-  # copis CLI 自包含二进制（build:cli 按平台/架构用 bun build --compile 产出到
-  # resources/bin/{platform}-{arch}/copis(.exe)）。
-  # 运行时由主进程注入 COPIS_CLI 环境变量，暴露给 skill / Agent 调用。
-  - from: resources/bin
-    to: bin
-    filter:
-      - "**/*"
-      - "!copis-http-api-server"
-      - "!copis-http-api-server.exe"
-      # Chrome 组件只经功能模块发布；同时排除旧构建遗留的 helper。
-      - "!**/chrome-desktop-helper"
-      - "!**/copis-chrome"
-      - "!**/copis-chrome-helper"
-  # 默认 Skills 模板（首次启动时同步到 ~/.copis/default-skills/）
-  - from: default-skills
-    to: default-skills
-    filter:
-      - "**/*"
-  # 默认 Pi 扩展（pi-web-access 等）：worker 是自包含 Bun 二进制，无法读取
-  # app.asar 内的 node_modules，扩展与其依赖闭包必须落在真实磁盘目录。
-  - from: resources/pi-extensions
-    to: pi-extensions
-    filter:
-      - "**/*"
-  # 教程文件（教程查看器 + 欢迎对话使用）
-  - from: resources/tutorial.md
-    to: tutorial.md
-  # Copis 品牌 Logo 素材（品牌素材下载功能使用）
+  # 核心托盘图标在可选素材安装前也必须可用。
   - from: resources/copis-logos
     to: copis-logos
     filter:
-      - "**/*"
+      - "iconTemplate.png"
+      - "iconTemplate@2x.png"
   # 默认 Dock 图标（macOS app.dock.setIcon 使用）
   - from: resources/icon.png
     to: icon.png
@@ -110,8 +87,6 @@ extraResources:
     to: icon.ico
   - from: resources/icon.icns
     to: icon.icns
-  - from: resources/cursor_rainbow.svg
-    to: cursor_rainbow.svg
 
 # ============================================
 # macOS 配置

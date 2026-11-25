@@ -21,12 +21,15 @@ describe('功能模块设置页模型', () => {
       'python-runtime',
       'agently-cli',
       'dsh',
+      'pi-worker',
+      'pi-web-extension',
+      'default-resources',
       'codex-cli',
       'chrome-desktop-cli',
     ])
     expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'node-runtime')?.required).toBe(true)
     expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'rust-http-api')?.required).toBe(true)
-    expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'officecli')?.required).toBe(true)
+    expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'officecli')?.required).toBe(false)
     expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'alipay-bot')?.required).toBe(true)
     expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'playwright-core')?.required).toBe(true)
     expect(FUNCTIONAL_MODULE_DEFINITIONS.find((item) => item.name === 'python-runtime')?.required).toBe(true)
@@ -42,6 +45,9 @@ describe('功能模块设置页模型', () => {
       'Python 3.12 运行环境',
       'Agent QQ 邮箱 CLI',
       '创造模式',
+      'Pi Worker 与 Copis CLI',
+      'Pi 联网扩展',
+      '默认技能和素材',
       '专业模式',
       'MCC · Chrome 桌面自动化',
     ])
@@ -75,7 +81,7 @@ describe('功能模块设置页模型', () => {
       name: 'officecli',
       displayName: 'Office 文档支持',
       installed: false,
-      required: true,
+      required: false,
       error: null,
     })
   })

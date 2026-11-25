@@ -26,6 +26,7 @@
     "prepare:codex-cli-module": "bun run scripts/prepare-codex-cli-module.ts",
     "prepare:officecli-module": "bun run scripts/prepare-officecli-module.ts",
     "build:functional-module-manifest": "bun run scripts/build-functional-module-manifest.ts",
+    "prepare:desktop-extras": "bun run scripts/prepare-desktop-extras.ts",
     "publish:functional-modules": "bun run scripts/publish-functional-modules.ts",
     "publish:app-updates": "bun run scripts/publish-app-updates.ts",
     "publish:windows-installer": "bun run scripts/publish-windows-installer.ts",

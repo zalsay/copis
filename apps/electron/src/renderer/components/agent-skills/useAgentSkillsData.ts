@@ -28,7 +28,6 @@ import {
   saveWorkspaceMcpConfig as persistWorkspaceMcpConfig,
   setBuiltinMcpEnabled as updateBuiltinMcpEnabled,
 } from '@/lib/workspace-mcp-api'
-import { builtinSkillCatalog } from './builtin-skill-catalog'
 
 export interface AgentSkillsData {
   /** 当前工作区（未选中时为 null） */
@@ -90,19 +89,8 @@ export function useAgentSkillsData(): AgentSkillsData {
           return []
         }),
       ])
-      const builtinBySlug = new Map(builtinSkillCatalog.map((skill) => [skill.slug, skill]))
-      const mergedSkills = skillList.map((skill) => {
-        const bundledSkill = builtinBySlug.get(skill.slug)
-        return bundledSkill?.displayName && !skill.displayName?.trim()
-          ? { ...skill, displayName: bundledSkill.displayName }
-          : skill
-      })
-      const knownSlugs = new Set(mergedSkills.map((skill) => skill.slug))
-      for (const skill of builtinSkillCatalog) {
-        if (knownSlugs.has(skill.slug)) continue
-        mergedSkills.push(skill)
-        knownSlugs.add(skill.slug)
-      }
+      const mergedSkills = [...skillList]
+      const knownSlugs = new Set(skillList.map((skill) => skill.slug))
       for (const skill of mapInstalledMarketSkills(marketItems)) {
         if (knownSlugs.has(skill.slug)) continue
         mergedSkills.push(skill)
@@ -111,7 +99,7 @@ export function useAgentSkillsData(): AgentSkillsData {
       setMcpConfig(config)
       setSkills(mergedSkills)
       setSkillsDir(dir)
-      setDefaultSkillSlugs(new Set([...defaultSlugs, ...builtinSkillCatalog.map((skill) => skill.slug)]))
+      setDefaultSkillSlugs(new Set(defaultSlugs))
       setBuiltinMcpServers(builtinServers)
     } catch (error) {
       console.error('[Agent 技能] 加载工作区配置失败:', error)

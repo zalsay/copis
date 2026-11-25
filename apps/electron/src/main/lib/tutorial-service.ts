@@ -6,20 +6,16 @@
 
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { app } from 'electron'
+import { getBundledResourcesDir } from './bundled-resources'
 
 /**
  * 获取教程文件路径
  *
  * 开发模式：从 monorepo 根目录读取
- * 生产模式：从 extraResources 读取
+ * 生产模式：从已安装的默认技能和素材模块读取
  */
 function getTutorialFilePath(): string {
-  if (app.isPackaged) {
-    return join(process.resourcesPath, 'tutorial.md')
-  }
-  // 开发模式：resources/ 经 build:resources 复制到 dist/resources/
-  return join(__dirname, 'resources/tutorial.md')
+  return join(getBundledResourcesDir(), 'tutorial.md')
 }
 
 /**

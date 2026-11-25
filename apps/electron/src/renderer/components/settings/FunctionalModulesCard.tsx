@@ -143,7 +143,7 @@ export function FunctionalModulesCard(): React.ReactElement {
           const canInstall = !notPublished && (!status.installed || status.updateAvailable)
           const canCheck = notPublished || (status.installed && !status.updateAvailable)
           const issueColor = status.error ? 'text-destructive' : 'text-amber-600 dark:text-amber-400'
-          const actionLabel = status.updateAvailable ? '更新' : status.installed ? '检查更新' : '安装'
+          const actionLabel = !status.installed ? '安装' : status.updateAvailable ? '更新' : '检查更新'
           const ActionIcon = status.installed && !status.updateAvailable ? RefreshCw : Download
           const stateText = isBusy && progress
             ? getFunctionalModuleProgressText(progress)

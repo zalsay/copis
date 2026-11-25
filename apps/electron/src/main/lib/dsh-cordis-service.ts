@@ -127,7 +127,7 @@ export function resolveDefaultSkillsSourceDir(): string | null {
     getDefaultSkillsDir(),
   ]
   if (typeof process !== 'undefined' && (process as any).resourcesPath) {
-    candidates.unshift(join((process as any).resourcesPath, 'default-skills'))
+    candidates.unshift(join(getBundledResourcesDir(), 'default-skills'))
   }
   for (const c of candidates) {
     if (existsSync(c)) return c

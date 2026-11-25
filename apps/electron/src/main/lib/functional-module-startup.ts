@@ -34,7 +34,6 @@ const HEALTH_PROGRESS_START = 0.95
 const HEALTH_PROGRESS_END = 1
 const REQUIRED_MODULES: readonly FunctionalModuleName[] = [
   'node-runtime',
-  'officecli',
   'alipay-bot',
   'rust-http-api',
   'playwright-core',
@@ -103,10 +102,6 @@ export function assertRequiredModuleArtifacts(
   options: { allowMissingPlaywrightCore?: boolean } = {},
 ): void {
   const byName = new Map(artifacts.map((artifact) => [artifact.name, artifact]))
-  const officeCli = byName.get('officecli')
-  if (!officeCli) throw new Error('组件清单缺少必要的 Office 文档支持')
-  if (!officeCli.required) throw new Error('Office 文档支持必须是必要组件')
-
   const rustApi = byName.get('rust-http-api')
   if (!rustApi) throw new Error('组件清单缺少必要的系统核心模块')
   if (!rustApi.required) throw new Error('系统核心模块必须是必要组件')
@@ -249,7 +244,7 @@ async function runRequiredModuleStartup(
             artifactOverride: artifact,
             onProgress: emitModuleProgress,
           })
-          if (name === 'node-runtime' || name === 'officecli' || name === 'alipay-bot' || name === 'playwright-core' || name === 'python-runtime') {
+          if (name === 'node-runtime' || name === 'alipay-bot' || name === 'playwright-core' || name === 'python-runtime') {
             httpApiRuntimeDependenciesUpdated = true
           }
         }
@@ -279,7 +274,7 @@ async function runRequiredModuleStartup(
         ...(artifact ? {
           availableVersion: artifact.version,
           updateAvailable: false,
-          required: artifact.required,
+          required: status.required,
         } : {}),
       }
     })

@@ -68,6 +68,7 @@ export const ATTACHMENT_IPC_CHANNELS = {
   /** 另存图片到用户选择的位置。 */
   SAVE_IMAGE_AS: 'attachment:save-image-as',
   /** 保存应用内置资源文件到用户选择的位置。 */
+  GET_BRAND_LOGO_DIRECTORY_URL: 'attachment:get-brand-logo-directory-url',
   SAVE_RESOURCE_FILE_AS: 'attachment:save-resource-file-as',
   /** 删除附件。 */
   DELETE_ATTACHMENT: 'attachment:delete',

@@ -45,7 +45,7 @@ describe('Copis 自包含运行时构建', () => {
       outDir: '/repo/apps/electron/resources/bin/darwin-arm64',
     })).toEqual([{
       source: '/repo/node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm',
-      destination: '/repo/apps/electron/resources/bin/darwin-arm64/photon_rs_bg.wasm',
+      destination: join('/repo/apps/electron/resources/bin/darwin-arm64', 'photon_rs_bg.wasm'),
     }])
   })
 
@@ -58,7 +58,10 @@ describe('Copis 自包含运行时构建', () => {
 
     expect(asarSection).not.toContain('- "node_modules/**/*"')
     expect(asarSection).not.toContain('- "dist/pi-rpc-worker.cjs"')
-    expect(config).toContain('- "!dist/pi-rpc-worker.cjs"')
+    expect(config).not.toContain('- dist/**/*')
+    for (const directory of ['default-skills', 'resources/pi-extensions', 'resources/bin']) {
+      expect(config).not.toContain('- from: ' + directory)
+    }
     expect(config).toContain('- "!node_modules/**/*.map"')
     expect(config).toContain('- "!node_modules/**/*.d.ts"')
   })

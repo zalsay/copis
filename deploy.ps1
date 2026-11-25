@@ -467,12 +467,8 @@ function Read-DshVersion {
     } catch {
         throw "DeepSeek Harness (dsh) 归档 package.json 无效：$Archive"
     }
-    if ($metadata.version -isnot [string] -or $metadata.version -notmatch '^\d+\.\d+\.\d+') {
+    if ($metadata.version -isnot [string] -or $metadata.version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$') {
         throw "DeepSeek Harness (dsh) package.json 缺少合法版本：$Archive"
-    }
-    $versionMatch = [regex]::Match($metadata.version, '^(\d+\.\d+\.\d+)')
-    if ($versionMatch.Success) {
-        return $versionMatch.Groups[1].Value
     }
     return [string]$metadata.version
 }
@@ -653,7 +649,10 @@ if (-not $RustOnly -and -not $OfficeCliOnly -and -not $NodeRuntimeOnly -and -not
     }
     if (-not (Test-Path -LiteralPath $dshArchivePath -PathType Leaf)) { throw "DeepSeek Harness (dsh) archive was not found: $dshArchivePath" }
     $dshArchivePath = (Resolve-Path -LiteralPath $dshArchivePath).Path
-    $dshVersionValue = if ([string]::IsNullOrWhiteSpace($DshVersion)) { Read-DshVersion $dshArchivePath } else { $DshVersion.Trim() }
+    $dshVersionValue = Read-DshVersion $dshArchivePath
+    if (-not [string]::IsNullOrWhiteSpace($DshVersion) -and $DshVersion.Trim() -cne $dshVersionValue) {
+        throw "DSH 归档版本 $dshVersionValue 与指定版本 $DshVersion 不一致：$dshArchivePath"
+    }
 }
 
 $codexCliArchivePath = $null

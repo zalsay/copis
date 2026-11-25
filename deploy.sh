@@ -547,11 +547,10 @@ read_dsh_version() {
   fi
   "$BUN_BIN" -e '
     const metadata = JSON.parse(process.argv[1])
-    if (typeof metadata.version !== "string" || !/^\d+\.\d+\.\d+/.test(metadata.version)) {
+    if (typeof metadata.version !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(metadata.version)) {
       throw new Error("dsh package.json 缺少 version")
     }
-    const match = metadata.version.match(/^(\d+\.\d+\.\d+)/)
-    console.log(match ? match[1] : metadata.version)
+    console.log(metadata.version)
   ' "$runtime_metadata"
 }
 
@@ -728,7 +727,11 @@ if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" !=
   if [[ ! -f "$DSH_ARCHIVE" ]]; then
     fail "未找到 DeepSeek Harness (dsh) 归档：$DSH_ARCHIVE"
   fi
-  DSH_VERSION="${DSH_VERSION:-$(read_dsh_version "$DSH_ARCHIVE")}"
+  DSH_ARCHIVE_VERSION="$(read_dsh_version "$DSH_ARCHIVE")"
+  if [[ -n "$DSH_VERSION" && "$DSH_VERSION" != "$DSH_ARCHIVE_VERSION" ]]; then
+    fail "DSH 归档版本 $DSH_ARCHIVE_VERSION 与指定版本 $DSH_VERSION 不一致：$DSH_ARCHIVE"
+  fi
+  DSH_VERSION="$DSH_ARCHIVE_VERSION"
 fi
 
 if [[ "$RUST_ONLY" != '1' && "$OFFICECLI_ONLY" != '1' && "$NODE_RUNTIME_ONLY" != '1' && "$ALIPAY_BOT_ONLY" != '1' && "$PLAYWRIGHT_CORE_ONLY" != '1' && "$PYTHON_RUNTIME_ONLY" != '1' && "$AGENTLY_CLI_ONLY" != '1' && "$DSH_ONLY" != '1' && "$CHROME_DESKTOP_CLI_ONLY" != '1' ]]; then

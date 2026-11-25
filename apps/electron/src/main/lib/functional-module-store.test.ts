@@ -115,6 +115,22 @@ describe('Copis 功能模块存储', () => {
     expect(await cacheFunctionalModule(paths, packageInfo, source)).toBe(payloadPath)
   })
 
+  test('同时安装两个可选模块时两个入口都保持激活', async () => {
+    const root = createRoot()
+    const paths = getFunctionalModulePaths(root)
+    const source = join(root, 'source')
+    writeFileSync(source, 'officecli-binary')
+    const modules = ['pi-worker', 'pi-web-extension'].map(name => ({
+      ...officeCliPackage('b'.repeat(64)), name, required: false,
+    }))
+    const versions = await Promise.all(modules.map(async item => {
+      await cacheFunctionalModule(paths, item, source)
+      return assembleFunctionalModule(paths, item)
+    }))
+    await Promise.all(modules.map((item, index) => activateFunctionalModule(paths, item, versions[index]!)))
+    for (const item of modules) expect(readActiveFunctionalModule(paths, item.name)?.name).toBe(item.name)
+  })
+
   test('Given 完整模块缓存 When 组装并激活版本 Then active 记录只指向已完成的版本目录', async () => {
     const root = createRoot()
     const source = join(root, 'officecli-source')
@@ -135,7 +151,7 @@ describe('Copis 功能模块存储', () => {
     expect(active?.path).toBe(join(versionDir, packageInfo.entrypoint))
   })
 
-  test('Given 带 ./ 根目录条目的 Node runtime 归档 When 组装 Then 正确激活入口文件', async () => {
+  test('Given 带 ./ 根目录条目的归档 When 组装 Then 在激活前报告递增的解压进度', async () => {
     const root = createRoot()
     const archive = createTarGzWithRootDirectory({
       'bin/node': 'node-runtime-binary',
@@ -155,7 +171,15 @@ describe('Copis 功能模块存储', () => {
     }
 
     await cacheFunctionalModule(paths, packageInfo, source)
-    const versionDir = await assembleFunctionalModule(paths, packageInfo)
+    const progress: number[] = []
+    const versionDir = await assembleFunctionalModule(paths, packageInfo, (fraction) => {
+      expect(readActiveFunctionalModule(paths, 'node-runtime')).toBeUndefined()
+      progress.push(fraction)
+    })
+    expect(progress[0]).toBeGreaterThan(0)
+    expect(progress[0]).toBeLessThan(1)
+    expect(progress).toEqual([...new Set(progress)].sort((left, right) => left - right))
+    expect(progress.at(-1)).toBe(1)
     await activateFunctionalModule(paths, packageInfo, versionDir)
 
     expect(readActiveFunctionalModule(paths, 'node-runtime')?.path).toBe(join(versionDir, 'bin/node'))

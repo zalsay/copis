@@ -36,7 +36,7 @@ interface FunctionalModuleDefinition {
 const MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[] = [
   { name: 'node-runtime', displayName: 'Node.js 运行环境', required: true },
   { name: 'rust-http-api', displayName: '系统核心模块', required: true },
-  { name: 'officecli', displayName: 'Office 文档支持', required: true },
+  { name: 'officecli', displayName: 'Office 文档支持', required: false },
   { name: 'alipay-bot', displayName: '支付宝智能体 CLI', required: true },
   { name: 'playwright-core', displayName: '浏览器自动化内核', required: true },
   { name: 'python-runtime', displayName: 'Python 3.12 运行环境', required: true },
@@ -44,6 +44,9 @@ const MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[] = [
   { name: 'dsh', displayName: '创造模式', required: false },
   { name: 'chrome-desktop-cli', displayName: 'MCC · Chrome 桌面自动化', required: false, platforms: ['darwin'] },
   { name: 'codex-cli', displayName: '专业模式', required: false },
+  { name: 'pi-worker', displayName: 'Pi Worker 与 Copis CLI', required: false },
+  { name: 'pi-web-extension', displayName: 'Pi 联网扩展', required: false },
+  { name: 'default-resources', displayName: '默认技能和素材', required: false },
 ]
 
 export type FunctionalModuleFetch = (
@@ -136,7 +139,7 @@ export function getFunctionalModuleStatus(
     path: active?.path ?? null,
     availableVersion: null,
     updateAvailable: false,
-    required: active?.required ?? definition.required,
+    required: definition.required,
     error: localIssue === 'upgrade-required' ? '旧版 Chrome 组件需要升级为 MCC'
       : localIssue ? '本地 MCC 组件文件异常，暂不可用' : null,
     ...(localIssue ? { localIssue } : {}),
@@ -219,7 +222,8 @@ function ensureRequiredArtifact(
       throw new Error('Chrome 模块必须使用对应版本和架构的 macOS 可选归档与顶层入口')
     }
   }
-  return artifact
+  // 启动依赖由当前客户端定义；旧清单可能将 OfficeCLI 和邮箱工具标为必选。
+  return { ...artifact, required: definition.required }
 }
 
 export async function installFunctionalModule(
@@ -347,7 +351,14 @@ async function prepareFunctionalModuleInner(
 
     emitProgress({ phase: 'install', detail: `正在安装 ${definition.displayName}`, progress: 0.84, version: artifact.version })
     await cacheFunctionalModule(paths, packageInfo, artifactPath)
-    const versionDir = await assembleFunctionalModule(paths, packageInfo)
+    const versionDir = await assembleFunctionalModule(paths, packageInfo, input.name === 'dsh'
+      ? (fraction) => emitProgress({
+        phase: 'install',
+        detail: `正在解压并安装创造模式模块（${Math.round(fraction * 100)}%）`,
+        progress: 0.84 + fraction * 0.09,
+        version: artifact.version,
+      })
+      : undefined)
     const prepared = { artifact, packageInfo, versionDir }
     await validateChromeDesktopModule(prepared)
     return prepared

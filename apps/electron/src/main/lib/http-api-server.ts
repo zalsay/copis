@@ -15,7 +15,7 @@ import type {
   FunctionalModulePlatform,
   FunctionalModuleProgressPayload,
 } from '@copis/shared'
-import { getBundledCliPath, getConfigDir, getFunctionalModulesDir } from './config-paths'
+import { getDesktopModuleEntry, getBundledCliPath, getConfigDir, getFunctionalModulesDir } from './config-paths'
 import { resolveAgentlyCliCommand, resolveAgentlyCliNode } from './agently-cli-runtime'
 import { resolveDshCommand, resolveDshNode } from './dsh-runtime'
 import { isFunctionalModuleIncompatibleClientError } from './functional-module-manifest'
@@ -64,9 +64,13 @@ export const HTTP_API_PORT = resolveCopisHttpApiPort({
   isPackaged: app.isPackaged === true,
 })
 
-/** 默认 Pi 扩展目录：打包模式在 resources/pi-extensions，开发模式在 dist/resources/pi-extensions。 */
+/** 默认 Pi 扩展目录：打包模式从已激活的联网扩展模块读取，开发模式在 dist/resources/pi-extensions。 */
 function resolvePiExtensionsDir(): string | undefined {
-  const resourcesDir = app.isPackaged ? process.resourcesPath : join(__dirname, 'resources')
+  if (app.isPackaged) {
+    const entry = getDesktopModuleEntry('pi-web-extension')
+    return entry ? resolve(dirname(entry), '../..') : undefined
+  }
+  const resourcesDir = join(__dirname, 'resources')
   const candidate = join(resourcesDir, 'pi-extensions')
   return existsSync(candidate) ? candidate : undefined
 }
@@ -811,11 +815,11 @@ export function startHttpApiServer(options: HttpApiServerOptions = {}): void {
   activateManagedProcess(managed)
   const workerAvailability = classifyPiWorkerAvailability(managed.workerLaunch, managed.workerRuntime, managed.packaged)
   if (!workerAvailability.available && workerAvailability.reason === 'pi_worker_entry_missing') {
-    console.warn('[HTTP API] 找不到 Pi RPC Worker，将暂时只提供非 Agent HTTP API。请重新构建 Copis 运行时。')
+    console.warn('[HTTP API] 找不到 Pi RPC Worker，将暂时只提供非 Agent HTTP API。请在「关于 / 更新」安装 Pi Worker 后重启应用。')
   } else if (!workerAvailability.available && workerAvailability.reason.startsWith('pi_worker_runtime_')) {
     console.warn('[HTTP API] Pi Worker runtime 暂不可用；Agent Worker 将保持离线。请检查当前 Copis runtime。')
   } else if (!workerAvailability.available) {
-    console.warn('[HTTP API] Pi Worker 入口不可用；Agent Worker 将保持离线。请重新构建 Copis 运行时。')
+    console.warn('[HTTP API] Pi Worker 入口不可用；Agent Worker 将保持离线。请在「关于 / 更新」安装 Pi Worker 后重启应用。')
   }
   console.log(`[HTTP API] Rust 服务已启动：http://${HTTP_API_HOST}:${options.port ?? HTTP_API_PORT}${managed.workerLaunch ? `，Pi Worker: ${managed.workerLaunch.path}` : ''}`)
 }

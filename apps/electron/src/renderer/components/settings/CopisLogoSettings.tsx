@@ -12,35 +12,16 @@ import { SettingsSection } from './primitives/SettingsSection'
 import { SettingsCard } from './primitives/SettingsCard'
 import { Button } from '@/components/ui/button'
 
-// ===== Logo 资源导入 =====
+import { atom, useAtom, useSetAtom } from 'jotai'
+import { workingSettingsSectionAtom } from '@/atoms/working-atoms'
 
-// 基础色系
-import copisBlackLogo from '@/assets/bots/copis-logos/copis-black.png'
-import copisWhiteLogo from '@/assets/bots/copis-logos/copis-white.png'
-import copisBlueLogo from '@/assets/bots/copis-logos/copis-blue.png'
-import copisPurpleLogo from '@/assets/bots/copis-logos/copis-purple.png'
-import copisGradientLogo from '@/assets/bots/copis-logos/copis-gradient.png'
-import copisTransparentLogo from '@/assets/bots/copis-logos/copis-transparent.png'
+const logoDirectoryAtom = atom<string | null | undefined>(undefined)
 
-// 潘通年度色
-import copisCoralLogo from '@/assets/bots/copis-logos/copis-coral.png'
-import copisVeriPeriLogo from '@/assets/bots/copis-logos/copis-veri-peri.png'
-import copisVivaMagentaLogo from '@/assets/bots/copis-logos/copis-viva-magenta.png'
-import copisMochaMousseLogo from '@/assets/bots/copis-logos/copis-mocha-mousse.png'
-import copisEmeraldLogo from '@/assets/bots/copis-logos/copis-emerald.png'
-
-// 科技风格
-import copis8bitLogo from '@/assets/bots/copis-logos/copis-8bit.png'
-import copisCyberpunkLogo from '@/assets/bots/copis-logos/copis-cyberpunk.png'
-import copisFuturisticLogo from '@/assets/bots/copis-logos/copis-futuristic.png'
-
-// ===== 类型 =====
 
 interface LogoVariant {
   id: string
   name: string
   description: string
-  src: string
   resourcePath: string
   previewBg: string
 }
@@ -53,7 +34,6 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     id: 'black',
     name: '经典黑',
     description: '黑色背景，适合浅色界面',
-    src: copisBlackLogo,
     resourcePath: 'copis-logos/copis-black.png',
     previewBg: 'bg-neutral-900',
   },
@@ -61,7 +41,6 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     id: 'white',
     name: '纯白版',
     description: '白色背景，适合深色界面',
-    src: copisWhiteLogo,
     resourcePath: 'copis-logos/copis-white.png',
     previewBg: 'bg-white',
   },
@@ -69,7 +48,6 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     id: 'blue',
     name: '品牌蓝',
     description: '深蓝背景，适合正式场合',
-    src: copisBlueLogo,
     resourcePath: 'copis-logos/copis-blue.png',
     previewBg: 'bg-blue-900',
   },
@@ -77,7 +55,6 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     id: 'purple',
     name: '紫色版',
     description: '紫色调，个性风格',
-    src: copisPurpleLogo,
     resourcePath: 'copis-logos/copis-purple.png',
     previewBg: 'bg-purple-900',
   },
@@ -85,7 +62,6 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     id: 'gradient',
     name: '渐变版',
     description: '蓝紫渐变背景',
-    src: copisGradientLogo,
     resourcePath: 'copis-logos/copis-gradient.png',
     previewBg: 'bg-gradient-to-br from-blue-600 to-purple-600',
   },
@@ -93,7 +69,6 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     id: 'transparent',
     name: '透明底',
     description: '无背景，可叠加任意颜色',
-    src: copisTransparentLogo,
     resourcePath: 'copis-logos/copis-transparent.png',
     previewBg: 'bg-[repeating-conic-gradient(#e5e7eb_0%_25%,#fff_0%_50%)] bg-[length:16px_16px]',
   },
@@ -102,7 +77,6 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     id: 'coral',
     name: '珊瑚橘',
     description: 'Pantone 2019 Living Coral',
-    src: copisCoralLogo,
     resourcePath: 'copis-logos/copis-coral.png',
     previewBg: 'bg-[#FF6F61]',
   },
@@ -110,7 +84,6 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     id: 'veri-peri',
     name: '长春花蓝',
     description: 'Pantone 2022 Very Peri',
-    src: copisVeriPeriLogo,
     resourcePath: 'copis-logos/copis-veri-peri.png',
     previewBg: 'bg-[#6667AB]',
   },
@@ -118,7 +91,6 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     id: 'viva-magenta',
     name: '非凡洋红',
     description: 'Pantone 2023 Viva Magenta',
-    src: copisVivaMagentaLogo,
     resourcePath: 'copis-logos/copis-viva-magenta.png',
     previewBg: 'bg-[#BB2649]',
   },
@@ -126,7 +98,6 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     id: 'mocha-mousse',
     name: '摩卡慕斯',
     description: 'Pantone 2025 Mocha Mousse',
-    src: copisMochaMousseLogo,
     resourcePath: 'copis-logos/copis-mocha-mousse.png',
     previewBg: 'bg-[#A47764]',
   },
@@ -134,7 +105,6 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     id: 'emerald',
     name: '翡翠绿',
     description: 'Pantone 2013 Emerald',
-    src: copisEmeraldLogo,
     resourcePath: 'copis-logos/copis-emerald.png',
     previewBg: 'bg-[#009473]',
   },
@@ -143,7 +113,6 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     id: '8bit',
     name: '8bit 像素风',
     description: '复古像素游戏风格',
-    src: copis8bitLogo,
     resourcePath: 'copis-logos/copis-8bit.png',
     previewBg: 'bg-[#1a1a2e]',
   },
@@ -151,7 +120,6 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     id: 'cyberpunk',
     name: '赛博朋克',
     description: '霓虹赛博风格',
-    src: copisCyberpunkLogo,
     resourcePath: 'copis-logos/copis-cyberpunk.png',
     previewBg: 'bg-[#0d0221]',
   },
@@ -159,7 +127,6 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
     id: 'futuristic',
     name: '未来质感',
     description: '金属全息科技风',
-    src: copisFuturisticLogo,
     resourcePath: 'copis-logos/copis-futuristic.png',
     previewBg: 'bg-[#4a4a4a]',
   },
@@ -167,7 +134,7 @@ const LOGO_VARIANTS: readonly LogoVariant[] = [
 
 // ===== 组件 =====
 
-function LogoCard({ logo }: { logo: LogoVariant }): React.ReactElement {
+function LogoCard({ logo, baseUrl }: { logo: LogoVariant; baseUrl: string }): React.ReactElement {
   const handleDownload = React.useCallback(async () => {
     try {
       const saved = await window.electronAPI.saveResourceFileAs(
@@ -191,7 +158,7 @@ function LogoCard({ logo }: { logo: LogoVariant }): React.ReactElement {
         )}
       >
         <img
-          src={logo.src}
+          src={`${baseUrl}/copis-${logo.id}.png`}
           alt={logo.name}
           className="w-full h-full object-contain"
           draggable={false}
@@ -215,17 +182,32 @@ function LogoCard({ logo }: { logo: LogoVariant }): React.ReactElement {
 }
 
 export function CopisLogoSettings(): React.ReactElement {
+  const [baseUrl, setBaseUrl] = useAtom(logoDirectoryAtom)
+  const setSection = useSetAtom(workingSettingsSectionAtom)
+  React.useEffect(() => {
+    let active = true
+    window.electronAPI.getBrandLogoDirectoryUrl().then(
+      (url) => { if (active) setBaseUrl(url) },
+      () => { if (active) setBaseUrl(null) },
+    )
+    return () => { active = false }
+  }, [setBaseUrl])
+
   return (
     <>
       <SettingsSection
         title="品牌 Logo"
         description="下载 Copis Logo 用作机器人头像，让用户一眼认出你的 AI 助手"
       >
-        <div className="grid grid-cols-3 gap-4">
+        {baseUrl ? <div className="grid grid-cols-3 gap-4">
           {LOGO_VARIANTS.map((logo) => (
-            <LogoCard key={logo.id} logo={logo} />
+            <LogoCard key={logo.id} logo={logo} baseUrl={baseUrl} />
           ))}
-        </div>
+        </div> : baseUrl === null && (
+          <Button variant="outline" onClick={() => setSection('about')}>
+            前往关于 / 更新安装默认技能和素材
+          </Button>
+        )}
       </SettingsSection>
 
       <div className="my-6 border-t border-border/50" />

@@ -534,6 +534,7 @@ export interface ElectronAPI {
 
   /** 保存应用内置资源文件到用户选择的位置（原生 Save As 对话框） */
   saveResourceFileAs: (resourceRelativePath: string, defaultFilename: string) => Promise<boolean>
+  getBrandLogoDirectoryUrl: () => Promise<string | null>
 
   /** 将 Memory 导出内容保存到用户选择的位置（原生 Save As 对话框） */
   saveMemoryExport: (input: import('@copis/shared').MemoryExportFileInput) => Promise<boolean>
@@ -1737,6 +1738,7 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(ATTACHMENT_IPC_CHANNELS.SAVE_IMAGE_AS, localPath, defaultFilename)
   },
 
+  getBrandLogoDirectoryUrl: () => ipcRenderer.invoke(ATTACHMENT_IPC_CHANNELS.GET_BRAND_LOGO_DIRECTORY_URL),
   saveResourceFileAs: (resourceRelativePath: string, defaultFilename: string) => {
     return ipcRenderer.invoke(ATTACHMENT_IPC_CHANNELS.SAVE_RESOURCE_FILE_AS, resourceRelativePath, defaultFilename)
   },

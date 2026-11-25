@@ -28,8 +28,8 @@ export const FUNCTIONAL_MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[
   {
     name: 'officecli',
     displayName: 'Office 文档支持',
-    description: '帮助 Copis 读取和处理 Word、Excel、PowerPoint 文档',
-    required: true,
+    description: '处理 Word、Excel、PowerPoint 文档；安装后重启应用生效',
+    required: false,
   },
   {
     name: 'alipay-bot',
@@ -52,7 +52,7 @@ export const FUNCTIONAL_MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[
   {
     name: 'agently-cli',
     displayName: 'Agent QQ 邮箱 CLI',
-    description: '为 Copis 提供 Agent 原生邮箱 (@agent.qq.com) 收发与管理能力',
+    description: '为 Copis 提供 Agent 原生邮箱 (@agent.qq.com) 收发与管理能力；安装后重启应用生效',
     required: false,
   },
   {
@@ -61,6 +61,9 @@ export const FUNCTIONAL_MODULE_DEFINITIONS: readonly FunctionalModuleDefinition[
     description: '为 Copis 提供创造模式智能体运行时与工具执行环境',
     required: false,
   },
+  { name: 'pi-worker', displayName: 'Pi Worker 与 Copis CLI', description: '运行 Pi Agent 和 Copis 命令行；安装后重启应用生效', required: false },
+  { name: 'pi-web-extension', displayName: 'Pi 联网扩展', description: '为 Pi Worker 提供网页搜索和读取能力；安装后重启应用生效', required: false },
+  { name: 'default-resources', displayName: '默认技能和素材', description: '安装技能模板、教程、品牌素材和浏览器光标；重启应用后同步技能', required: false },
   {
     name: 'codex-cli',
     displayName: '专业模式',

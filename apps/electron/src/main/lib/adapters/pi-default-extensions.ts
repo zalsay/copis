@@ -6,7 +6,7 @@
  *
  * 路径解析策略：
  * - 打包模式：Electron 主进程注入 COPIS_PI_EXTENSIONS_DIR，指向
- *   process.resourcesPath/pi-extensions（真实磁盘目录，worker 可直接读取）；
+ *   已激活的 Pi 联网扩展目录；
  * - 开发模式：从 worker bundle 位置向上解析 node_modules 中的扩展包。
  */
 

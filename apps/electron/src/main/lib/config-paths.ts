@@ -5,10 +5,10 @@
  * 所有 Copis 用户配置存储在 ~/.copis/ 目录下。
  */
 
-import { join, basename } from 'node:path'
+import { join, basename, dirname } from 'node:path'
 import { lstatSync, mkdirSync, existsSync, cpSync, renameSync, rmSync, readdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { resolveBundledCliPath } from './compiled-runtime-path'
+import { getFunctionalModulePaths, readActiveFunctionalModule } from './functional-module-store'
 import { rmSyncWithRetry } from './fs-retry'
 
 interface ElectronAppPathProvider {
@@ -580,24 +580,21 @@ export function getFunctionalModulesDir(): string {
   return dir
 }
 
-/**
- * 获取打包进 App 的 copis CLI 二进制路径。
- *
- * 打包模式下从 process.resourcesPath/bin 取当前平台架构的 copis 文件（electron-builder
- * extraResources 注入）；旧版无架构文件名仍作为兼容回退。
- * 开发模式下没有编译二进制——返回 undefined，由调用方回退到源码运行
- * （bun apps/cli/src/index.ts）。
- *
- * @returns 二进制绝对路径；不存在时返回 undefined
- */
+/** 获取已下载并完成激活的桌面能力入口。 */
+export function getDesktopModuleEntry(name: string): string | undefined {
+  return readActiveFunctionalModule(getFunctionalModulePaths(getFunctionalModulesDir()), name)?.path
+}
+
+/** 素材包以根目录的 tutorial.md 作为入口。缺省路径只用于内置应用图标等。 */
+export function getDesktopResourcesDir(): string {
+  const entry = getDesktopModuleEntry('default-resources')
+  return entry ? dirname(entry) : process.resourcesPath
+}
+
+/** Worker 与 CLI 是同一个可独立更新的组合运行时。 */
 export function getBundledCliPath(): string | undefined {
   const { app } = require('electron')
-  if (!app.isPackaged) return undefined
-  return resolveBundledCliPath({
-    resourcesPath: process.resourcesPath,
-    platform: process.platform,
-    arch: process.arch,
-  })
+  return app.isPackaged ? getDesktopModuleEntry('pi-worker') : undefined
 }
 
 /**
@@ -714,7 +711,7 @@ function defaultSkillCopyFilter(src: string): boolean {
 /**
  * 从 app bundle 同步默认 Skills 到 ~/.copis/default-skills/
  *
- * 打包模式下从 process.resourcesPath/default-skills 复制。
+ * 打包模式下从已安装的素材模块复制。
  * 开发模式下从源码 default-skills/ 目录复制。
  *
  * - 缺失的 Skill：直接复制
@@ -724,7 +721,7 @@ function defaultSkillCopyFilter(src: string): boolean {
 export function seedDefaultSkills(): void {
   const { app } = require('electron')
   const bundledDir = app.isPackaged
-    ? join(process.resourcesPath, 'default-skills')
+    ? join(getDesktopResourcesDir(), 'default-skills')
     : join(__dirname, '../default-skills')
   const userDir = getDefaultSkillsDir()
 

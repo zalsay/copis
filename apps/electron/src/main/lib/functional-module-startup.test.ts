@@ -119,7 +119,7 @@ describe('登录后功能模块启动契约', () => {
     expect(toStartupError(new Error('系统核心模块未通过运行检查'))).toBe('系统核心模块运行检查未通过，请重试')
   })
 
-  test('OfficeCLI 和 Rust API 都必须由 manifest 标记为必选', () => {
+  test('OfficeCLI 可选时仍检查必要的 Node.js 运行环境', () => {
     const artifacts: FunctionalModuleArtifact[] = [
       {
         name: 'officecli',
@@ -147,7 +147,7 @@ describe('登录后功能模块启动契约', () => {
       },
     ]
 
-    expect(() => assertRequiredModuleArtifacts(artifacts)).toThrow('Office 文档支持必须是必要组件')
+    expect(() => assertRequiredModuleArtifacts(artifacts)).toThrow('组件清单缺少必要的 Node.js 运行环境')
   })
 
   test('启动清单缺少浏览器自动化内核时拒绝启动', () => {
@@ -183,7 +183,7 @@ describe('登录后功能模块启动契约', () => {
     expect(() => assertRequiredModuleArtifacts(artifacts, { allowMissingPlaywrightCore: true })).not.toThrow()
   })
 
-  test('自动启动流程拒绝可选 OfficeCLI manifest', async () => {
+  test('自动启动流程拒绝缺少 Node.js 的 manifest', async () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'copis-functional-module-startup-'))
     try {
       const manifest = {
@@ -274,13 +274,19 @@ describe('登录后功能模块启动契约', () => {
     }
   })
 
+  const win = process.platform === 'win32'
+  const platform = win ? 'win32' : 'darwin'
+  const nodeEntry = win ? 'bin/node.exe' : 'bin/node'
+  const pythonEntry = win ? 'bin/python.exe' : 'bin/python'
+  const alipayEntry = win ? 'bin/alipay-bot.cmd' : 'bin/alipay-bot'
+
   test('完整启动流程先完成模块阶段，再用最后 5% 检查正式 API health', async () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'copis-functional-module-startup-success-'))
     const officeContent = 'officecli-startup-binary'
     const rustContent = 'rust-http-api-startup-binary'
-    const nodeContent = createTarGz({ 'bin/node': 'node-runtime-binary', 'bin/npm': 'npm-runtime-launcher' })
+    const nodeContent = createTarGz({ [nodeEntry]: 'node-runtime-binary', 'bin/npm': 'npm-runtime-launcher' })
     const alipayBotContent = createTarGz({
-      'bin/alipay-bot': 'alipay-bot-launcher',
+      [alipayEntry]: 'alipay-bot-launcher',
       'runtime/dist/cli.js': 'alipay-bot-cli',
     })
     const playwrightCoreContent = createTarGz({
@@ -288,7 +294,7 @@ describe('登录后功能模块启动契约', () => {
       'node_modules/playwright-core/package.json': '{"name":"playwright-core","version":"1.62.1"}',
     })
     const pythonRuntimeContent = createTarGz({
-      'bin/python': 'python-runtime',
+      [pythonEntry]: 'python-runtime',
       'bin/python3.12': 'python-runtime-3.12',
     })
     const moduleArtifact = (name: 'officecli' | 'rust-http-api', version: string, content: string) => ({
@@ -304,7 +310,7 @@ describe('登录后功能模块启动契约', () => {
       schema: 1,
       channel: 'stable',
       platforms: {
-        'darwin-arm64': {
+        [platform + '-arm64']: {
           modules: {
             'node-runtime': {
               version: '22.21.1',
@@ -312,7 +318,7 @@ describe('登录后功能模块启动契约', () => {
               sha256: createHash('sha256').update(nodeContent).digest('hex'),
               size: nodeContent.byteLength,
               format: 'tar.gz' as const,
-              entrypoint: 'bin/node',
+              entrypoint: nodeEntry,
               required: true,
             },
             officecli: moduleArtifact('officecli', '1.0.143', officeContent),
@@ -322,7 +328,7 @@ describe('登录后功能模块启动契约', () => {
               sha256: createHash('sha256').update(alipayBotContent).digest('hex'),
               size: alipayBotContent.byteLength,
               format: 'tar.gz' as const,
-              entrypoint: 'bin/alipay-bot',
+              entrypoint: alipayEntry,
               required: true,
             },
             'rust-http-api': moduleArtifact('rust-http-api', '0.1.2', rustContent),
@@ -341,7 +347,7 @@ describe('登录后功能模块启动契约', () => {
               sha256: createHash('sha256').update(pythonRuntimeContent).digest('hex'),
               size: pythonRuntimeContent.byteLength,
               format: 'tar.gz' as const,
-              entrypoint: 'bin/python',
+              entrypoint: pythonEntry,
               required: true,
             },
           },
@@ -363,10 +369,10 @@ describe('登录后功能模块启动契约', () => {
         file,
         child,
         port: options.env?.COPIS_HTTP_API_PORT,
-        runtimeRoot: typeof options.env?.COPIS_RUNTIME_ROOT === 'string' ? options.env.COPIS_RUNTIME_ROOT : undefined,
-        pythonRuntimeRoot: typeof options.env?.COPIS_PYTHON_RUNTIME_ROOT === 'string' ? options.env.COPIS_PYTHON_RUNTIME_ROOT : undefined,
-        alipayBotCli: typeof options.env?.COPIS_ALIPAY_BOT_CLI === 'string' ? options.env.COPIS_ALIPAY_BOT_CLI : undefined,
-        alipayBotNode: typeof options.env?.COPIS_ALIPAY_BOT_NODE === 'string' ? options.env.COPIS_ALIPAY_BOT_NODE : undefined,
+        runtimeRoot: typeof options.env?.COPIS_RUNTIME_ROOT === 'string' ? options.env.COPIS_RUNTIME_ROOT.replaceAll('\\', '/') : undefined,
+        pythonRuntimeRoot: typeof options.env?.COPIS_PYTHON_RUNTIME_ROOT === 'string' ? options.env.COPIS_PYTHON_RUNTIME_ROOT.replaceAll('\\', '/') : undefined,
+        alipayBotCli: typeof options.env?.COPIS_ALIPAY_BOT_CLI === 'string' ? options.env.COPIS_ALIPAY_BOT_CLI.replaceAll('\\', '/') : undefined,
+        alipayBotNode: typeof options.env?.COPIS_ALIPAY_BOT_NODE === 'string' ? options.env.COPIS_ALIPAY_BOT_NODE.replaceAll('\\', '/') : undefined,
       })
       return child as unknown as ReturnType<HttpApiSpawn>
     }) as HttpApiSpawn
@@ -377,7 +383,7 @@ describe('登录后功能模块启动契约', () => {
         return new Response(JSON.stringify({ ok: true, service: 'copis-http-api' }), { status: 200 })
       }
       if (input.endsWith('/officecli-1.0.143')) {
-        return new Response(officeContent, { status: 200, headers: { 'content-length': String(Buffer.byteLength(officeContent)) } })
+        throw new Error('启动时不应下载 OfficeCLI')
       }
       if (input.endsWith('/rust-http-api-0.1.2')) {
         return new Response(rustContent, { status: 200, headers: { 'content-length': String(Buffer.byteLength(rustContent)) } })
@@ -401,7 +407,7 @@ describe('登录后功能模块启动契约', () => {
       const statuses = await ensureRequiredFunctionalModules({
         rootDir: join(rootDir, 'modules'),
         manifestUrl: 'https://download.example.com/manifest.json',
-        platform: 'darwin',
+        platform,
         arch: 'arm64',
         clientVersion: '0.0.4',
         fetchImpl,
@@ -414,7 +420,7 @@ describe('登录后功能模块启动契约', () => {
       expect(statuses.map((item) => [item.name, item.installed, item.required])).toEqual([
         ['node-runtime', true, true],
         ['rust-http-api', true, true],
-        ['officecli', true, true],
+        ['officecli', false, false],
         ['alipay-bot', true, true],
         ['playwright-core', true, true],
         ['python-runtime', true, true],
@@ -422,6 +428,9 @@ describe('登录后功能模块启动契约', () => {
         ['dsh', false, false],
         ...(process.platform === 'darwin' ? [['chrome-desktop-cli', false, false]] : []),
         ['codex-cli', false, false],
+        ['pi-worker', false, false],
+        ['pi-web-extension', false, false],
+        ['default-resources', false, false],
       ])
       expect(progress.some((item) => item.phase === 'modules' && item.progress === 0.95)).toBe(true)
       expect(progress.some((item) => item.phase === 'health' && item.progress >= 0.95)).toBe(true)
@@ -429,7 +438,7 @@ describe('登录后功能模块启动契约', () => {
       expect(records.map((record) => record.port)).toEqual(['51741', '51740', '51740'])
       expect(records.some((record) => record.runtimeRoot?.includes('/node-runtime/'))).toBe(true)
       expect(records.some((record) => record.alipayBotCli?.includes('/alipay-bot/'))).toBe(true)
-      expect(records.some((record) => record.alipayBotNode?.endsWith('/bin/node'))).toBe(true)
+      expect(records.some((record) => record.alipayBotNode?.endsWith('/' + nodeEntry))).toBe(true)
       expect(records.some((record) => record.pythonRuntimeRoot?.includes('/python-runtime/'))).toBe(true)
     } finally {
       await stopHttpApiServer(5)
@@ -440,21 +449,21 @@ describe('登录后功能模块启动契约', () => {
   test('依赖模块更新而 Rust API 未更新时，正式 health 检查前重启 Rust 并注入新入口', async () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'copis-functional-module-startup-runtime-refresh-'))
     const modulesRoot = join(rootDir, 'modules')
-    const oldNodeContent = createTarGz({ 'bin/node': 'old-node', 'bin/npm': 'old-npm' })
-    const newNodeContent = createTarGz({ 'bin/node': 'new-node', 'bin/npm': 'new-npm' })
+    const oldNodeContent = createTarGz({ [nodeEntry]: 'old-node', 'bin/npm': 'old-npm' })
+    const newNodeContent = createTarGz({ [nodeEntry]: 'new-node', 'bin/npm': 'new-npm' })
     const oldAlipayBotContent = createTarGz({
-      'bin/alipay-bot': 'old-alipay-bot',
+      [alipayEntry]: 'old-alipay-bot',
       'runtime/dist/cli.js': 'old-cli',
     })
     const newAlipayBotContent = createTarGz({
-      'bin/alipay-bot': 'new-alipay-bot',
+      [alipayEntry]: 'new-alipay-bot',
       'runtime/dist/cli.js': 'new-cli',
     })
     const playwrightCoreContent = createTarGz({
       'node_modules/playwright-core/index.js': 'playwright-core-driver',
       'node_modules/playwright-core/package.json': '{"name":"playwright-core","version":"1.62.1"}',
     })
-    const pythonRuntimeContent = createTarGz({ 'bin/python': 'python-runtime' })
+    const pythonRuntimeContent = createTarGz({ [pythonEntry]: 'python-runtime' })
     const rustContent = 'stable-rust-http-api'
     const packageArtifact = (
       name: 'node-runtime' | 'alipay-bot' | 'rust-http-api' | 'playwright-core' | 'python-runtime',
@@ -470,12 +479,12 @@ describe('登录后功能模块启动契约', () => {
       entrypoint: name === 'rust-http-api'
         ? 'bin/copis-http-api-server'
         : name === 'alipay-bot'
-          ? 'bin/alipay-bot'
+          ? alipayEntry
           : name === 'playwright-core'
             ? 'node_modules/playwright-core/index.js'
             : name === 'python-runtime'
-              ? 'bin/python'
-              : 'bin/node',
+              ? pythonEntry
+              : nodeEntry,
       required: true,
     })
     const oldNode = packageArtifact('node-runtime', '24.19.3', oldNodeContent)
@@ -489,7 +498,7 @@ describe('登录后功能模块启动契约', () => {
       schema: 1,
       channel: 'stable',
       platforms: {
-        'darwin-arm64': {
+        [platform + '-arm64']: {
           modules: {
             'node-runtime': newNode,
             officecli: {
@@ -520,8 +529,8 @@ describe('登录后功能模块启动契约', () => {
       records.push({
         file,
         child,
-        alipayBotCli: typeof options.env?.COPIS_ALIPAY_BOT_CLI === 'string' ? options.env.COPIS_ALIPAY_BOT_CLI : undefined,
-        alipayBotNode: typeof options.env?.COPIS_ALIPAY_BOT_NODE === 'string' ? options.env.COPIS_ALIPAY_BOT_NODE : undefined,
+        alipayBotCli: typeof options.env?.COPIS_ALIPAY_BOT_CLI === 'string' ? options.env.COPIS_ALIPAY_BOT_CLI.replaceAll('\\', '/') : undefined,
+        alipayBotNode: typeof options.env?.COPIS_ALIPAY_BOT_NODE === 'string' ? options.env.COPIS_ALIPAY_BOT_NODE.replaceAll('\\', '/') : undefined,
       })
       return child as unknown as ReturnType<HttpApiSpawn>
     }) as HttpApiSpawn
@@ -559,7 +568,7 @@ describe('登录后功能模块启动契约', () => {
       await ensureRequiredFunctionalModules({
         rootDir: modulesRoot,
         manifestUrl: 'https://download.example.com/manifest.json',
-        platform: 'darwin',
+        platform,
         arch: 'arm64',
         clientVersion: '0.0.4',
         fetchImpl,

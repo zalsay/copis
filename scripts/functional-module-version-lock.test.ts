@@ -15,10 +15,22 @@ describe('功能模块版本锁', () => {
       'alipay-bot': '0.3.40',
       'playwright-core': '1.62.1',
       'agently-cli': '1.0.17',
-      dsh: '0.2.1',
+      dsh: '0.2.2-rc.2',
       'codex-cli': '0.154.1',
       'chrome-desktop-cli': '0.3.6',
     })
+  })
+
+  test('Given DSH 发布候选版 When 比较 COS 版本 Then 保留候选版顺序并拒绝标错版本的归档', () => {
+    const module = { module: 'dsh' as const, version: locks.dsh, platform: 'win32' as const, arch: 'x64' as const, binaryPath: '/tmp/dsh.tar.gz', required: false }
+    expect(() => applyFunctionalModuleVersionLocks([{ ...module, version: '0.2.1' }], locks)).toThrow('与版本锁')
+    const published = (version: string) => ({ schema: 1 as const, channel: 'stable', platforms: {
+      'win32-x64': { modules: { dsh: { version, url: 'https://example/dsh', sha256: 'a'.repeat(64), size: 1, format: 'tar.gz' as const, entrypoint: 'bin/dsh.cmd', required: false } } },
+    } })
+    expect(excludeUnchangedLockedModules([module], published('0.2.2-rc.1'), 'win32', 'x64', locks)).toEqual([module])
+    for (const version of ['0.2.2-rc.2', '0.2.2-rc.5', '0.2.2']) {
+      expect(excludeUnchangedLockedModules([module], published(version), 'win32', 'x64', locks)).toEqual([])
+    }
   })
 
   test('Given 部署参数包含动态版本 When 应用版本锁 Then 始终使用配置版本', () => {

@@ -64,13 +64,13 @@
     "iconv-lite": "^0.6.3",
     "mammoth": "^1.12.0",
     "pdfjs-dist": "^4.10.38",
-    "pi-web-access": "0.22.0",
     "lightweight-charts": "^5.2.1",
     "typebox": "1.1.38",
     "yaml": "^2.7.0",
     "semver": "7.7.3"
   },
   "devDependencies": {
+    "pi-web-access": "0.22.0",
     "@copis/core": "workspace:*",
     "@copis/session-core": "workspace:*",
     "@copis/shared": "workspace:*",
@@ -181,7 +181,7 @@
     "platformVersions": {
       "darwin-arm64": "0.0.101",
       "darwin-x64": "0.0.82",
-      "win32-x64": "0.0.95",
+      "win32-x64": "2.0.0",
       "linux-x64": "0.0.82"
     }
   }

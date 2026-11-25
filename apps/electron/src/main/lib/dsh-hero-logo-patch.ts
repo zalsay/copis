@@ -91,7 +91,7 @@ export function patchDshHeroLogoSource(source: string, lightLogoSvg: string): st
 /** 构建期及已安装模块启动前共用；确保 DSH 探索未至之境标语前的 Logo 更新为新版。 */
 export function patchDshHeroLogoRuntime(runtimeRoot: string, lightLogoPath: string): boolean {
   const entrypoint = join(runtimeRoot, CLIENT_ENTRY)
-  if (!existsSync(entrypoint)) return false
+  if (!existsSync(entrypoint) || !existsSync(lightLogoPath)) return false
   const source = readFileSync(entrypoint, 'utf8')
   const lightLogoSvg = readFileSync(lightLogoPath, 'utf8')
   const patched = patchDshHeroLogoSource(source, lightLogoSvg)
