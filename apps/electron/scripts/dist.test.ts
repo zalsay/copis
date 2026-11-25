@@ -22,11 +22,7 @@ describe('visual distribution build plan', () => {
       'build:preload',
       'build:web-javascript-prompt-preload',
       'build:dsh-bridge-preload',
-      'build:agent-rpc-worker',
       'build:renderer',
-      'build:cli',
-      'copy:pi-extensions',
-      'build:resources',
       'sync:runtime-deps',
       'electron-builder',
     ])
@@ -51,11 +47,7 @@ describe('visual distribution direct run', () => {
     'build:preload',
     'build:web-javascript-prompt-preload',
     'build:dsh-bridge-preload',
-    'build:agent-rpc-worker',
     'build:renderer',
-    'build:cli',
-    'copy:pi-extensions',
-    'build:resources',
     'sync:runtime-deps',
     'electron-builder',
   ]
@@ -117,7 +109,7 @@ describe('visual distribution direct run', () => {
     })
   }
 
-  for (const command of ['copy:pi-extensions', 'sync:runtime-deps']) {
+  for (const command of ['build:dsh-bridge-preload', 'sync:runtime-deps']) {
     test(`Given ${command} 失败 When 发布 Then 不进入 electron-builder`, () => {
       const { calls, results } = runDirect(['--current-arch', '--dmg'], command)
       expect(results.at(-1)?.success).toBe(false)

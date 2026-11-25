@@ -32,15 +32,18 @@ describe('Chrome 独立模块发布入口', () => {
     expect(merged.platforms['win32-x64']).toEqual(existing.platforms['win32-x64'])
     expect(merged.platforms['darwin-arm64']?.modules['chrome-desktop-cli']?.required).toBe(false)
   })
-  test('Given Electron 默认构建与安装包 When 检查边界 Then 不编译或捆绑 Chrome 发布归档并保留 Pi worker', () => {
+  test('Given Electron 默认构建与安装包 When 检查边界 Then 仅在独立模块构建中编译 Worker 和扩展', () => {
     const root = join(import.meta.dir, '..')
     const pkg = JSON.parse(readFileSync(join(root, 'apps/electron/package.json'), 'utf8'))
     expect(pkg.scripts['build:chrome-desktop-helper']).toBeUndefined()
     expect(pkg.scripts.build).not.toContain('build:chrome-desktop-helper')
     expect(pkg.scripts.build).not.toContain('chrome-desktop-cli-module')
-    expect(pkg.scripts.build).toContain('build:agent-rpc-worker')
+    for (const optionalStep of ['build:agent-rpc-worker', 'build:cli', 'copy:pi-extensions', 'build:resources']) {
+      expect(pkg.scripts.build).not.toContain(optionalStep)
+    }
+    expect(pkg.scripts.start).toContain('build:agent-rpc-worker')
     expect(readFileSync(join(root, 'apps/electron/electron-builder.yml'), 'utf8')).toContain('!resources/chrome-desktop-cli/**')
-    expect(readFileSync(join(root, 'apps/electron/electron-builder.yml'), 'utf8')).toContain('!**/chrome-desktop-helper')
+    expect(readFileSync(join(root, 'apps/electron/electron-builder.yml'), 'utf8')).not.toContain('from: resources/bin')
     expect(readFileSync(join(root, '.gitignore'), 'utf8')).toContain('apps/electron/resources/chrome-desktop-cli/')
     for (const path of ['deploy.sh', 'deploy.ps1', 'scripts/build-functional-module-manifest.ts', 'scripts/publish-functional-modules.ts']) {
       expect(readFileSync(join(root, path), 'utf8')).toContain('--chrome-desktop-cli')

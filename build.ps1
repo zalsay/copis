@@ -227,7 +227,7 @@ if (-not $SkipInstall) {
     }
 }
 
-Write-Host '正在构建 Windows EXE（不编译 Rust HTTP API；安装程序 COS 上传可通过 -SkipCosUpload 跳过）...'
+Write-Host '正在构建 Windows 主程序及必需资源；可选组件由独立模块构建脚本生成。'
 Push-Location $appDir
 try {
     & $bunPath run dist:win

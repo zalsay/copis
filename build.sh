@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 默认只构建应用，不编译 Rust API；构建后上传固定文件名安装包，可用 --skip-cos-upload 跳过。
+# 使用桌面端共享的精简构建流程生成 DMG，可用 --skip-cos-upload 跳过发布。
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$ROOT_DIR/apps/electron"
@@ -9,6 +9,8 @@ APP_DIR="$ROOT_DIR/apps/electron"
 show_help() {
   cat <<'EOF'
 Copis macOS 构建脚本
+
+DMG 包含主程序和必需资源，可选组件由独立模块构建脚本生成。
 
 用法：
   ./build.sh [选项]
@@ -165,14 +167,15 @@ if [[ "$NEW_VERSION" -eq 1 && "$VERSION_ALIGNED_TO_MIN" -eq 0 ]]; then
 fi
 
 cd "$APP_DIR"
-echo "[Copis] 默认构建仅包含 macOS 应用，不编译 Rust API。"
-echo "[Copis] 开始构建 macOS $MAC_ARCH DMG"
-bun run build
-bun run sync:runtime-deps
-bun scripts/package-electron-builder.ts --mac --"$MAC_ARCH" --config.mac.target=dmg
+echo "[Copis] 开始构建 macOS $MAC_ARCH 精简 DMG，版本 $APP_VERSION"
+bun run dist:mac --"$MAC_ARCH" --config.mac.target=dmg
 
 # electron-builder 可能复用旧的 out 目录；上传前必须确认应用包内版本与本次构建版本一致。
-APP_BUNDLE="$APP_DIR/out/mac-$MAC_ARCH/Copis.app"
+# electron-builder 默认架构 x64 的目录名没有架构后缀。
+APP_BUNDLE="$APP_DIR/out/mac/Copis.app"
+if [[ "$MAC_ARCH" == "arm64" ]]; then
+  APP_BUNDLE="$APP_DIR/out/mac-arm64/Copis.app"
+fi
 APP_INFO_PLIST="$APP_BUNDLE/Contents/Info.plist"
 if [[ ! -f "$APP_INFO_PLIST" ]]; then
   echo "[Copis] 未找到应用版本信息：$APP_INFO_PLIST" >&2

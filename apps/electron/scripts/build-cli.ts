@@ -1,19 +1,8 @@
 #!/usr/bin/env bun
 /**
- * 编译 copis CLI 与 Pi Worker 为同一个自包含二进制，打进桌面构建。
- *
- * 设计：
- * - 用 `bun build --compile` 把 CLI 和 Pi Worker 打成单个自包含可执行档。
- * - 普通参数进入 CLI；内部 `__pi-worker` 子命令启动 JSONL Worker。
- * - 复用一份 Bun runtime，避免 Electron 安装时解包完整 node_modules。
- * - 输出到 apps/electron/resources/bin/{platform}-{arch}/copis(.exe)，由
- *   electron-builder 经 extraResources 打进 process.resourcesPath/bin/，运行时
- *   由主进程按当前平台和架构选择并注入 COPIS_CLI。
- * - 本机架构编译：CI 每个 runner 即目标平台（mac arm64/x64、win x64、linux），
- *   各自产出宿主架构二进制，与 @anthropic-ai SDK native binary 的分发策略一致，
- *   无需交叉编译。
- *
- * 在 electron app 的 build 链中调用（见 package.json build:cli）。
+ * 为 prepare:desktop-extras 构建当前平台的 pi-worker 模块。
+ * copis(.exe) 共用一份 Bun runtime，普通参数进入 CLI，__pi-worker 启动 JSONL Worker。
+ * 二进制输出到 resources/bin/{platform}-{arch}，随后和 Photon WASM 一起归档。
  */
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, rmSync, statSync, unlinkSync } from 'node:fs'

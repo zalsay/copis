@@ -10,6 +10,12 @@ const rootPackage = JSON.parse(
 }
 
 describe('macOS 构建脚本固定安装程序发布', () => {
+  test('macOS DMG 通过共享分发入口构建，并按目标架构定位应用', () => {
+    expect(buildScript).toContain('bun run dist:mac --"$MAC_ARCH" --config.mac.target=dmg')
+    expect(buildScript).toContain('APP_BUNDLE="$APP_DIR/out/mac/Copis.app"')
+    expect(buildScript).toContain('APP_BUNDLE="$APP_DIR/out/mac-arm64/Copis.app"')
+  })
+
   test('构建后复制为固定文件名，再调用 COS 安装包发布脚本', () => {
     expect(buildScript).toContain('cp -f "$VERSIONED_DMG" "$FIXED_DMG"')
     expect(buildScript).toContain('Copis-$MAC_ARCH.dmg')

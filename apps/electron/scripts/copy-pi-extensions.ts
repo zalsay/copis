@@ -1,8 +1,7 @@
 #!/usr/bin/env bun
 /**
  * 将默认 Pi 扩展（pi-web-access）及其运行时依赖闭包复制到
- * apps/electron/resources/pi-extensions/，供 electron-builder 经 extraResources
- * 打入 process.resourcesPath/pi-extensions。
+ * apps/electron/resources/pi-extensions/，供 prepare:desktop-extras 生成联网扩展归档。
  *
  * 打包后的 Pi Worker 是自包含 Bun 二进制，无法读取 app.asar 内的 node_modules，
  * 因此扩展必须落在真实磁盘目录；jiti 会从扩展入口所在目录向上解析依赖，
