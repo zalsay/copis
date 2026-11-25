@@ -744,6 +744,7 @@ export const WORKING_IPC_CHANNELS = {
   SET_RECEIVE_CHANNEL: 'working:set-receive-channel',
   LIST_ORDERS: 'working:list-orders',
   DELETE_ORDER: 'working:delete-order',
+  OPEN_PURCHASE_TAB: 'working:open-purchase-tab',
   LIST_DIAMOND_PACKAGES: 'working:list-diamond-packages',
   GET_PENDING_DIAMOND_PURCHASE: 'working:get-pending-diamond-purchase',
   CREATE_DIAMOND_PURCHASE: 'working:create-diamond-purchase',

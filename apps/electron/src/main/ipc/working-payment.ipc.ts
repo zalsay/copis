@@ -8,6 +8,10 @@ function isWorkingPaymentIdentifier(value: unknown): value is WorkingPaymentIden
 }
 
 export function registerWorkingPaymentIpcHandlers(): void {
+  ipcMain.handle(WORKING_IPC_CHANNELS.OPEN_PURCHASE_TAB, async (_event, mode: 'diamonds' | 'vip') => {
+    const {openWorkingPurchaseTab} = await import('../lib/working-purchase-tab')
+    await openWorkingPurchaseTab(mode)
+  })
   ipcMain.handle(WORKING_IPC_CHANNELS.LIST_ORDERS, async (_, page?: number, pageSize?: number) => {
     return getWorkingApiClient().listOrders(page, pageSize)
   })

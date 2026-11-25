@@ -42,7 +42,6 @@ import {
 } from '@/atoms/working-atoms'
 import {
   closeWorkingPaymentAtom,
-  openWorkingPaymentAtom,
   requestWorkingPaymentRefreshAtom,
   workingPaymentNoticeAtom,
   workingPaymentRefreshAtom,
@@ -164,7 +163,6 @@ interface CopisWorkingSettingsPanelProps {
 export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanelProps): React.ReactElement {
   const [authState, setAuthState] = useAtom(workingAuthStateAtom)
   const setWorkingVipStatus = useSetAtom(workingVipStatusAtom)
-  const openPayment = useSetAtom(openWorkingPaymentAtom)
   const closePayment = useSetAtom(closeWorkingPaymentAtom)
   const paymentRefresh = useAtomValue(workingPaymentRefreshAtom)
   const paymentNotice = useAtomValue(workingPaymentNoticeAtom)
@@ -296,6 +294,11 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
     setSettings((current) => current ? { ...current, receiveChannel } : current)
   }
 
+  const openPurchase = async (mode: 'diamonds' | 'vip') => {
+    try { await window.electronAPI.openWorkingPurchaseTab(mode) }
+    catch (error) { setNotice(error instanceof Error ? error.message : '打开购买页失败，请重试') }
+  }
+
   const handleLogout = async (): Promise<void> => {
     setLoggingOut(true)
     setError('')
@@ -400,8 +403,8 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
                 copiedLabel={copiedLabel}
                 onNotice={setNotice}
                 onCopyInvite={() => void handleCopyInvite()}
-                onOpenDiamonds={() => openPayment({ mode: 'diamonds' })}
-                onOpenVip={() => openPayment({ mode: 'vip' })}
+                onOpenDiamonds={() => void openPurchase('diamonds')}
+                onOpenVip={() => void openPurchase('vip')}
               />
             )}
             {activeSection === 'model-management' && (
@@ -410,7 +413,7 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
                 accountId={user?.id === undefined && user?.userId === undefined
                   ? undefined
                   : String(user.id ?? user.userId)}
-                onOpenVip={() => openPayment({ mode: 'vip' })}
+                onOpenVip={() => void openPurchase('vip')}
                 onNotice={setNotice}
               />
             )}

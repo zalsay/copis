@@ -162,7 +162,17 @@ export function createWorkingTokenStore(): WorkingTokenStore {
 	}
 }
 
-const workingTokenStore = createWorkingTokenStore()
+const storedCredentials = createWorkingTokenStore()
+const identityListeners = new Set<(id: WorkingUser['id'] | null) => void>()
+export function subscribeWorkingIdentity(listener: (id: WorkingUser['id'] | null) => void): () => void {
+  identityListeners.add(listener)
+  return () => { identityListeners.delete(listener) }
+}
+const workingTokenStore: WorkingTokenStore = {
+  ...storedCredentials,
+  save(...args) { storedCredentials.save(...args); for (const fn of identityListeners) fn(args[1]?.id ?? null) },
+  clear() { storedCredentials.clear(); for (const fn of identityListeners) fn(null) },
+}
 
 export function getWorkingTokenStore(): WorkingTokenStore {
   return workingTokenStore
