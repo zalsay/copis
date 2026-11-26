@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+    <title>正在启动 Copis</title>
+    <style>
+      :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+      body {
+        display: grid;
+        place-items: center;
+        min-height: 100vh;
+        margin: 0;
+        background: Canvas;
+        color: CanvasText;
+      }
+      main { text-align: center; }
+      p { margin: 0 0 16px; }
+      progress { width: 192px; height: 6px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p id="status">Copis 正在准备核心服务</p>
+      <progress aria-labelledby="status"></progress>
+    </main>
+  </body>
+</html>

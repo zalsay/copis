@@ -250,6 +250,10 @@ async function recoverEnabledDingTalkBots(): Promise<void> {
 }
 
 let mainWindow: BrowserWindow | null = null
+let startupWindow: BrowserWindow | null = null
+let mainWindowContentStarted = false
+let ipcRegistrationStarted = false
+const pendingMainWindowMessages: Array<{ channel: string; data: unknown }> = []
 
 /** 获取主窗口实例（供其他模块使用） */
 export function getMainWindow(): BrowserWindow | null {
@@ -302,6 +306,14 @@ function ensureWindowOnScreen(win: BrowserWindow): void {
 
 /** 显示并聚焦主窗口，确保窗口在可见区域；若窗口已销毁则重新创建 */
 function showAndFocusMainWindow(): void {
+  if (!app.isReady() || getIsQuitting()) return
+
+  if (startupWindow && !startupWindow.isDestroyed()) {
+    startupWindow.show()
+    startupWindow.focus()
+    return
+  }
+
   if (process.platform === 'darwin') {
     if (app.dock) app.dock.show()
     app.show()
@@ -392,21 +404,16 @@ function createWindow(): void {
     },
     ...titleBarOptions,
   })
+  mainWindowContentStarted = false
   setWebTabHostWindow(mainWindow)
   setDshHostWindow(mainWindow)
   installWindowsZoomInFallback(mainWindow)
 
-  // Load the renderer
   const isDev = !app.isPackaged
-  if (isDev) {
-    mainWindow.loadURL(DEV_SERVER_URL)
-    mainWindow.webContents.openDevTools()
-  } else {
-    mainWindow.loadFile(join(__dirname, 'renderer', 'index.html'))
-  }
 
   // 窗口就绪后，按保存的状态决定是否最大化
   mainWindow.once('ready-to-show', () => {
+    if (getIsQuitting()) return
     // Windows 在原地升级后可能沿用旧的任务栏图标缓存。窗口就绪时重新设置
     // NativeImage，确保任务栏按钮获得当前版本的 HICON，而不是空白占位图标。
     if (process.platform === 'win32' && appIcon?.isEmpty() === false) {
@@ -419,6 +426,7 @@ function createWindow(): void {
       app.dock.show()
     }
     mainWindow?.show()
+    startupWindow?.destroy()
   })
 
   // 持久化窗口大小和位置（防抖 500ms，避免频繁写入）
@@ -492,13 +500,63 @@ function createWindow(): void {
     disposeWebTabs()
     mainWindow = null
   })
+
+  loadMainWindowContent(mainWindow)
+}
+
+function createStartupWindow(): BrowserWindow {
+  const settings = getSettings()
+  syncNativeThemeSource(settings.themeMode, settings.themeStyle)
+  const window = new BrowserWindow({
+    title: '正在启动 Copis',
+    width: 440,
+    height: 220,
+    resizable: false,
+    maximizable: false,
+    minimizable: false,
+    fullscreenable: false,
+    show: false,
+    webPreferences: { sandbox: true },
+  })
+  if (process.platform !== 'darwin') window.removeMenu()
+  startupWindow = window
+  window.once('ready-to-show', () => {
+    if (!getIsQuitting()) window.show()
+  })
+  window.on('close', (event) => {
+    if (getIsQuitting()) return
+    event.preventDefault()
+    app.quit()
+  })
+  window.once('closed', () => { startupWindow = null })
+  return window
+}
+
+function loadMainWindowContent(window: BrowserWindow): void {
+  if (window.isDestroyed() || mainWindowContentStarted) return
+  mainWindowContentStarted = true
+  const load = app.isPackaged
+    ? window.loadFile(join(__dirname, 'renderer', 'index.html'))
+    : window.loadURL(DEV_SERVER_URL)
+  if (!app.isPackaged) window.webContents.openDevTools()
+  void load.then(() => {
+    if (window.isDestroyed()) return
+    for (const { channel, data } of pendingMainWindowMessages.splice(0)) {
+      window.webContents.send(channel, data)
+    }
+  }).catch((error: unknown) => {
+    if (!window.isDestroyed()) console.error('[启动] 主界面加载失败:', error)
+  })
 }
 
 function sendToMainWindow(channel: string, data?: unknown): void {
   showAndFocusMainWindow()
 
   const win = mainWindow
-  if (!win || win.isDestroyed()) return
+  if (!win || win.isDestroyed() || !mainWindowContentStarted) {
+    pendingMainWindowMessages.push({ channel, data })
+    return
+  }
 
   const send = (): void => {
     if (!win.isDestroyed()) {
@@ -529,16 +587,28 @@ async function bootstrap(): Promise<void> {
   process.env.COPIS_PACKAGED = app.isPackaged ? '1' : '0'
   setCopisVersion(copisVersion)
 
-  // 登录页依赖 Working API；正常情况下先校验/更新 Rust 模块并通过 health，再创建窗口。
-  // 仅当远端声明的最低客户端版本更高时降级为升级提示，避免阻断主窗口启动。
-  await ensureRustHttpApiServerReady()
-
-  // Runtime 检测在 Rust 子进程中异步执行，不阻塞窗口创建和 Electron 主进程。
-  void safeAwait('initializeRuntime', () => initializeRuntime())
-
   // 注册自定义协议 copis-file:// 用于内联预览本地文件。
   // 协议只接受主进程签发的 opaque token，不解析 renderer 提供的绝对路径。
   protocol.handle('copis-file', handleCopisFileRequest)
+
+  // 先设置全局菜单，避免 Windows/Linux 在启动窗口显示后重新挂上菜单栏。
+  Menu.setApplicationMenu(createApplicationMenu())
+
+  // 先显示可原生关闭的启动窗口，核心服务就绪后再加载登录界面。
+  const splash = createStartupWindow()
+  app.on('activate', () => {
+    if (!shouldSuppressVoiceDictationActivate()) showAndFocusMainWindow()
+  })
+  const startupPath = app.isPackaged
+    ? join(__dirname, 'renderer', 'startup.html')
+    : join(app.getAppPath(), 'src', 'renderer', 'public', 'startup.html')
+  await safeAwait('加载启动页', () => splash.loadFile(startupPath))
+  if (splash.isDestroyed() || getIsQuitting()) return
+  await ensureRustHttpApiServerReady()
+  if (splash.isDestroyed() || getIsQuitting()) return
+
+  // Runtime 检测在 Rust 子进程中异步执行。
+  void safeAwait('initializeRuntime', () => initializeRuntime())
 
   // 同步默认 Skills 模板到 ~/.copis/default-skills/
   safeRun('seedDefaultSkills', seedDefaultSkills)
@@ -564,11 +634,8 @@ async function bootstrap(): Promise<void> {
   // 迁移所有工作区的旧 project 目录并清理旧根目录 .context 残留
   safeRun('migrateLegacyAgentWorkspaceProjectDirectories', migrateLegacyAgentWorkspaceProjectDirectories)
 
-  // Create application menu
-  const menu = createApplicationMenu()
-  Menu.setApplicationMenu(menu)
-
   // Register IPC handlers
+  ipcRegistrationStarted = true
   registerIpcHandlers()
   // 注册 DSH Cordis 创造模式内嵌 Web Session 请求头拦截器
   safeRun('registerDshCordisWebSessionHeaders', registerDshCordisWebSessionHeaders)
@@ -590,7 +657,6 @@ async function bootstrap(): Promise<void> {
     }
   }
 
-  // Create main window (will be shown when ready)
   createWindow()
 
   // Create system tray icon
@@ -657,19 +723,6 @@ async function bootstrap(): Promise<void> {
     })
   }
 
-  app.on('activate', () => {
-    if (shouldSuppressVoiceDictationActivate()) {
-      return
-    }
-
-    // 直接检查 mainWindow 引用，避免 getAllWindows() 包含 DevTools 等其他窗口导致误判
-    if (!mainWindow || mainWindow.isDestroyed()) {
-      createWindow()
-    } else {
-      // 窗口已存在但可能被隐藏（macOS 关闭按钮 = hide），重新显示
-      showAndFocusMainWindow()
-    }
-  })
 }
 
 /** 同步启动钩子隔离：单点失败仅记录日志，不阻断启动链。 */
@@ -696,6 +749,7 @@ async function safeAwait(name: string, fn: () => Promise<unknown>): Promise<void
  * 此时仍尝试创建一个降级窗口，让用户至少能看到界面、复制日志、提交反馈。
  */
 function handleBootstrapFailure(err: unknown): void {
+  if (getIsQuitting()) return
   console.error('[启动] bootstrap 致命错误，进入降级模式:', err)
 
   try {
@@ -706,8 +760,15 @@ function handleBootstrapFailure(err: unknown): void {
   }
 
   try {
-    registerIpcHandlers()
-    createWindow()
+    if (!ipcRegistrationStarted) {
+      ipcRegistrationStarted = true
+      registerIpcHandlers()
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      loadMainWindowContent(mainWindow)
+    } else if (!getIsQuitting()) {
+      createWindow()
+    }
   } catch (fallbackErr) {
     console.error('[启动] 降级窗口创建也失败:', fallbackErr)
   }
@@ -722,6 +783,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', (event) => {
+  setQuitting()
   // Rust 是 Pi Worker 唯一控制面。先等待 stop-all 写入每个 Worker stdin，
   // 再进入第二次 before-quit 关闭 HTTP API，避免关闭顺序吞掉停止命令。
   if (!piWorkersStoppedForQuit) {
@@ -751,8 +813,6 @@ app.on('before-quit', (event) => {
     }
     return
   }
-  // 标记正在退出，让 close 事件不再阻止关闭
-  setQuitting()
   // 先保存网页页签恢复状态，再释放原生 WebContentsView。
   saveWebTabsSession()
   stopAllBrowserWorkflowRecordings()

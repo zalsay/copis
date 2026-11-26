@@ -181,7 +181,7 @@
     "platformVersions": {
       "darwin-arm64": "2.0.3",
       "darwin-x64": "2.0.1",
-      "win32-x64": "2.0.1",
+      "win32-x64": "2.0.2",
       "linux-x64": "2.0.1"
     }
   }

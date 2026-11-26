@@ -57,6 +57,7 @@ import {
   type CopisBackendEndpointResolution,
 } from './backend-endpoint-resolver'
 import { redactSensitiveLogValue } from './bridge-log-redaction'
+import { getIsQuitting } from './app-lifecycle'
 
 export const HTTP_API_HOST = COPIS_HTTP_API_HOST
 export const HTTP_API_PORT = resolveCopisHttpApiPort({
@@ -143,6 +144,7 @@ interface RustBridgeRequest {
 }
 
 let httpApiProcess: ChildProcessWithoutNullStreams | null = null
+const candidateHttpApiProcesses = new Set<ChildProcessWithoutNullStreams>()
 let httpApiInternalToken: string | null = null
 let activeManagedProcess: ManagedProcess | undefined
 let stopping = false
@@ -513,6 +515,7 @@ function spawnManagedProcess(
   options: HttpApiServerOptions,
   bridgeEnabled: boolean,
 ): ManagedProcess | undefined {
+  if (getIsQuitting()) return undefined
   const workerLaunch = resolvePiRpcWorkerLaunch(options)
   const workerRuntime = resolvePiRpcWorkerRuntime(workerLaunch)
   const useDevelopmentScriptRuntime = workerLaunch?.kind === 'script' && !app.isPackaged
@@ -843,16 +846,19 @@ export async function updateHttpApiServer(options: HttpApiServerOptions = {}): P
   const candidatePath = join(prepared.versionDir, prepared.artifact.entrypoint)
   const candidate = spawnManagedProcess(candidatePath, candidatePort, runtimeOptions, false)
   if (!candidate) return false
+  candidateHttpApiProcesses.add(candidate.child)
 
-  if (!await waitForHttpApiHealth(candidatePort, {
+  const candidateHealthy = await waitForHttpApiHealth(candidatePort, {
     ...runtimeOptions,
     onHealthProgress: undefined,
-  })) {
-    await stopManagedProcess(candidate.child, runtimeOptions.stopTimeoutMs)
+  })
+  if (!candidateHttpApiProcesses.delete(candidate.child)) return false
+  await stopManagedProcess(candidate.child, runtimeOptions.stopTimeoutMs)
+  if (getIsQuitting()) return false
+  if (!candidateHealthy) {
     console.warn('[HTTP API] 候选 Rust 模块健康检查失败，保留当前版本')
     return false
   }
-  await stopManagedProcess(candidate.child, runtimeOptions.stopTimeoutMs)
 
   const oldProcess = httpApiProcess
   if (oldProcess) {
@@ -910,7 +916,7 @@ export type EnsureRustHttpApiServerReadyResult =
   | RustHttpApiServerUpdateRequiredStatus
 
 /**
- * 启动窗口前校验并切换 Rust API。远端要求更高客户端版本时不更新模块，
+ * 加载登录界面前校验并切换 Rust API。远端要求更高客户端版本时不更新模块，
  * 但已有的 active 模块仍会启动，用于获取桌面端升级。
  * 其他功能模块仍由登录后的完整启动 Gate 负责准备。
  */
@@ -1018,13 +1024,18 @@ export async function ensureHttpApiServer(options: HttpApiServerOptions = {}): P
   }
 }
 
-export function stopHttpApiServer(stopTimeoutMs = 1_000): Promise<void> {
+export async function stopHttpApiServer(stopTimeoutMs = 1_000): Promise<void> {
   const child = httpApiProcess
-  if (!child) return Promise.resolve()
+  const children = [...candidateHttpApiProcesses]
+  if (child) children.push(child)
+  if (children.length === 0) return
 
   stopping = true
-  clearActiveManagedProcess(child)
-  return stopManagedProcess(child, stopTimeoutMs).finally(() => {
+  candidateHttpApiProcesses.clear()
+  if (child) clearActiveManagedProcess(child)
+  try {
+    await Promise.all(children.map((process) => stopManagedProcess(process, stopTimeoutMs)))
+  } finally {
     stopping = false
-  })
+  }
 }
