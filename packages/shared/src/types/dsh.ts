@@ -9,6 +9,16 @@ export interface DshCordisStatus {
   error?: string
 }
 
+export const DEFAULT_DSH_PINNED_MENU_IDS = ['search', 'schedule', 'automations'] as const
+
+/** DSH RC2 原生展开侧栏的宽度区间，不含折叠栏。 */
+export const DSH_SIDEBAR_MIN_WIDTH = 264
+export const DSH_SIDEBAR_MAX_WIDTH = 420
+
+export function isDshExpandedSidebarWidth(width: unknown): width is number {
+  return typeof width === 'number' && width >= DSH_SIDEBAR_MIN_WIDTH && width <= DSH_SIDEBAR_MAX_WIDTH
+}
+
 export interface DshViewBounds {
   x: number
   y: number
@@ -72,3 +82,20 @@ export const DSH_CORDIS_IPC_CHANNELS = {
 export type DshCordisIpcChannel = (typeof DSH_CORDIS_IPC_CHANNELS)[keyof typeof DSH_CORDIS_IPC_CHANNELS]
 
 
+
+export const ROOM_ACTION_LABELS = { roster: '群智能体', copy: '复制分享码', leave: '退出群', dissolve: '解散群' } as const
+export type RoomMenuAction = keyof typeof ROOM_ACTION_LABELS
+export function roomMenuActions(role: 'host' | 'member' | null, shareCodeEnabled: boolean): RoomMenuAction[] {
+  if (role === 'host') return shareCodeEnabled ? ['roster', 'copy', 'dissolve'] : ['roster', 'dissolve']
+  return role === 'member' ? ['roster', 'leave'] : []
+}
+
+/** 给原生 DSH 侧栏的只读摘要；房间凭据、分享码和消息始终留在主窗口。 */
+export interface DshRoomSidebarSnapshot {
+  type: 'COPIS_SHARED_ROOM_SIDEBAR'
+  epoch: number
+  rooms: Array<{ id: string; name: string; actions: RoomMenuAction[] }>
+  selected: string | null
+  status: 'loading' | 'ready' | 'error' | 'signed-out'
+  busy: boolean
+}

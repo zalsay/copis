@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, WEB_PASSWORD_IPC_CHANNELS, WEB_SYNC_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, DSH_CORDIS_IPC_CHANNELS, DSH_GROUP_CHAT_IPC_CHANNELS, CHROME_DESKTOP_IPC_CHANNELS, type ChromeDesktopSystemStatus, type ChromeDesktopWindowInfo, type ChromeDesktopErrorCode, type ChromeDesktopSessionState, type DshGroupChatSummary, type DshGroupChatDetail, type DshGroupChatMessage, type DshGroupTaskBoard, type DshGroupInvocation, type DshCreateGroupInput, type DshUpdateGroupInput, type DshPostMessageInput, type DshCreateTaskInput, type DshUpdateTaskInput, type DshDecomposeTaskInput, type DshGroupChatAgent, type DshGroupChatRealtimeEvent, type DshCreationWorkspace, type DshUpdateAgentModelInput, type DshAvailableModelGroup } from '@copis/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, ATTACHMENT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, FUNCTIONAL_MODULE_IPC_CHANNELS, PROXY_IPC_CHANNELS, AGENT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AGENT_MAIL_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, WORKING_IPC_CHANNELS, WEB_IPC_CHANNELS, WEB_PASSWORD_IPC_CHANNELS, WEB_SYNC_IPC_CHANNELS, BROWSER_WORKFLOW_IPC_CHANNELS, MEMORY_IPC_CHANNELS, FUND_STOCK_IPC_CHANNELS, DSH_CORDIS_IPC_CHANNELS, DSH_GROUP_CHAT_IPC_CHANNELS, CHROME_DESKTOP_IPC_CHANNELS, type ChromeDesktopSystemStatus, type ChromeDesktopWindowInfo, type ChromeDesktopErrorCode, type ChromeDesktopSessionState, type DshGroupChatSummary, type DshGroupChatDetail, type DshGroupChatMessage, type DshGroupTaskBoard, type DshGroupInvocation, type DshSharedRoomCommand, type DshCreateGroupInput, type DshUpdateGroupInput, type DshPostMessageInput, type DshCreateTaskInput, type DshUpdateTaskInput, type DshDecomposeTaskInput, type DshGroupChatAgent, type DshGroupChatRealtimeEvent, type DshCreationWorkspace, type DshUpdateAgentModelInput, type DshAvailableModelGroup } from '@copis/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS, CODEX_IPC_CHANNELS, type CodexAppServerStatus, type CodexCliStatus } from '../types'
 import { agentHttpStreamClient } from '../renderer/lib/agent-http-stream'
 import { setHttpApiWebToken } from '../renderer/lib/http-api-web-token'
@@ -1389,6 +1389,7 @@ export interface ElectronAPI {
 
   // ===== DSH 创造模式 多智能体群聊协作 =====
   dshGroupChat: {
+    sharedRoomCommand: (expectedUserId: string, command: DshSharedRoomCommand) => Promise<unknown>
     listCreationWorkspaces: () => Promise<DshCreationWorkspace[]>
     listGroups: () => Promise<DshGroupChatSummary[]>
     getGroup: (groupId: string) => Promise<DshGroupChatDetail | null>
@@ -3041,6 +3042,8 @@ const electronAPI: ElectronAPI = {
     },
   },
   dshGroupChat: {
+    sharedRoomCommand: (expectedUserId: string, command: DshSharedRoomCommand): Promise<unknown> =>
+      ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.SHARED_ROOM_COMMAND, expectedUserId, command),
     listCreationWorkspaces: (): Promise<DshCreationWorkspace[]> =>
       ipcRenderer.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.LIST_CREATION_WORKSPACES),
     listGroups: (): Promise<DshGroupChatSummary[]> =>

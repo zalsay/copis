@@ -1,3 +1,5 @@
+import { DSH_SIDEBAR_MIN_WIDTH, DSH_SIDEBAR_MAX_WIDTH } from '@copis/shared/types/dsh'
+
 /**
  * 判断启动错误是否由于缺少/未安装 dsh 功能模块引起。
  */
@@ -40,10 +42,10 @@ export function formatCreationErrorMessage(error?: string | null): string {
 }
 
 /**
- * 侧边栏宽度限制在合理区间 [264, 360]，防止全屏展开或异常上报值污染。
+ * 侧边栏宽度限制在合理区间 [264, 420]，防止全屏展开或异常上报值污染。
  */
 export function clampDshSidebarWidth(width?: number): number {
   if (width === undefined || width === null || !Number.isFinite(width)) return 280
-  return Math.max(264, Math.min(360, Math.round(width)))
+  return Math.max(DSH_SIDEBAR_MIN_WIDTH, Math.min(DSH_SIDEBAR_MAX_WIDTH, Math.round(width)))
 }
 

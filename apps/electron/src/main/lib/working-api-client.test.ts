@@ -414,3 +414,23 @@ describe('Copis Rust Working facade', () => {
     expect(snapshot.ledger[1]?.deductionMultiplier).toBe(60)
   })
 })
+
+test('共享群请求绑定真实登录账号，旧账号发出的结果不能在换号后交付', async () => {
+  let finish!: (response: Response) => void
+  let calls = 0
+  const client = createClient(async (url, init) => {
+    calls++
+    expect(new URL(url).pathname).toBe('/api/internal/dsh/shared-rooms')
+    expect(new Headers(init?.headers).get('X-Copis-Internal-Token')).toBe('local-main')
+    expect(JSON.parse(String(init?.body))).toEqual({ action: 'list', expectedUserId: '7' })
+    return new Promise<Response>(resolve => { finish = resolve })
+  })
+  client.setAuthenticatedUserFromRust({ id: 7 })
+  await expect(client.sharedRoomCommand('8', {action:'list'}, 'local-main')).rejects.toThrow()
+  expect(calls).toBe(0)
+  const pending = client.sharedRoomCommand('7', {action:'list'}, 'local-main')
+  client.setAuthenticatedUserFromRust({ id: 8 })
+  finish(new Response(JSON.stringify([{roomId:'account-7-room'}])))
+  await expect(pending).rejects.toThrow('账号')
+  expect(calls).toBe(1)
+})

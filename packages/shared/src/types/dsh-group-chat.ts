@@ -51,6 +51,8 @@ export interface DshGroupChatMessage {
   replyToId?: string | null
   quotes?: DshGroupChatQuote[]
   attachments?: DshGroupChatAttachment[]
+  /** 共享群仅存服务端附件 ID，按群成员权限领取内容。 */
+  attachmentIds?: string[]
   mentions: DshGroupChatMention[]
   metadata?: Record<string, unknown>
   createdAt: string
@@ -315,7 +317,36 @@ export interface DshCreationWorkspace {
 
 // ======================== IPC 事件通道常量 ========================
 
+/** 仅公开模型标识和名称，不包含 provider 凭据或网络地址。 */
+export interface DshRoomModelSelection { channelId: string; modelId: string }
+export interface DshRoomModelCatalog {
+  current: DshRoomModelSelection | null
+  options: Array<DshRoomModelSelection & { name: string }>
+}
+
+/** 共享群受限命令，执行设备、凭据及连接参数不能由渲染层指定。 */
+export const DSH_ROOM_ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024
+export const DSH_ROOM_ATTACHMENT_MAX_COUNT = 20
+
+export type DshSharedRoomCommand =
+  | { action: 'uploadAttachment'; roomId: string; name: string; mimeType: string; bytes: Uint8Array }
+  | { action: 'downloadAttachment'; roomId: string; attachmentId: string }
+  | { action: 'roomModelOptions'; roomId: string; roomAgentId: string }
+  | ({ action: 'setRoomModel'; roomId: string; roomAgentId: string } & DshRoomModelSelection)
+  | { action: 'agentOptions'; roomId?: string }
+  | { action: 'registerAgent'; roomId: string; workspaceId: string; operationId: string }
+  | { action: 'removeAgent'; roomId: string; roomAgentId: string; operationId: string }
+  | { action: 'list' }
+  | { action: 'create'; name: string; shareCode: string }
+  | { action: 'join'; shareCode: string }
+  | { action: 'messages'; roomId: string; beforeSeq?: number }
+  | { action: 'leave' | 'dissolve'; roomId: string }
+  | { action: 'detail'; roomId: string }
+  | { action: 'events'; roomId: string; afterSeq: number }
+  | { action: 'send'; roomId: string; clientMessageId: string; content: string; mentionAgentId?: string; attachmentIds?: string[] }
+
 export const DSH_GROUP_CHAT_IPC_CHANNELS = {
+  SHARED_ROOM_COMMAND: 'dsh-group-chat:shared-room-command',
   // 创造模式工作区智能体
   LIST_CREATION_WORKSPACES: 'dsh-group-chat:list-creation-workspaces',
 

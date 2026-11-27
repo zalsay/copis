@@ -8,6 +8,7 @@ import { ipcMain, BrowserWindow } from 'electron'
 import {
   DSH_GROUP_CHAT_IPC_CHANNELS,
   type DshCreateGroupInput,
+  type DshSharedRoomCommand,
   type DshUpdateGroupInput,
   type DshPostMessageInput,
   type DshCreateTaskInput,
@@ -16,6 +17,7 @@ import {
   type DshGroupChatAgent,
   type DshUpdateAgentModelInput,
 } from '@copis/shared'
+import { createAttachmentTransfer, type AttachmentPublicCommand } from '../lib/dsh-group-chat/attachment-transfer'
 import { DshGroupChatService } from '../lib/dsh-group-chat/dsh-group-chat-service'
 
 let sharedService: DshGroupChatService | null = null
@@ -38,6 +40,65 @@ export function getDshGroupChatService(): DshGroupChatService {
 
 export function registerDshGroupChatIpcHandlers(): void {
   const service = getDshGroupChatService()
+  void import('../lib/dsh-group-chat/shared-room-executor-service').then(module => module.startSharedRoomExecutorService()).catch(() => { console.warn('[共享群] 执行器启动失败') })
+
+  ipcMain.handle(DSH_GROUP_CHAT_IPC_CHANNELS.SHARED_ROOM_COMMAND, async (event, expectedUserId: string, command: DshSharedRoomCommand | AttachmentPublicCommand) => {
+    const { getMainWindow } = await import('../index')
+    const main = getMainWindow()
+    if (!main || main.isDestroyed() || main.webContents !== event.sender || event.senderFrame !== main.webContents.mainFrame) {
+      throw new Error('共享群仅允许 Copis 主窗口顶层调用')
+    }
+    const { getWorkingApiClient } = await import('../lib/working-api-service')
+    const { getHttpApiInternalToken } = await import('../lib/http-api-server')
+    const allowed = ['list', 'create', 'join', 'leave', 'dissolve', 'detail', 'events', 'messages', 'send', 'agentOptions', 'registerAgent', 'removeAgent', 'roomModelOptions', 'setRoomModel', 'uploadAttachment', 'downloadAttachment']
+    if (!command || typeof command !== 'object' || !allowed.includes(command.action)) throw new Error('共享群命令无效')
+    const client = getWorkingApiClient()
+    if (command.action === 'uploadAttachment' || command.action === 'downloadAttachment') {
+      const fields = command.action === 'uploadAttachment' ? ['action', 'roomId', 'name', 'mimeType', 'bytes'] : ['action', 'roomId', 'attachmentId']
+      if (Object.keys(command).some(key => !fields.includes(key))) throw new Error('附件参数无效')
+      if (!client.getCachedUser() || String(client.getCachedUser()?.id) !== expectedUserId) throw new Error('共享群账号已切换，请重新打开')
+      const transfer = createAttachmentTransfer({
+        revision: () => client.getIdentityRevision(),
+        command: internal => client.sharedRoomCommand(expectedUserId, internal, getHttpApiInternalToken()),
+      })
+      return command.action === 'uploadAttachment' ? transfer.upload(command) : transfer.download(command)
+    }
+    if (command.action === 'roomModelOptions' || command.action === 'setRoomModel') {
+      const revision = client.getIdentityRevision()
+      const executor = await import('../lib/dsh-group-chat/shared-room-executor-service')
+      const { getRoomModelCatalog } = await import('../lib/dsh-group-chat/shared-room-model-runtime')
+      return executor.getSharedRoomAgents().modelCommand(expectedUserId, command, revision, {
+        detail: roomId => client.sharedRoomCommand(expectedUserId, {action:'detail', roomId}, getHttpApiInternalToken()),
+        catalog: getRoomModelCatalog, active: executor.activeRoomModel, prepare: executor.prepareRoomModelChange,
+      })
+    }
+    if (command.action === 'agentOptions' || command.action === 'registerAgent' || command.action === 'removeAgent') {
+      const identityRevision = client.getIdentityRevision()
+      const executor = await import('../lib/dsh-group-chat/shared-room-executor-service')
+      const agents = executor.getSharedRoomAgents()
+      const before = command.action === 'agentOptions' ? JSON.stringify(agents.executorBindings(expectedUserId)) : ''
+      if (command.action === 'removeAgent') executor.suspendSharedRoomExecutors(command.roomId)
+      try { return await agents.command(expectedUserId, command, identityRevision) }
+      finally {
+        if (command.action === 'removeAgent') executor.refreshSharedRoomExecutors(command.roomId)
+        else if (command.action !== 'agentOptions' || JSON.stringify(agents.executorBindings(expectedUserId)) !== before) executor.refreshSharedRoomExecutors()
+      }
+    }
+    if (command.action === 'leave' || command.action === 'dissolve') {
+      const executor = await import('../lib/dsh-group-chat/shared-room-executor-service')
+      const revision = client.getIdentityRevision()
+      executor.suspendSharedRoomExecutors(command.roomId)
+      try {
+        const result = await client.sharedRoomCommand(expectedUserId, command, getHttpApiInternalToken())
+        if (command.action === 'dissolve') {
+          if (!result || typeof result !== 'object' || (result as {roomId?:unknown}).roomId !== command.roomId) throw new Error('共享群解散回执不匹配')
+          await executor.getSharedRoomAgents().removeRoomBindings(expectedUserId,command.roomId,revision)
+        }
+        return result
+      } finally { executor.refreshSharedRoomExecutors(command.roomId) }
+    }
+    return client.sharedRoomCommand(expectedUserId, command, getHttpApiInternalToken())
+  })
 
   // 0. 创造模式专属工作区
   ipcMain.handle(DSH_GROUP_CHAT_IPC_CHANNELS.LIST_CREATION_WORKSPACES, () => {

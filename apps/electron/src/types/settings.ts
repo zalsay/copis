@@ -403,6 +403,8 @@ export interface AppSettings {
   pinnedDevProjects?: Record<string, string[]>
   /** 左侧边栏隐藏的菜单项 ID 列表 */
   hiddenSidebarMenuItems?: string[]
+  /** DSH「Copis 功能」常驻项；未配置时使用默认固定项。 */
+  pinnedDshSidebarMenuItems?: string[]
   /** 旧版 VIP 模型目录字段，仅用于迁移到 working-model-catalog.json。 */
   workingModelCatalog?: WorkingModelCatalog
   /** 旧版模型目录归属字段，仅用于迁移。 */

@@ -266,33 +266,15 @@ describe('CopisCreationWebView 侧边栏宽度与原生视图布局契约', () =
     expect(preloadSource).toContain('border: none !important;')
   })
 
-  test('Given 创造模式侧边栏与菜单管理契约 When 检查 DSH 桥接 Preload 注入 Then 支持菜单隐藏属性选择器且胶囊按钮无背景色仅保留边框', () => {
+  test('Given 创造模式菜单 When 检查 preload 契约 Then 固定偏好通过本地设置持久化且不注入旧隐藏按钮', () => {
     const { readFileSync } = require('node:fs')
     const { join } = require('node:path')
     const preloadSource = readFileSync(join(__dirname, '../../../preload/dsh-bridge-preload.ts'), 'utf8')
-
-    // 1. Preload 脚本包含隐藏菜单样式注入（属性选择器 [data-copis-hidden="true"]）
-    expect(preloadSource).toContain('.copis-menu-section button[data-copis-hidden="true"]')
-    expect(preloadSource).toContain('.copis-rail-menu-section button[data-copis-hidden="true"]')
-    expect(preloadSource).toContain('display: none !important;')
-
-    // 2. 隐藏胶囊按钮无背景色，仅边框，无 hover 变色效果，静态呈现边框与文字
-    expect(preloadSource).toContain('.copis-dsh-menu-hide-btn')
-    expect(preloadSource).toContain('background: transparent !important;')
-    expect(preloadSource).toContain('border: 1px solid')
-    expect(preloadSource).toContain('border-radius: 9999px;')
-    expect(preloadSource).toContain('height: 20px;')
-    expect(preloadSource).toContain('padding: 0 7px;')
-    expect(preloadSource).not.toContain('.copis-dsh-menu-hide-btn:hover')
-
-    // 3. 包含 DOM 观察与事件同步核心函数
-    expect(preloadSource).toContain('function applyHiddenSidebarMenuItems(hiddenItems: string[]): void')
-    expect(preloadSource).toContain('async function hideDshMenuItem(menuId: string): Promise<void>')
-    expect(preloadSource).toContain('function syncDshSidebarMenuDoms(): void')
-    expect(preloadSource).toContain('function setupDshSidebarMenuObserver(): void')
-    expect(preloadSource).toContain('COPIS_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED')
-    expect(preloadSource).toContain('hideMenuItem:')
-    expect(preloadSource).toContain('getHiddenMenuItems:')
+    expect(preloadSource).toContain('getPinnedMenuItems:')
+    expect(preloadSource).toContain('setPinnedMenuItems:')
+    expect(preloadSource).toContain('pinnedDshSidebarMenuItems:')
+    expect(preloadSource).not.toContain('.copis-dsh-menu-hide-btn')
+    expect(preloadSource).not.toContain('data-copis-hidden')
   })
 
   test('Given 打开了 Copis 子功能面板 When 接收到切回会话事件 (COPIS_NAVIGATE: conversations) Then 子功能面板立即关闭收起且激活视图重置为 conversations 且向 DSH 发送清除高亮广播', () => {
@@ -472,14 +454,16 @@ describe('CopisCreationWebView 侧边栏宽度与原生视图布局契约', () =
     expect(viewSource).toContain('window.electronAPI?.openExternal?.(COPIS_OFFICIAL_URL)')
   })
 
-  test('Given 侧边栏宽度限制 When 检查安全展开下限与上限 Then 严格在 [264, 360] 区间避免误折叠与全屏污染', () => {
+  test('Given 侧边栏宽度限制 When 检查安全展开下限与上限 Then 对齐 RC2 的 [264, 420] 区间避免误折叠与全屏污染', () => {
     expect(clampDshSidebarWidth(56)).toBe(264)
     expect(clampDshSidebarWidth(0)).toBe(264)
     expect(clampDshSidebarWidth(264)).toBe(264)
     expect(clampDshSidebarWidth(280)).toBe(280)
     expect(clampDshSidebarWidth(320)).toBe(320)
     expect(clampDshSidebarWidth(360)).toBe(360)
-    expect(clampDshSidebarWidth(1200)).toBe(360) // 1200px 异常全屏上报值被严格限制在 360px
+    expect(clampDshSidebarWidth(400)).toBe(400)
+    expect(clampDshSidebarWidth(420)).toBe(420)
+    expect(clampDshSidebarWidth(1200)).toBe(420)
     expect(clampDshSidebarWidth(undefined)).toBe(280)
   })
 

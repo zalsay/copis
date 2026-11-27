@@ -1,6 +1,7 @@
 declare module 'ws' {
   import { EventEmitter } from 'node:events'
   import type { Server as HttpServer } from 'node:http'
+  import type { AddressInfo } from 'node:net'
 
   export class WebSocket extends EventEmitter {
     static readonly CONNECTING: number
@@ -8,14 +9,15 @@ declare module 'ws' {
     static readonly CLOSING: number
     static readonly CLOSED: number
     readonly readyState: number
-    constructor(url: string, options?: { headers?: Record<string, string> })
+    constructor(url: string, options?: { headers?: Record<string, string>; followRedirects?: boolean; handshakeTimeout?: number; maxPayload?: number })
     send(data: string | Buffer | ArrayBuffer | Uint8Array, cb?: (err?: Error) => void): void
     close(code?: number, reason?: string): void
     terminate(): void
   }
 
   export class WebSocketServer extends EventEmitter {
-    constructor(options: { server?: HttpServer; port?: number })
+    constructor(options: { server?: HttpServer; port?: number; host?: string })
+    address(): AddressInfo | string | null
     close(cb?: (err?: Error) => void): void
   }
 

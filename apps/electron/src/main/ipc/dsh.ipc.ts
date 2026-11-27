@@ -61,7 +61,13 @@ export function registerDshIpcHandlers(): void {
 
   ipcMain.handle(
     DSH_CORDIS_IPC_CHANNELS.DISPATCH_EVENT_TO_CLIENT,
-    (_event, payload: unknown) => {
+    async (event, payload: unknown) => {
+      if (payload && typeof payload === 'object' && 'type' in payload && payload.type === 'COPIS_SHARED_ROOM_SIDEBAR') {
+        const { getMainWindow } = await import('../index')
+        const main = getMainWindow(), url = getDshCordisStatus().url
+        if (!url || !main || main.isDestroyed() || main.webContents !== event.sender || event.senderFrame !== event.sender.mainFrame) return false
+        return dispatchToDshClient(payload, url)
+      }
       dispatchToDshClient(payload)
       return true
     }
@@ -124,6 +130,7 @@ export function registerDshIpcHandlers(): void {
   ipcMain.on(
     DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT,
     (event, clientEvent: DshClientEvent) => {
+      if (clientEvent?.type === 'COPIS_NAVIGATE' && clientEvent.view === 'group-chat' && !isDshMainFrame(event)) return
       if (clientEvent?.type === 'COPIS_DSH_SESSION_COMPLETED' || clientEvent?.type === 'COPIS_DSH_SESSION_VIEWED') {
         if (!isDshMainFrame(event) || typeof clientEvent.sessionId !== 'string' || !clientEvent.sessionId.trim() || clientEvent.sessionId.length > 256) return
         if (clientEvent.type === 'COPIS_DSH_SESSION_COMPLETED' && (

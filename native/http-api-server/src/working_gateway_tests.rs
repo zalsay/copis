@@ -1341,3 +1341,173 @@ fn diamond_redemption_rejects_code_longer_than_32_after_uppercase_normalization(
     assert_eq!(error.status, 400);
     assert_eq!(transport.requests.lock().unwrap().len(), 1);
 }
+
+#[test]
+fn shared_room_commands_bind_current_account_and_only_forward_typed_operations() {
+    let transport = Arc::new(QueueTransport::new(vec![
+        response(200, json!({"token":"host-token","user_id":7})),
+        response(200, json!({"data":{"roomId":"room1"}})),
+        response(200, json!({"data":{"message":{"messageId":"m1"}}})),
+        response(200, json!({"data":[{"roomId":"room1","eventType":"agent.invocation","seq":10,"payload":{"private":"internal"}}]})),
+        response(200, json!({"data":{"room":{"roomId":"room1"},"agents":[{"roomAgentId":"a","availability":"busy","queuedCount":2,"private":"omit"}]}})),
+        response(200, json!({"data":{"roomId":"room1"}})),
+        response(200, json!({"data":{"room":{"roomId":"room1","status":"deleting"}}})),
+        response(200,json!({"data":{"message":{"roomId":"room1"},"events":[{"eventType":"invocation.limit_reached","payload":{"agentId":"a","reason":"room_queue_full"}}]}})),
+        response(200, json!({"data":{"message":{"roomId":"room1"},"invocations":[{"targetAgentId":"a","status":"queued","private":"not public"}]}})),
+        response(200, json!({"data":{"roomId":"new","roomKind":"dsh_shared"}})),
+    ]));
+    let gateway = gateway(transport.clone());
+    handle_working_gateway_request(
+        &gateway,
+        "POST",
+        "/api/working/login",
+        Some(r#"{"email":"owner@example.com","password":"fixture"}"#),
+    )
+    .unwrap();
+    let run = |value: Value| {
+        handle_working_gateway_request(
+            &gateway,
+            "POST",
+            "/api/internal/dsh/shared-rooms",
+            Some(&value.to_string()),
+        )
+    };
+    assert_eq!(
+        run(json!({"expectedUserId":"8","action":"list"}))
+            .unwrap_err()
+            .status,
+        409
+    );
+    assert_eq!(
+        run(json!({"expectedUserId":"7","action":"join","shareCode":"invalid"}))
+            .unwrap_err()
+            .status,
+        400
+    );
+    assert_eq!(run(json!({"expectedUserId":"7","action":"send","roomId":"r1","content":"hi","clientMessageId":"m1","senderUserId":9})).unwrap_err().status,400);
+    assert_eq!(
+        run(json!({"expectedUserId":"7","action":"join","shareCode":"dsh1"}))
+            .unwrap()
+            .body
+            .unwrap()["roomId"],
+        "room1"
+    );
+    run(json!({"expectedUserId":"7","action":"send","roomId":"room1","content":"hi","clientMessageId":"m1"})).unwrap();
+    let events = run(json!({"expectedUserId":"7","action":"events","roomId":"room1","afterSeq":9})).unwrap().body.unwrap();
+    assert_eq!(events[0]["seq"], 10);
+    assert!(events[0].get("payload").is_none(), "普通成员事件不应向渲染进程转交执行载荷");
+    let detail = run(json!({"expectedUserId":"7","action":"detail","roomId":"room1"})).unwrap().body.unwrap();
+    assert_eq!(detail["agents"][0],json!({"roomAgentId":"a","availability":"busy","queuedCount":2}));
+    for action in ["leave", "dissolve"] {
+        assert_eq!(run(json!({"expectedUserId":"8","action":action,"roomId":"room1"})).unwrap_err().status, 409);
+        assert_eq!(run(json!({"expectedUserId":"7","action":action,"roomId":"../other"})).unwrap_err().status, 400);
+        assert_eq!(run(json!({"expectedUserId":"7","action":action,"roomId":"room1"})).unwrap().body.unwrap(), json!({"roomId":"room1"}));
+    }
+    assert_eq!(run(json!({"expectedUserId":"7","action":"send","roomId":"room1","content":"hi","clientMessageId":"m2","mentionAgentId":"../bad"})).unwrap_err().status,400);
+    let ack = run(json!({"expectedUserId":"7","action":"send","roomId":"room1","content":"hi","clientMessageId":"m2","mentionAgentId":"a"})).unwrap().body.unwrap();
+    assert_eq!(ack["notExecuted"],true);
+    assert_eq!(ack["reason"],"room_queue_full");
+    let queued = run(json!({"expectedUserId":"7","action":"send","roomId":"room1","content":"hi","clientMessageId":"m3","mentionAgentId":"a"})).unwrap().body.unwrap();
+    assert_eq!(queued, json!({"message":{"roomId":"room1"},"notExecuted":false}));
+    run(json!({"expectedUserId":"7","action":"create","name":"test","shareCode":"abc2"})).unwrap();
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(requests.len(), 10);
+    assert_eq!(serde_json::from_str::<Value>(requests[9].body.as_deref().unwrap()).unwrap(),json!({"roomKind":"dsh_shared","name":"test","shareCode":"ABC2"}));
+    assert_eq!(serde_json::from_str::<Value>(requests[7].body.as_deref().unwrap()).unwrap()["mentionAgentIds"],json!(["a"]));
+    assert_eq!(requests[5].method, "POST");
+    assert_eq!(requests[5].path, "/api/chatrooms/v2/rooms/room1/leave");
+    assert_eq!(requests[6].method, "DELETE");
+    assert_eq!(requests[6].path, "/api/chatrooms/v2/rooms/room1");
+    assert_eq!(requests[3].path, "/api/chatrooms/v2/rooms/room1/events?limit=100&afterSeq=9");
+    assert_eq!(requests[4].path, "/api/chatrooms/v2/rooms/room1");
+
+    assert_eq!(requests[1].path, "/api/chatrooms/v2/join");
+    assert_eq!(requests[1].access_token.as_deref(), Some("host-token"));
+    assert_eq!(
+        serde_json::from_str::<Value>(requests[1].body.as_deref().unwrap()).unwrap(),
+        json!({"shareCode":"DSH1"})
+    );
+    assert_eq!(requests[2].path, "/api/chatrooms/v2/rooms/room1/messages");
+    assert_eq!(
+        serde_json::from_str::<Value>(requests[2].body.as_deref().unwrap()).unwrap(),
+        json!({"content":"hi","clientMessageId":"m1","mentionAgentIds":[],"attachmentIds":[]})
+    );
+}
+
+#[test]
+fn shared_room_management_receipt_is_validated_and_minimized() {
+    let transport = Arc::new(QueueTransport::new(vec![
+        response(200, json!({"token":"host-token","user_id":7})),
+        response(200, json!({"data":{"version":1,"operationId":"op1","roomId":"room1","roomAgentId":"agent1","ownerUserId":7,"action":"register","status":"registered","memoryShared":false,"skillsShared":false}})),
+        response(200, json!({"data":{"version":1,"operationId":"wrong","roomId":"room1","roomAgentId":"agent1","ownerUserId":7,"action":"remove","status":"removed"}})),
+        response(200, json!({"data":{"version":1,"operationId":"op1","roomId":"room1","roomAgentId":"agent1","ownerUserId":7,"action":"register","status":"registered","memoryShared":false,"skillsShared":false}})),
+    ]));
+    let gateway = gateway(transport.clone());
+    handle_working_gateway_request(&gateway,"POST","/api/working/login",Some(r#"{"email":"owner@example.com","password":"fixture"}"#)).unwrap();
+    let run = |v: Value| handle_working_gateway_request(&gateway,"POST","/api/internal/dsh/shared-rooms",Some(&v.to_string()));
+    assert_eq!(run(json!({"expectedUserId":"7","action":"internalRegisterAgent","roomId":"room1","operationId":"op1","deviceId":"device1","displayName":"助理"})).unwrap().body.unwrap(),json!({"roomAgentId":"agent1"}));
+    assert_eq!(run(json!({"expectedUserId":"7","action":"internalRemoveAgent","roomId":"room1","operationId":"op2","deviceId":"device1","roomAgentId":"agent1"})).unwrap_err().status,502);
+    assert_eq!(run(json!({"expectedUserId":"7","action":"internalAgentOperationStatus","roomId":"room1","operationId":"op1","deviceId":"device1"})).unwrap().body.unwrap(),json!({"roomAgentId":"agent1"}));
+    assert_eq!(run(json!({"expectedUserId":"7","action":"internalRegisterAgent","roomId":"room1","operationId":"op3","deviceId":"device1","displayName":"中".repeat(43)})).unwrap_err().status,400);
+    assert_eq!(run(json!({"expectedUserId":"7","action":"internalAgentOperationStatus","roomId":"room1","operationId":"op1","deviceId":"device1","other":"forged"})).unwrap_err().status,400);
+    let requests=transport.requests.lock().unwrap();
+    assert_eq!(requests[1].path,"/api/chatrooms/v2/rooms/room1/agent-management/operations");
+    assert_eq!(requests[3].path,"/api/chatrooms/v2/rooms/room1/agent-management/operations/status");
+    assert_eq!(serde_json::from_str::<Value>(requests[3].body.as_deref().unwrap()).unwrap(),json!({"operationId":"op1","deviceId":"device1"}));
+    assert_eq!(serde_json::from_str::<Value>(requests[1].body.as_deref().unwrap()).unwrap(),json!({"action":"register","roomKind":"dsh_shared","operationId":"op1","deviceId":"device1","displayName":"助理","memoryShared":false,"skillsShared":false}));
+}
+
+#[test]
+fn shared_room_management_status_distinguishes_exact_not_found() {
+    let transport = Arc::new(QueueTransport::new(vec![
+        response(200, json!({"token":"host-token","user_id":7})),
+        response(404, json!({"error":{"code":"management_operation_not_found","message":"not found"}})),
+        response(404, json!({"error":{"code":"room_not_found","message":"not found"}})),
+    ]));
+    let gateway = gateway(transport);
+    handle_working_gateway_request(&gateway,"POST","/api/working/login",Some(r#"{"email":"owner@example.com","password":"fixture"}"#)).unwrap();
+    let run = || handle_working_gateway_request(&gateway,"POST","/api/internal/dsh/shared-rooms",Some(&json!({"expectedUserId":"7","action":"internalAgentOperationStatus","roomId":"r","operationId":"op","deviceId":"d"}).to_string()));
+    let error = run().unwrap_err();
+    assert_eq!((error.status, error.code.as_str()),(404,"management_operation_not_found"));
+    let other = run().unwrap_err();
+    assert_eq!((other.status, other.code.as_str()), (404,"room_not_found"));
+}
+
+#[test]
+fn shared_room_migration_uses_bound_device_and_agent_without_mutating_members() {
+    let transport = Arc::new(QueueTransport::new(vec![
+        response(200, json!({"token":"test","user_id":7})),
+        response(200, json!({"data":{"room":{"roomId":"r","roomKind":"dsh_shared","hostUserId":7}}})),
+    ]));
+    let gateway = gateway(transport.clone());
+    handle_working_gateway_request(&gateway,"POST","/api/working/login",Some(r#"{"email":"owner@example.com","password":"fixture"}"#)).unwrap();
+    let result = handle_working_gateway_request(&gateway,"POST","/api/internal/dsh/shared-rooms",Some(r#"{"action":"internalMarkDshShared","expectedUserId":"7","roomId":"r","roomAgentId":"a","deviceId":"d"}"#)).unwrap();
+    assert_eq!(result.body.unwrap(),json!({"roomId":"r"}));
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(requests[1].method,"PATCH");
+    assert_eq!(requests[1].path,"/api/chatrooms/v2/rooms/r");
+    assert_eq!(serde_json::from_str::<Value>(requests[1].body.as_deref().unwrap()).unwrap(),json!({"roomKind":"dsh_shared","roomAgentId":"a","deviceId":"d"}));
+}
+
+#[test]
+fn shared_room_list_refreshes_expired_token_but_join_is_not_replayed() {
+    let transport = Arc::new(QueueTransport::new(vec![
+        response(200, json!({"token":"old","refresh_token":"refresh","user":{"id":7}})),
+        response(401, json!({"error":"Invalid or expired token"})),
+        response(200, json!({"token":"renewed"})),
+        response(200, json!({"data":[]})),
+        response(401, json!({"error":"Invalid or expired token"})),
+    ]));
+    let gateway = gateway(transport.clone());
+    handle_working_gateway_request(&gateway, "POST", "/api/working/login",
+        Some(r#"{"email":"user@example.com","password":"fixture"}"#)).unwrap();
+    let command = |body| handle_working_gateway_request(&gateway, "POST", "/api/internal/dsh/shared-rooms", Some(body));
+    assert_eq!(command(r#"{"expectedUserId":"7","action":"list"}"#).unwrap().body, Some(json!([])));
+    assert_eq!(command(r#"{"expectedUserId":"7","action":"join","shareCode":"DSH1"}"#).unwrap_err().status, 401);
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(requests.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(), [
+        "/api/auth/login", "/api/chatrooms/v2/rooms", "/api/auth/refresh", "/api/chatrooms/v2/rooms", "/api/chatrooms/v2/join",
+    ]);
+    assert_eq!(requests[1].access_token.as_deref(), Some("old"));
+    assert_eq!(requests[3].access_token.as_deref(), Some("renewed"));
+}

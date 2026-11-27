@@ -47,10 +47,14 @@ impl EduApiTransport for FixedTransport {
     fn send(&self, request: EduApiRequest) -> Result<EduApiResponse, EduApiError> {
         self.calls.lock().unwrap().push(request.clone_for_test());
         let body = if request.path == "/api/auth/login" {
+            let other = request
+                .body
+                .as_deref()
+                .is_some_and(|body| body.contains("other@example.com"));
             json!({
-                "token": "header.eyJleHAiOjQxMDAuMH0.sig",
+                "token": if other { "other-access" } else { "header.eyJleHAiOjQxMDAuMH0.sig" },
                 "refresh_token": "refresh",
-                "user": { "id": "user-1" }
+                "user": { "id": if other { "user-2" } else { "user-1" } }
             })
             .to_string()
             .into_bytes()
@@ -103,10 +107,26 @@ fn setup() -> (Arc<AuthSession>, Arc<FixedTransport>) {
 
 #[test]
 fn dsh_stream_public_request_keeps_reasoning_and_key_across_401_refresh() {
+    check_stream_401(false, false);
+}
+
+#[test]
+fn shared_room_401_retries_once_for_same_login_only() {
+    check_stream_401(true, false);
+}
+
+#[test]
+fn shared_room_401_after_account_switch_never_replays() {
+    check_stream_401(true, true);
+}
+
+fn check_stream_401(room: bool, switch_on_401: bool) {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
+    let (auth, transport) = setup();
+    let server_auth = auth.clone();
     let server = std::thread::spawn(move || {
         let mut requests = Vec::new();
         for status in [401, 200] {
@@ -136,21 +156,51 @@ fn dsh_stream_public_request_keeps_reasoning_and_key_across_401_refresh() {
                 headers,
                 serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
             ));
+            if switch_on_401 {
+                server_auth
+                    .login(super::auth_session::LoginInput {
+                        email: "other@example.com".into(),
+                        password: "password".into(),
+                    })
+                    .unwrap();
+            }
             write!(socket, "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}").unwrap();
+            if switch_on_401 {
+                break;
+            }
         }
         requests
     });
-    let (auth, transport) = setup();
     let client = crate::model_request_client::ModelRequestClient::new(
         &format!("http://{addr}/model-request"),
         5,
     )
     .unwrap();
     let proxy = WorkingModelProxy::with_model_client(auth, client);
-    let capability = proxy.issue_dsh_capability(Some("high")).unwrap();
-    let mut response = proxy
-        .proxy_stream_with_capability(&capability, br#"{"model":"fast","input":"hello"}"#, None)
-        .unwrap();
+    let capability = if room {
+        proxy.issue_room_capability("user-1", "fast", "high")
+    } else {
+        proxy.issue_dsh_capability(Some("high"))
+    }
+    .unwrap();
+    let result = proxy.proxy_stream_with_capability(
+        &capability,
+        br#"{"model":"fast","input":"hello"}"#,
+        None,
+    );
+    if switch_on_401 {
+        assert_eq!(result.err(), Some(WorkingModelError::Unauthorized));
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(!transport
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.path == "/api/auth/refresh"));
+        return;
+    }
+    let mut response = result.unwrap();
     let mut body = String::new();
     response.body.read_to_string(&mut body).unwrap();
     assert_eq!(response.status, 200);
@@ -435,4 +485,50 @@ fn capability_expired_displays_friendly_message_and_blocks_request() {
         error.to_string(),
         "模型会话已过期，请直接发送「继续任务」或点击重试"
     );
+}
+
+#[test]
+fn shared_room_capability_rejects_wrong_user_model_revoke_and_relogin() {
+    let (auth, _) = setup();
+    let proxy = WorkingModelProxy::with_model_client(
+        auth.clone(),
+        crate::model_request_client::ModelRequestClient::new("http://127.0.0.1:1", 1).unwrap(),
+    );
+    assert!(proxy.issue_room_capability("other", "fast", "low").is_err());
+    let issue = || {
+        proxy
+            .issue_room_capability("user-1", "fast", "low")
+            .unwrap()
+    };
+    let cap = issue();
+    let denied = |key: &str, model: &str| {
+        proxy
+            .proxy_stream_with_capability(
+                key,
+                json!({"model":model,"input":"test"}).to_string().as_bytes(),
+                None,
+            )
+            .err()
+    };
+    assert_eq!(
+        denied(&cap, "global"),
+        Some(WorkingModelError::CapabilityMismatch)
+    );
+    proxy.revoke_room_capability(&cap);
+    assert_eq!(denied(&cap, "fast"), Some(WorkingModelError::Unauthorized));
+    let cap = issue();
+    auth.login(super::auth_session::LoginInput {
+        email: "other@example.com".into(),
+        password: "password".into(),
+    })
+    .unwrap();
+    assert!(proxy.issue_room_capability("user-2", "fast", "low").is_ok());
+    assert_eq!(denied(&cap, "fast"), Some(WorkingModelError::Unauthorized));
+    auth.logout().unwrap();
+    auth.login(super::auth_session::LoginInput {
+        email: "user@example.com".into(),
+        password: "password".into(),
+    })
+    .unwrap();
+    assert_eq!(denied(&cap, "fast"), Some(WorkingModelError::Unauthorized));
 }

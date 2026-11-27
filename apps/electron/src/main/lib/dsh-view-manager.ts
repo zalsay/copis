@@ -130,20 +130,29 @@ function applyDshViewBounds(): void {
   if (!dshView || dshView.webContents.isDestroyed() || !isHostAvailable()) return
 
   const { x, y, width, height, visible } = lastBounds
-  if (visible && width > 0 && height > 0) {
-    dshView.setBounds({
-      x: Math.round(x),
-      y: Math.round(y),
-      width: Math.round(width),
-      height: Math.round(height),
-    })
-    dshView.setVisible(true)
-    if (focusOnNextShow) {
-      focusOnNextShow = false
-      dshView.webContents.focus()
-    }
-  } else {
+  if (!visible || width <= 0 || height <= 0 || ![x, y, width, height].every(Number.isFinite)) {
     dshView.setVisible(false)
+    return
+  }
+
+  // 渲染进程上报的是 CSS 像素；原生子视图使用 DIP，不能直接沿用缩放前的坐标。
+  const host = hostWindow!
+  const zoom = host.webContents.getZoomFactor()
+  const content = host.getContentBounds()
+  const left = Math.max(0, Math.round(x * zoom))
+  const top = Math.max(0, Math.round(y * zoom))
+  const right = Math.min(content.width, Math.round((x + width) * zoom))
+  const bottom = Math.min(content.height, Math.round((y + height) * zoom))
+  if (right <= left || bottom <= top) {
+    dshView.setVisible(false)
+    return
+  }
+
+  dshView.setBounds({ x: left, y: top, width: right - left, height: bottom - top })
+  dshView.setVisible(true)
+  if (focusOnNextShow) {
+    focusOnNextShow = false
+    dshView.webContents.focus()
   }
 }
 
@@ -154,14 +163,25 @@ export function updateDshViewBounds(bounds: DshViewBounds): void {
 }
 
 /** 向 DSH 网页派发事件（如清除侧栏选中高亮等） */
-export function dispatchToDshClient(payload: unknown): void {
+export function dispatchToDshClient(payload: unknown, trustedUrl?: string): boolean {
   if (dshView && !dshView.webContents.isDestroyed()) {
+    // 私有目录只发给已加载的受管 DSH 主 frame，未就绪由插件握手后重发。
+    if (trustedUrl !== undefined) {
+      const frame = dshView.webContents.mainFrame
+      try {
+        if (new URL(frame.url).origin !== new URL(trustedUrl).origin) return false
+        frame.send(DSH_CORDIS_IPC_CHANNELS.DISPATCH_EVENT_TO_CLIENT, payload)
+        return true
+      } catch { return false }
+    }
     dshView.webContents.send(DSH_CORDIS_IPC_CHANNELS.DISPATCH_EVENT_TO_CLIENT, payload)
     if (payload && typeof payload === 'object' && 'type' in payload && payload.type === 'COPIS_DSH_OPEN_SESSION') {
       if (lastBounds.visible && lastBounds.width > 0 && lastBounds.height > 0) dshView.webContents.focus()
       else focusOnNextShow = true
     }
+    return true
   }
+  return false
 }
 
 /** 向 DSH 视图实时同步主题状态（浅色/深色）及自定义模式主题色 */

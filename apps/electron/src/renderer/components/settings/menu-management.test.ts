@@ -149,20 +149,13 @@ describe('左侧菜单栏悬浮隐藏与菜单管理功能契约 (BDD)', () => {
     expect(menuSettingsSource).toContain('setSidebarMenuItemVisibility')
   })
 
-  test('Given 隐藏胶囊按钮样式 When 检查视觉规范 Then 背景透明仅保留边框且无 hover 变色效果直接静态呈现', () => {
+  test('Given Agent 模式隐藏胶囊按钮样式 When 检查视觉规范 Then 背景透明仅保留边框且无 hover 变色效果直接静态呈现', () => {
     // 1. Agent 模式胶囊按钮：无背景色，仅边框，无 hover 变色规则
     expect(sidebarStyles).toContain('.copis-working-menu-hide-btn')
     expect(sidebarStyles).toContain('background: transparent;')
     expect(sidebarStyles).toContain('border: 1px solid')
     expect(sidebarStyles).not.toContain('backdrop-filter: blur')
     expect(sidebarStyles).not.toContain('.copis-working-menu-hide-btn:hover')
-
-    // 2. 创造模式胶囊按钮：无背景色，仅边框，无 hover 变色规则
-    const preloadSource = readFileSync(join(__dirname, '../../../preload/dsh-bridge-preload.ts'), 'utf8')
-    expect(preloadSource).toContain('.copis-dsh-menu-hide-btn')
-    expect(preloadSource).toContain('background: transparent !important;')
-    expect(preloadSource).toContain('border: 1px solid')
-    expect(preloadSource).not.toContain('.copis-dsh-menu-hide-btn:hover')
   })
 
   test('Given 菜单管理页面 When 查看菜单项 icon 与显隐状态指示 tag 胶囊 Then 统一采用柔和高雅底色与微边框规范', () => {

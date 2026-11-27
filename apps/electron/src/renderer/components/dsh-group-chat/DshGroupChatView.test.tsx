@@ -25,13 +25,12 @@ describe('DshGroupChatView 契约与零交叉测试', () => {
     }
   })
 
-  it('should verify DshGroupChatView renders sidebar, workspace and drawers properly', () => {
+  it('打开群聊协作直接挂载共享群，不再挂载范围切换、本地列表或本地建群弹窗', () => {
     const content = readFileSync(join(dir, 'DshGroupChatView.tsx'), 'utf-8')
-    expect(content).toContain('<DshGroupChatSidebar />')
-    expect(content).toContain('<DshGroupChatWorkspace onClose={onClose} />')
-    expect(content).toContain("<DshGroupChatTasksPanel />")
-    expect(content).toContain("<DshGroupChatInvocationDetail />")
-    expect(content).toContain("<DshGroupChatCreateDialog />")
+    expect(content).toContain('<DshSharedRooms')
+    for (const legacy of ['scopeAtom', '群聊范围', 'DshGroupChatSidebar', 'DshGroupChatCreateDialog']) {
+      expect(content).not.toContain(legacy)
+    }
   })
 
   it('should verify CopisCreationWebView integrates group-chat in subview routing', () => {
@@ -40,7 +39,7 @@ describe('DshGroupChatView 契约与零交叉测试', () => {
       'utf-8'
     )
     expect(creationViewContent).toContain("| 'group-chat'")
-    expect(creationViewContent).toContain("<DshGroupChatView onClose={closeSubView} />")
+    expect(creationViewContent).toContain("<DshGroupChatView />")
   })
 
   it('should verify DshGroupChatWorkspace implements @ mention suggestions and keyboard navigation', () => {

@@ -6,7 +6,9 @@
  * 优先 Inter Variable（自托管，见 main.tsx 引入） → SF Pro Text（macOS 系统） → system-ui；
  * 数字使用 tabular-nums，配合 cv11/ss01/ss03 让字形接近 Vercel / Linear 的现代感。
  */
+/* 主窗口不加载 DSH 样式；回退到搜索弹框 bg-base 在 RC2 的实际主题色。 */
 :root {
+  --copis-search-panel-bg: var(--dsw-alias-bg-base, #ffffff);
   font-family:
     'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont,
     'SF Pro Text', 'PingFang SC', 'Segoe UI', 'Microsoft YaHei',
@@ -31,6 +33,7 @@
 }
 
 .dark {
+  --copis-search-panel-bg: var(--dsw-alias-bg-base, #151517);
   --creation-ui-primary: #a855f7;
   --creation-ui-primary-foreground: #ffffff;
   --creation-ui-primary-background: rgb(168 85 247 / 18%);

@@ -8,6 +8,10 @@ use std::fmt;
 use std::io::Read;
 use std::sync::Arc;
 
+#[path = "dsh_shared_rooms.rs"]
+mod dsh_shared_rooms;
+pub const DSH_SHARED_ROOMS_PATH: &str = "/api/internal/dsh/shared-rooms";
+
 #[path = "image_task_gateway.rs"]
 mod image_task_gateway;
 #[path = "image_task_store.rs"]
@@ -62,6 +66,7 @@ pub fn is_working_gateway_path(path: &str) -> bool {
     .iter()
     .any(|prefix| path == *prefix || path.starts_with(&format!("{}/", prefix)))
         || path == "/api/working/diamond-redemptions/redeem"
+        || path == DSH_SHARED_ROOMS_PATH
 }
 
 pub fn is_working_oauth_callback_path(path: &str) -> bool {
@@ -172,6 +177,13 @@ pub fn handle_working_gateway_request(
 ) -> Result<GatewayResponse, GatewayError> {
     let method = method.trim();
     let (path, query) = split_target(target)?;
+    if path == DSH_SHARED_ROOMS_PATH {
+        require_method(method, "POST")?;
+        if !query.is_empty() {
+            return Err(GatewayError::new(400, "invalid_request", "共享群命令不接受查询参数"));
+        }
+        return dsh_shared_rooms::handle(gateway, parse_body(body)?);
+    }
     let segments = path_segments(path)?;
     if segments.len() < 3 || segments[0] != "api" || segments[1] != "working" {
         return Err(GatewayError::new(

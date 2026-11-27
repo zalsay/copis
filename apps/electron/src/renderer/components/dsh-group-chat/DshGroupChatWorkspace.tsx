@@ -3,7 +3,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { atom, useAtom, useAtomValue, useSetAtom } from 'jotai'
 import {
   Kanban,
   Activity,
@@ -29,6 +29,11 @@ import {
   Cpu,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { attachmentLimitError, RoomAttachmentPicker, DraftAttachment, OutgoingAttachments, ReceivedAttachment, type RoomDownload } from './SharedRoomAttachments'
+import { SharedRoomDraftInput } from './SharedRoomDraftInput'
+import { SharedAgentMarkdown } from './SharedAgentMarkdown'
+import type { RoomDisplayMessage } from './shared-room-outbox'
+import type { HostAgent } from './shared-room-data'
 import { Textarea } from '@/components/ui/textarea'
 import {
   dshActiveGroupIdAtom,
@@ -42,8 +47,23 @@ import {
 } from '@/atoms/dsh-group-chat-atoms'
 import type { DshGroupChatMessage, DshGroupChatMention } from '@copis/shared'
 
+export interface SharedConversation {
+  status: React.ReactNode
+  historyAction: React.ReactNode
+  roomId: string
+  name: string
+  userId: string
+  messages: RoomDisplayMessage[]
+  retryAttachment?: (key: string) => void
+  canSend: boolean
+  agent?: HostAgent
+  send: (text: string, target?: string, files?: File[]) => Promise<void>
+  download: RoomDownload
+}
+
 interface DshGroupChatWorkspaceProps {
-  onClose?: () => void
+  shared?: SharedConversation
+  headerAction?: React.ReactNode
 }
 
 interface MentionCandidate {
@@ -76,17 +96,29 @@ function renderMessageContent(text: string, agents?: { name: string }[]) {
   })
 }
 
-export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): React.ReactElement {
-  const activeGroupId = useAtomValue(dshActiveGroupIdAtom)
-  const [groupDetail, setGroupDetail] = useAtom(dshActiveGroupDetailAtom)
+const draftFilesAtom = atom<File[]>([])
+
+export function DshGroupChatWorkspace({ headerAction, shared }: DshGroupChatWorkspaceProps): React.ReactElement {
+  const localGroupId = useAtomValue(dshActiveGroupIdAtom)
+  const [localDetail, setGroupDetail] = useAtom(dshActiveGroupDetailAtom)
   const [messagesMap, setMessagesMap] = useAtom(dshMessagesMapAtom)
-  const messages = useAtomValue(dshActiveMessagesAtom)
+  const localMessages = useAtomValue(dshActiveMessagesAtom)
+  const isShared = !!shared
+  const activeGroupId = shared?.roomId ?? localGroupId
+  const groupDetail = shared ? { name: shared.name, agents: [] } : localDetail
+  const messages: RoomDisplayMessage[] = shared?.messages ?? localMessages
   const [activeDrawer, setActiveDrawer] = useAtom(dshActiveDrawerAtom)
   const setActiveInvocationId = useSetAtom(dshActiveInvocationIdAtom)
   const [pendingQuote, setPendingQuote] = useAtom(dshPendingQuoteAtom)
   const setTasksMap = useSetAtom(dshTasksMapAtom)
 
   const [inputText, setInputText] = useState('')
+  const [files, setFiles] = useAtom(draftFilesAtom)
+  const [fileError, setFileError] = useState('')
+  const hasDraft = !!inputText.trim() || (!!shared && files.length > 0)
+  const [targetId, setTargetId] = useState<string>()
+  const targetUnavailable = !!targetId && (shared?.agent?.id !== targetId || !shared.agent.callable)
+  const sharedEditor = useRef<HTMLDivElement>(null)
   const [cursorPos, setCursorPos] = useState(0)
   const [sending, setSending] = useState(false)
   const [activeMentionIndex, setActiveMentionIndex] = useState(0)
@@ -99,7 +131,7 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
 
   // 1. 加载群详情、消息流与任务看板
   useEffect(() => {
-    if (!activeGroupId) return
+    if (isShared || !activeGroupId) return
     let mounted = true
 
     const load = async () => {
@@ -127,10 +159,11 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
     return () => {
       mounted = false
     }
-  }, [activeGroupId, setGroupDetail, setMessagesMap, setTasksMap])
+  }, [isShared, activeGroupId, setGroupDetail, setMessagesMap, setTasksMap])
 
   // 2. 实时事件流监听
   useEffect(() => {
+    if (isShared) return
     const unsubscribe = window.electronAPI.dshGroupChat.onEventStream((event) => {
       if (event.type === 'message_created') {
         setMessagesMap((prev) => {
@@ -148,7 +181,7 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
     return () => {
       unsubscribe()
     }
-  }, [activeGroupId, setMessagesMap, setTasksMap, setGroupDetail])
+  }, [isShared, activeGroupId, setMessagesMap, setTasksMap, setGroupDetail])
 
   // 自动滚动到底部
   useEffect(() => {
@@ -163,7 +196,7 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
 
   // 计算智能体候选列表（支持搜索名称与职责描述）
   const mentionSuggestions = useMemo<MentionCandidate[]>(() => {
-    if (!groupDetail || dismissedMentionDraft === inputText || isComposing || !mentionMatch) {
+    if (shared || !groupDetail || dismissedMentionDraft === inputText || isComposing || !mentionMatch) {
       return []
     }
     const query = (mentionMatch[1] ?? '').trim().toLowerCase()
@@ -193,7 +226,7 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
         c.name.toLowerCase().includes(query) ||
         (c.responsibility && c.responsibility.toLowerCase().includes(query))
     )
-  }, [groupDetail, dismissedMentionDraft, inputText, isComposing, mentionMatch])
+  }, [shared, groupDetail, dismissedMentionDraft, inputText, isComposing, mentionMatch])
 
   // 候选列表变化时重置选中的 index
   useEffect(() => {
@@ -253,12 +286,28 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
     })
   }
 
+  function addDraftFiles(added: File[]) {
+    if (sending || !added.length) return
+    const error = attachmentLimitError(files.length, added)
+    setFileError(error)
+    if (!error) setFiles([...files, ...added])
+  }
+
   // 发送消息
   const handleSend = async () => {
-    if (!inputText.trim() || !activeGroupId || sending) return
+    if (!hasDraft || !activeGroupId || sending) return
     setSending(true)
 
     try {
+      if (shared) {
+        if (!shared.canSend || targetUnavailable) return
+        await shared.send(inputText.trim(), targetId, files)
+        setFiles([]); setFileError('')
+        sharedEditor.current?.replaceChildren()
+        setTargetId(undefined)
+        setInputText('')
+        return
+      }
       // 检查 mentions
       const mentions: DshGroupChatMention[] = []
       const hasMentionAll =
@@ -306,7 +355,7 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
       setDismissedMentionDraft(null)
       setPendingQuote(null)
     } catch (err) {
-      console.error('[DshGroupChatWorkspace] 发送失败:', err)
+      if (!shared) console.error('[DshGroupChatWorkspace] 发送失败:', err) // 共享群的发送错误已在会话中展示。
     } finally {
       setSending(false)
     }
@@ -358,14 +407,14 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
   }
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-[#0c0d10] text-zinc-100 relative overflow-hidden select-none">
+    <div className="dsh-room-workspace flex-1 flex flex-col h-full bg-[#0c0d10] text-zinc-100 relative overflow-hidden select-none">
       {/* 顶部 Header（WorkBuddy 极简导航栏） */}
-      <div className="h-12 border-b border-white/[0.06] px-4 flex items-center justify-between shrink-0 bg-[#0c0d10]/90 backdrop-blur-md z-10">
+      <header className="dsh-room-header h-12 border-b border-white/[0.06] px-4 flex items-center justify-between shrink-0 bg-[#0c0d10]/90 backdrop-blur-md z-10">
         <div className="flex items-center gap-2.5 min-w-0">
-          <h2 className="text-sm font-semibold text-white/95 truncate tracking-tight">{groupDetail.name}</h2>
+          <h2 className="dsh-room-text text-sm font-semibold text-white/95 truncate tracking-tight">{groupDetail.name}</h2>
 
           {/* Agent 协作成员与模型配置入口 */}
-          <button
+          {shared ? shared.status : <button
             type="button"
             onClick={() => setActiveDrawer(activeDrawer === 'agents' ? 'none' : 'agents')}
             className="text-[11px] px-2.5 py-0.5 rounded-full bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.08] text-zinc-300 hover:text-white font-medium transition-all cursor-pointer flex items-center gap-1.5"
@@ -373,11 +422,12 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
           >
             <Bot className="w-3 h-3 text-zinc-300" />
             <span>{groupDetail.agents.length} Agent 协作</span>
-          </button>
+          </button>}
         </div>
 
         {/* 顶部操作工具栏（WorkBuddy 极简浅灰图标按钮） */}
         <div className="flex items-center gap-1 shrink-0">
+          {!shared && <>
           <Button
             variant="ghost"
             size="sm"
@@ -431,30 +481,23 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
             <Bot className="w-3.5 h-3.5 text-zinc-300" />
           </Button>
 
-          {onClose && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 p-0 text-zinc-400 hover:text-white hover:bg-white/[0.06] rounded-md ml-1"
-              onClick={onClose}
-              title="关闭子视图"
-            >
-              <X className="w-3.5 h-3.5" />
-            </Button>
-          )}
+          </>}
+          {headerAction}
         </div>
-      </div>
+      </header>
 
       {/* 消息流主区域 */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+        {shared?.historyAction}
         {messages.length === 0 ? (
           /* WorkBuddy 风格纯粹极简空状态：居中无冗杂，极度舒适沉浸 */
           <div className="h-full flex flex-col items-center justify-center text-zinc-500 py-16 select-none">
-            <span className="text-sm font-normal text-zinc-500/80 tracking-wide">暂无对话记录</span>
+            <span className="dsh-room-secondary text-sm font-normal text-zinc-500/80 tracking-wide">暂无对话记录</span>
           </div>
         ) : (
           messages.map((msg) => {
-            const isUser = msg.kind === 'user'
+            const isUser = msg.kind === 'user' && (!shared || msg.authorUserId === shared.userId)
+            const author = isUser ? '我' : msg.authorName || msg.agentName || (msg.kind === 'system' ? '系统' : '智能体')
 
             return (
               <div
@@ -463,23 +506,23 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
               >
                 {/* 头像 */}
                 <div
-                  className={`w-7 h-7 rounded-full flex items-center justify-center font-medium text-xs shrink-0 ${
+                  className={`dsh-room-avatar w-7 h-7 rounded-full flex items-center justify-center font-medium text-xs shrink-0 ${
                     isUser
                       ? 'bg-white/[0.12] text-zinc-100 border border-white/[0.14] font-medium shadow-xs'
                       : 'bg-white/[0.08] text-zinc-300 border border-white/[0.08]'
                   }`}
                 >
-                  {isUser ? '我' : <Bot className="w-3.5 h-3.5 text-zinc-300" />}
+                  {isUser ? '我' : msg.kind === 'user' ? <UsersRound className="w-3.5 h-3.5" /> : <Bot className="w-3.5 h-3.5 text-zinc-300" />}
                 </div>
 
                 {/* 气泡主体 */}
-                <div className={`flex flex-col max-w-[76%] ${isUser ? 'items-end' : 'items-start'}`}>
+                <div className={`min-w-0 flex flex-col max-w-[76%] ${isUser ? 'items-end' : 'items-start'}`}>
                   {/* 发送者名称与角色 */}
                   <div className="flex items-center gap-2 mb-1 px-1 text-[11px] text-zinc-400">
-                    <span className="font-medium text-zinc-200">
-                      {isUser ? '我' : msg.agentName || 'Agent'}
+                    <span className="dsh-room-text font-medium text-zinc-200">
+                      {author}
                     </span>
-                    {!isUser && (() => {
+                    {!shared && !isUser && (() => {
                       const matchedAgent = groupDetail.agents.find(
                         (a) => a.agentId === msg.agentId || a.name === msg.agentName,
                       )
@@ -500,7 +543,7 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
                         </button>
                       )
                     })()}
-                    <span className="text-[10px] text-zinc-500 font-mono">
+                    <span className="dsh-room-secondary text-[10px] text-zinc-500 font-mono">
                       {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>
                   </div>
@@ -520,16 +563,22 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
 
                   {/* 消息内容气泡 */}
                   <div
-                    className={`relative p-3 rounded-2xl text-[13px] leading-relaxed break-words select-text ${
+                    className={`dsh-room-bubble min-w-0 max-w-full relative p-3 rounded-2xl text-[13px] leading-relaxed break-words select-text ${
                       isUser
                         ? 'bg-[#27282e] text-zinc-100 border border-white/[0.1] rounded-tr-xs shadow-xs'
                         : 'bg-[#181a20] border border-white/[0.08] text-zinc-100 rounded-tl-xs shadow-md'
                     }`}
                   >
-                    <p className="whitespace-pre-wrap">{renderMessageContent(msg.text, groupDetail?.agents)}</p>
+                    {shared && msg.kind === 'agent' ? (
+                      <SharedAgentMarkdown text={msg.text} />
+                    ) : (
+                      <p className="whitespace-pre-wrap">{shared ? msg.text : renderMessageContent(msg.text, groupDetail?.agents)}</p>
+                    )}
 
+                    {msg.outgoing && <OutgoingAttachments row={msg.outgoing} retry={() => shared?.retryAttachment?.(msg.outgoing!.key)} />}
+                    {shared?.canSend && msg.attachmentIds?.map((id, index) => <ReceivedAttachment key={id} id={id} index={index} download={shared.download} />)}
                     {/* 悬浮引用快捷操作 */}
-                    <button
+                    {!shared && <button
                       onClick={() =>
                         setPendingQuote({
                           messageId: msg.id,
@@ -541,7 +590,7 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
                       title="引用这条消息"
                     >
                       <Quote className="w-3 h-3" />
-                    </button>
+                    </button>}
                   </div>
                 </div>
               </div>
@@ -554,7 +603,7 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
       {/* 底部悬浮输入区域（WorkBuddy 签名级 Floating Input Capsule） */}
       <div className="p-4 pt-1 w-full max-w-4xl mx-auto flex flex-col items-center shrink-0 relative">
         {/* 引用暂存回显条 */}
-        {pendingQuote && (
+        {!shared && pendingQuote && (
           <div className="w-full mb-2 flex items-center justify-between px-3 py-1.5 rounded-xl bg-white/[0.05] border border-white/[0.08] text-xs text-zinc-300 backdrop-blur-md animate-in fade-in duration-100">
             <div className="flex items-center gap-2 truncate">
               <CornerDownRight className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
@@ -571,7 +620,7 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
         )}
 
         {/* 悬浮输入胶囊本体 */}
-        <div className="w-full relative flex flex-col rounded-2xl bg-[#181a20]/95 border border-white/10 shadow-[0_16px_48px_-8px_rgba(0,0,0,0.6),inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-xl transition-all focus-within:border-white/20 focus-within:ring-1 focus-within:ring-white/10">
+        <div className="dsh-room-composer w-full relative flex flex-col rounded-2xl bg-[#181a20]/95 border border-white/10 shadow-[0_16px_48px_-8px_rgba(0,0,0,0.6),inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-xl transition-all focus-within:border-white/20 focus-within:ring-1 focus-within:ring-white/10">
           {/* Mention 浮动候选菜单 */}
           {mentionSuggestions.length > 0 && (
             <div
@@ -646,10 +695,11 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
           )}
 
           {/* 文本输入框（带 WorkBuddy 专属 Placeholder） */}
-          <Textarea
+          {shared ? <SharedRoomDraftInput editorRef={sharedEditor} agent={shared.agent} sending={sending} onPasteImages={addDraftFiles}
+            onDraft={(text, id) => { setInputText(text); setTargetId(id) }} onSend={handleSend} /> : <Textarea
             ref={textareaRef}
             value={inputText}
-            onChange={(e) => {
+            onChange={e => {
               setInputText(e.target.value)
               setCursorPos(e.target.selectionStart ?? e.target.value.length)
               setDismissedMentionDraft(null)
@@ -662,12 +712,16 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
             placeholder="今天帮你想些什么？ @ 添加上下文，/调用技能与指令"
             rows={2}
             className="border-0 focus-visible:ring-0 px-3.5 pt-3 pb-1 resize-none text-[13px] bg-transparent text-zinc-100 placeholder:text-zinc-500 min-h-[50px] max-h-[140px]"
-          />
+          />}
 
+          {shared && files.length > 0 && <div className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto px-3 py-1" aria-label="待发送附件">
+            {files.map((file, i) => <DraftAttachment key={`${i}:${file.name}`} file={file} disabled={sending} remove={() => setFiles(files.filter((_, index) => index !== i))} />)}
+          </div>}
+          {shared && fileError && <small role="alert" className="px-3 text-destructive">{fileError}</small>}
           {/* 胶囊底部操作栏 */}
           <div className="flex items-center justify-between px-3 pb-2.5 pt-1 border-t border-white/[0.04]">
             {/* 左侧：+ 附件按钮、(!) 允许完全访问 胶囊、@ 提及 */}
-            <div className="flex items-center gap-2">
+            {shared ? <RoomAttachmentPicker disabled={sending} onAdd={addDraftFiles} /> : <div className="flex items-center gap-2">
               <button
                 type="button"
                 className="w-7 h-7 rounded-full bg-white/[0.05] hover:bg-white/[0.09] border border-white/[0.08] text-zinc-400 hover:text-white flex items-center justify-center transition-all cursor-pointer"
@@ -694,10 +748,11 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
                 <AtSign className="w-3 h-3 text-zinc-400" />
                 <span>提及</span>
               </button>
-            </div>
+            </div>}
 
             {/* 右侧：⚡ 快速 胶囊、通知铃铛、圆形发送按钮 */}
             <div className="flex items-center gap-2 shrink-0">
+              {!shared && <>
               <div
                 className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] text-zinc-300 bg-white/[0.05] hover:bg-white/[0.08] border border-white/[0.08] cursor-pointer transition-all"
                 title="切换执行模式 / 速度"
@@ -715,12 +770,13 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
                 <Bell className="w-3.5 h-3.5" />
               </button>
 
+              </>}
               <button
                 type="button"
-                disabled={!inputText.trim() || sending}
+                disabled={!hasDraft || sending || targetUnavailable || (shared && !shared.canSend)}
                 onClick={handleSend}
-                className={`w-7 h-7 rounded-full flex items-center justify-center transition-all ${
-                  inputText.trim() && !sending
+                className={`dsh-room-send w-7 h-7 rounded-full flex items-center justify-center transition-all ${
+                  hasDraft && !sending
                     ? 'bg-[#3f414a] hover:bg-[#4d505a] text-zinc-100 border border-white/[0.12] shadow-md cursor-pointer scale-105 active:scale-95'
                     : 'bg-white/[0.06] text-zinc-600 border border-transparent cursor-not-allowed'
                 }`}
@@ -733,8 +789,8 @@ export function DshGroupChatWorkspace({ onClose }: DshGroupChatWorkspaceProps): 
         </div>
 
         {/* 胶囊底部细字免责声明（WorkBuddy 标志性尾注） */}
-        <p className="text-[11px] text-zinc-500/70 text-center mt-2 font-normal select-none">
-          内容由 AI 生成，请核实重要信息
+        <p className="dsh-room-secondary text-[11px] text-zinc-500/70 text-center mt-2 font-normal select-none">
+          {shared ? '仅本群成员可查看共享消息' : '内容由 AI 生成，请核实重要信息'}
         </p>
       </div>
     </div>

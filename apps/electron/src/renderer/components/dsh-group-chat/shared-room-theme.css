@@ -1,0 +1,73 @@
+/* MichengAI/dsh-codex-ui @ 512474a：CLAUDE_DARK_THEME。仅共享群面板消费这些颜色，
+   不覆盖应用主题变量；菜单、搜索底色和各对话框继续使用原主题。 */
+.dsh-room-pane {
+  --room-canvas: #141414;
+  --room-surface: #212121;
+  --room-text: #f4f4f4;
+  --room-secondary: #cfcfcf;
+  --room-tertiary: #beb6b8;
+  --room-accent: #d97757;
+  --room-accent-hover: color-mix(in srgb, var(--room-accent) 86%, var(--room-text));
+  --room-line: rgba(255, 255, 255, 0.09);
+  background-color: var(--room-canvas);
+}
+
+.dsh-room-pane .dsh-room-workspace,
+.dsh-room-pane .dsh-room-header {
+  background-color: var(--room-canvas);
+  color: var(--room-text);
+  border-color: var(--room-line);
+}
+
+.dsh-room-pane .dsh-room-bubble,
+.dsh-room-pane .dsh-room-composer,
+.dsh-room-pane .dsh-room-avatar {
+  background-color: var(--room-surface);
+  color: var(--room-text);
+  border-color: var(--room-line);
+}
+
+.dsh-room-pane .dsh-room-composer:focus-within { border-color: var(--room-accent); }
+.dsh-room-pane .dsh-room-draft { color: var(--room-text); }
+.dsh-room-pane .dsh-room-text { color: var(--room-text); }
+.dsh-room-pane .dsh-room-secondary,
+.dsh-room-pane .dsh-room-avatar svg { color: var(--room-secondary); }
+.dsh-room-pane .dsh-room-draft:empty::before { content: attr(data-placeholder); color: var(--room-tertiary); pointer-events: none; }
+
+.dsh-room-pane .dsh-room-mention-chip {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--room-accent) 16%, var(--room-surface));
+  color: var(--room-accent);
+  box-decoration-break: clone;
+}
+.dsh-room-pane .dsh-room-thinking { color: var(--room-secondary); }
+.dsh-room-pane .dsh-room-send:enabled { background-color: var(--room-accent); color: #0a0a0a; }
+.dsh-room-pane .dsh-room-send:enabled:hover { background-color: var(--room-accent-hover); }
+.dsh-room-pane .dsh-room-send:disabled { background-color: #2c2c2c; color: var(--room-secondary); }
+
+@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+  .dsh-room-pane .dsh-room-thinking {
+    background-image: linear-gradient(90deg, var(--room-tertiary) 46%, var(--room-text) 50%, var(--room-tertiary) 54%);
+    background-size: 240% 100%;
+    background-clip: text;
+    color: transparent;
+    animation: dsh-room-thinking-sweep 2.4s linear infinite;
+  }
+
+  /* 加宽的渐变在两端都完全离开字形，停顿及下一轮复位时没有闪跳。 */
+  @keyframes dsh-room-thinking-sweep {
+    0% { background-position: 100% 50%; }
+    60%, 100% { background-position: 0% 50%; }
+  }
+}
+
+.dsh-room-pane .dsh-room-markdown {
+  --tw-prose-body: var(--room-text);
+  --tw-prose-bold: var(--room-text);
+  --tw-prose-headings: var(--room-text);
+  --tw-prose-links: var(--room-text);
+  --tw-prose-code: var(--room-text);
+  --tw-prose-pre-bg: var(--room-canvas);
+  overflow-wrap: anywhere;
+}

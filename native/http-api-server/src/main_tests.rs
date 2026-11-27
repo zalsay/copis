@@ -1223,3 +1223,25 @@ fn given_worker_exits_without_complete_then_synthesized_frame_keeps_chrome_capab
         "cdc-issued-for-this-run"
     );
 }
+
+#[test]
+fn shared_room_endpoint_does_not_trust_a_browser_or_an_unauthenticated_local_process() {
+    for headers in [
+        HashMap::new(),
+        HashMap::from([("origin".to_string(), "http://localhost:5174".to_string())]),
+    ] {
+        let bridge = Arc::new(Bridge::new());
+        bridge.available.store(false, Ordering::Release);
+        let response = run_handle_connection(
+            HttpRequest {
+                method: "POST".into(),
+                target: super::working_gateway::DSH_SHARED_ROOMS_PATH.into(),
+                headers,
+                body: br#"{"action":"list","expectedUserId":"7"}"#.to_vec(),
+            },
+            Arc::clone(&bridge),
+        );
+        assert!(response.starts_with("HTTP/1.1 403"));
+        assert!(bridge.request_records.lock().unwrap().is_empty());
+    }
+}

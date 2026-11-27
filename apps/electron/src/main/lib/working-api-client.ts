@@ -1,4 +1,7 @@
+import type { AttachmentCommand } from './dsh-group-chat/attachment-transfer'
+import type { SharedRoomInternalCommand } from './dsh-group-chat/shared-room-agents'
 import type {
+  DshSharedRoomCommand,
   WorkingCheckInResult,
   WorkingDiamondPackage,
   WorkingDiamondPurchaseResult,
@@ -469,6 +472,7 @@ export class WorkingApiClient {
   private readonly tokenStore: WorkingTokenStore
   private cachedUser: WorkingUser | null
   private identityRevision = 0
+  private identityListeners = new Set<() => void>()
 
   constructor(options: WorkingApiClientOptions) {
     this.baseUrl = resolveLocalRustApiUrl(options.baseUrl, options.fetchImpl !== undefined, options.isPackaged)
@@ -490,14 +494,26 @@ export class WorkingApiClient {
     return this.cachedUser
   }
 
+  getIdentityRevision(): number {
+    return this.identityRevision
+  }
+
+  subscribeIdentity(listener: () => void): () => void {
+    this.identityListeners.add(listener)
+    return () => { this.identityListeners.delete(listener) }
+  }
+
   private setCachedUser(user: WorkingUser | null): void {
-    if (!sameUserIdentity(this.cachedUser, user)) this.identityRevision += 1
+    const changed = !sameUserIdentity(this.cachedUser, user)
+    if (changed) this.identityRevision += 1
     this.cachedUser = user
+    if (changed) for (const listener of this.identityListeners) listener()
   }
 
   clearAuth(): void {
     this.identityRevision += 1
     this.cachedUser = null
+    for (const listener of this.identityListeners) listener()
     this.tokenStore.clear()
   }
 
@@ -962,6 +978,21 @@ export class WorkingApiClient {
       }
       throw error
     }
+  }
+
+  /** 预期账号只作切换检查，远端身份始终由 Rust AuthSession 绑定。 */
+  async sharedRoomCommand(expectedUserId: string, command: DshSharedRoomCommand | SharedRoomInternalCommand | AttachmentCommand, internalToken: string | null): Promise<unknown> {
+    if (!internalToken) throw new Error('本机共享群网关尚未就绪')
+    const user = this.getCachedUser()
+    if (!user || String(user.id) !== expectedUserId) throw new Error('共享群账号已切换，请重新打开')
+    const revision = this.identityRevision
+    const result = await this.request<unknown>('/api/internal/dsh/shared-rooms', {
+      method: 'POST', headers: { 'X-Copis-Internal-Token': internalToken },
+      body: JSON.stringify({ ...command, expectedUserId }),
+      redirect: 'error', signal: AbortSignal.timeout(15_000), unwrap: false, includePayload: false,
+    })
+    if (revision !== this.identityRevision) throw new Error('共享群账号已切换，已丢弃旧响应')
+    return result
   }
 
   private async request<T>(

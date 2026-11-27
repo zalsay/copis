@@ -9,7 +9,7 @@
  * - 点击新建会话或历史会话瞬间切回 DSH 聊天界面，外层 Agent 侧边栏绝对不渲染。
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import {
   Loader2,
@@ -39,10 +39,12 @@ import { KnowledgeView } from '@/components/knowledge/KnowledgeView'
 import { ExpertTeamView } from '@/components/expert-team/ExpertTeamView'
 import { AgentSkillsView } from '@/components/agent-skills/AgentSkillsView'
 import { FundStockTerminalView } from '@/components/trading/FundStockTerminalView'
+import { ManagedRoomDialog } from '../dsh-group-chat/ManagedRoomDialog'
+import { roomDirectoryAtom, useRoomSidebarBridge } from '../dsh-group-chat/shared-room-directory'
 import { DshGroupChatView } from '@/components/dsh-group-chat/DshGroupChatView'
 import { CopisWorkingSettingsPanel } from '@/components/app-shell/CopisWorkingSettingsPanel'
 import { cn } from '@/lib/utils'
-import type { DshClientEvent } from '@copis/shared'
+import { isDshExpandedSidebarWidth, type DshClientEvent } from '@copis/shared'
 
 type CreationSubView =
   | 'planning'
@@ -71,6 +73,7 @@ export function CopisCreationWebView(): React.ReactElement {
   const automationFormOpen = useAtomValue(automationFormAtom).open
   const setActiveView = useSetAtom(activeViewAtom)
   const [clientGeneration, setClientGeneration] = useState(0)
+  const roomSidebarIntent = useRoomSidebarBridge(status.running && Boolean(status.url), clientGeneration)
   const [pendingRequestId] = useAtomValue(pendingDshNewSessionsAtom)
   const returnToSession = useAtomValue(dshReturnToSessionAtom)
   const acknowledgeNewSession = useSetAtom(acknowledgeDshNewSessionAtom)
@@ -86,6 +89,7 @@ export function CopisCreationWebView(): React.ReactElement {
   const [installProgressText, setInstallProgressText] = useState<string | null>(null)
   const [installPercentage, setInstallPercentage] = useState(0)
   const [creationSubView, setCreationSubView] = useState<CreationSubView>(null)
+  const externalRoomDialog = !!useAtomValue(roomDirectoryAtom).management && creationSubView !== 'group-chat'
   const [dshSidebarWidth, setDshSidebarWidth] = useState(280)
 
   const nativeHostRef = useRef<HTMLDivElement>(null)
@@ -105,13 +109,13 @@ export function CopisCreationWebView(): React.ReactElement {
     }
 
     const rect = nativeHostRef.current.getBoundingClientRect()
-    // 若当前打开了 Copis 功能视图，则原生视图保持展开左侧 DSH 侧边栏（严格限制在 [264, 360] 区间），右侧腾出空间渲染 React 视图；
+    // 若当前打开了 Copis 功能视图，则原生视图保持展开左侧 DSH 侧边栏（宽度与原生会话侧栏一致），右侧腾出空间渲染 React 视图；
     // 设置页面则完全隐藏原生 DSH 侧边栏与网页内容，由 Copis 设置面板全屏覆盖呈现。
     const isSettings = creationSubView === 'settings'
     const effectiveSidebarWidth = clampDshSidebarWidth(dshSidebarWidth)
     const effectiveWidth = isSettings
       ? 0
-      : creationSubView
+      : (creationSubView || externalRoomDialog)
         ? Math.min(effectiveSidebarWidth, rect.width)
         : rect.width
     const isVisible = !workingSettingsOpen && !isSettings && !activeWebTabId && rect.width > 0 && rect.height > 0
@@ -126,9 +130,9 @@ export function CopisCreationWebView(): React.ReactElement {
       },
       status.url
     )
-  }, [status.running, status.url, creationSubView, dshSidebarWidth, workingSettingsOpen, activeWebTabId])
+  }, [status.running, status.url, creationSubView, externalRoomDialog, dshSidebarWidth, workingSettingsOpen, activeWebTabId])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     updateNativeBounds()
     const handleResize = () => updateNativeBounds()
     window.addEventListener('resize', handleResize)
@@ -178,6 +182,7 @@ export function CopisCreationWebView(): React.ReactElement {
         setCreationSubView(null)
         setActiveView('conversations')
       } else if (e.type === 'COPIS_NAVIGATE') {
+        if (e.view === 'group-chat' && !roomSidebarIntent(e.tab)) return
         if (e.view === 'conversations' && e.tab === 'dsh-client-ready') {
           setClientGeneration((n) => n + 1)
         } else if (e.view === 'conversations' && e.tab?.startsWith('dsh-session-accepted:')) {
@@ -213,28 +218,12 @@ export function CopisCreationWebView(): React.ReactElement {
             type: 'COPIS_SUBVIEW_CHANGE',
             subview: nextView,
           })
-          if (nativeHostRef.current && status.url) {
-            const rect = nativeHostRef.current.getBoundingClientRect()
-            const effectiveSidebarWidth = clampDshSidebarWidth(dshSidebarWidth)
-            const isSettings = nextView === 'settings'
-            const effectiveWidth = isSettings ? 0 : Math.min(effectiveSidebarWidth, rect.width)
-            void window.electronAPI?.dshCordis?.updateViewBounds?.(
-              {
-                x: Math.round(rect.left),
-                y: Math.round(rect.top),
-                width: Math.round(effectiveWidth),
-                height: Math.round(rect.height),
-                visible: !workingSettingsOpen && !isSettings && !activeWebTabId && rect.width > 0 && rect.height > 0,
-              },
-              status.url
-            )
-          }
           if (e.view === 'planning' && e.tab) {
             setPlanningTab(e.tab as any)
           }
         }
       } else if (e.type === 'COPIS_DSH_SIDEBAR_INFO') {
-        if (e.width && Number.isFinite(e.width) && e.width >= 200 && e.width <= 360) {
+        if (isDshExpandedSidebarWidth(e.width)) {
           setDshSidebarWidth(clampDshSidebarWidth(e.width))
         }
       } else if (e.type === 'COPIS_OPEN_SEARCH') {
@@ -267,6 +256,8 @@ export function CopisCreationWebView(): React.ReactElement {
 
     const unsubIpc = window.electronAPI?.dshCordis?.onClientEvent?.(handleClientEvent)
     const onMsg = (event: MessageEvent) => {
+      // 群目录只接受由主进程校验过 DSH 主 frame 的导航事件。
+      if (event.data?.type === 'COPIS_NAVIGATE' && event.data.view === 'group-chat') return
       if (event.data && typeof event.data === 'object' && 'type' in event.data) {
         handleClientEvent(event.data as DshClientEvent)
       }
@@ -277,7 +268,7 @@ export function CopisCreationWebView(): React.ReactElement {
       unsubIpc?.()
       window.removeEventListener('message', onMsg)
     }
-  }, [setAppModeAndRuntime, setActiveView, acknowledgeNewSession, setPlanningTab, setWorkingSettingsOpen, status.url, dshSidebarWidth, workingSettingsOpen, activeWebTabId])
+  }, [roomSidebarIntent, setAppModeAndRuntime, setActiveView, acknowledgeNewSession, setPlanningTab, setWorkingSettingsOpen, status.url, workingSettingsOpen, activeWebTabId])
 
   // 创造模式下如果从全局快捷键触发了 searchDialogOpen，转发给 DSH 客户端打开原生搜索浮层并重置
   useEffect(() => {
@@ -631,7 +622,7 @@ export function CopisCreationWebView(): React.ReactElement {
               ) : creationSubView === 'fund-stock' ? (
                 <FundStockTerminalView />
               ) : creationSubView === 'group-chat' ? (
-                <DshGroupChatView onClose={closeSubView} />
+                <DshGroupChatView />
               ) : creationSubView === 'settings' ? (
                 <CopisWorkingSettingsPanel onClose={closeSubView} />
               ) : null}
@@ -640,6 +631,9 @@ export function CopisCreationWebView(): React.ReactElement {
         )}
       </div>
 
+      {externalRoomDialog && <div className="absolute inset-y-0 right-0 pointer-events-none [anchor-name:--copis-room-pane] [&_dialog]:pointer-events-auto" style={{ left: clampDshSidebarWidth(dshSidebarWidth) }}>
+        <ManagedRoomDialog />
+      </div>}
       <CopisWorkingFeedbackDialog open={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
     </div>
   )

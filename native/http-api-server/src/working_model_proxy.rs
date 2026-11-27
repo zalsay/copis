@@ -55,7 +55,17 @@ struct StoredDshCapability {
     reasoning_effort: Option<String>,
 }
 
+#[derive(Clone)]
+struct RoomGrant {
+    owner: String,
+    generation: u64,
+    model: String,
+    effort: String,
+    expires_at: u64,
+}
+
 pub struct WorkingModelProxy {
+    room_grants: Mutex<HashMap<String, RoomGrant>>,
     auth: Arc<AuthSession>,
     model_client: ModelRequestClient,
     capabilities: Mutex<HashMap<String, StoredCapability>>,
@@ -75,6 +85,7 @@ impl WorkingModelProxy {
             auth,
             model_client,
             capabilities: Mutex::new(HashMap::new()),
+            room_grants: Mutex::new(HashMap::new()),
             dsh_capabilities: Mutex::new(Vec::new()),
         }
     }
@@ -97,6 +108,125 @@ impl WorkingModelProxy {
                 reasoning_effort,
             });
         Ok(capability)
+    }
+
+    pub fn room_capability_command(&self, body: &[u8]) -> Result<Value, WorkingModelError> {
+        #[derive(serde::Deserialize)]
+        #[serde(
+            tag = "action",
+            rename_all = "camelCase",
+            rename_all_fields = "camelCase",
+            deny_unknown_fields
+        )]
+        enum Command {
+            Issue {
+                user_id: String,
+                model_id: String,
+                reasoning_effort: String,
+            },
+            Revoke {
+                capability: String,
+            },
+        }
+        match serde_json::from_slice(body)
+            .map_err(|_| WorkingModelError::InvalidRequest("共享模型授权参数无效".into()))?
+        {
+            Command::Issue {
+                user_id,
+                model_id,
+                reasoning_effort,
+            } => Ok(
+                json!({"capability": self.issue_room_capability(&user_id, &model_id, &reasoning_effort)?}),
+            ),
+            Command::Revoke { capability } => {
+                self.revoke_room_capability(&capability);
+                Ok(json!({"ok":true}))
+            }
+        }
+    }
+
+    pub fn issue_room_capability(
+        &self,
+        owner: &str,
+        model: &str,
+        effort: &str,
+    ) -> Result<String, WorkingModelError> {
+        validate_identifier(owner, "userId", 128)?;
+        validate_identifier(model, "modelId", 256)?;
+        let effort = normalize_reasoning_effort(effort)?;
+        let (_, generation) = self
+            .auth
+            .room_model_token(owner, None)
+            .map_err(map_auth_error)?;
+        let key = format!("cwm_room_{}", generate_capability()?);
+        let now = now_secs();
+        let mut grants = self.room_grants.lock().unwrap();
+        grants.retain(|_, grant| grant.expires_at > now);
+        if grants.len() >= 4096 {
+            return Err(WorkingModelError::InvalidRequest(
+                "共享模型会话已达上限".into(),
+            ));
+        }
+        grants.insert(
+            key.clone(),
+            RoomGrant {
+                owner: owner.into(),
+                generation,
+                model: model.into(),
+                effort,
+                expires_at: now + CAPABILITY_TTL_SECS,
+            },
+        );
+        Ok(key)
+    }
+
+    pub fn revoke_room_capability(&self, key: &str) {
+        self.room_grants.lock().unwrap().remove(key);
+    }
+
+    fn room_grant(&self, key: &str) -> Result<RoomGrant, WorkingModelError> {
+        self.room_grants
+            .lock()
+            .unwrap()
+            .get(key)
+            .filter(|g| g.expires_at > now_secs())
+            .cloned()
+            .ok_or(WorkingModelError::Unauthorized)
+    }
+
+    fn room_stream(
+        &self,
+        capability: &str,
+        request: &[u8],
+        supplied_key: Option<&str>,
+    ) -> Result<WorkingModelStreamResponse, WorkingModelError> {
+        let grant = self.room_grant(capability)?;
+        if validate_model_request(request)? != grant.model {
+            return Err(WorkingModelError::CapabilityMismatch);
+        }
+        let body = inject_reasoning_effort(request, Some(&grant.effort))?;
+        let body = String::from_utf8(body).map_err(|_| WorkingModelError::InvalidResponse)?;
+        let key = supplied_key
+            .map(str::to_owned)
+            .unwrap_or_else(generate_idempotency_key);
+        validate_idempotency_key(&key)?;
+        let send = || {
+            self.room_grant(capability)?;
+            let (token, _) = self
+                .auth
+                .room_model_token(&grant.owner, Some(grant.generation))
+                .map_err(map_auth_error)?;
+            self.open_with_token(&body, &token, &key, None)
+        };
+        let mut response = send()?;
+        if response.status == 401 {
+            self.room_grant(capability)?;
+            self.auth
+                .refresh_for_generation(grant.generation)
+                .map_err(map_auth_error)?;
+            response = send()?;
+        }
+        Ok(Self::stream_response(response))
     }
 
     pub fn issue(
@@ -258,6 +388,9 @@ impl WorkingModelProxy {
         request_body: &[u8],
         idempotency_key: Option<&str>,
     ) -> Result<WorkingModelStreamResponse, WorkingModelError> {
+        if capability.starts_with("cwm_room_") {
+            return self.room_stream(capability, request_body, idempotency_key);
+        }
         let dsh_reasoning_effort = self
             .dsh_capabilities
             .lock()
@@ -395,16 +528,20 @@ impl WorkingModelProxy {
         } else {
             response
         };
+        Ok(Self::stream_response(response))
+    }
+
+    fn stream_response(response: ModelRequestResponse) -> WorkingModelStreamResponse {
         let content_type = response
             .headers
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
             .map(|(_, value)| value.clone());
-        Ok(WorkingModelStreamResponse {
+        WorkingModelStreamResponse {
             status: response.status,
             body: response.body,
             content_type,
-        })
+        }
     }
 
     fn open_with_current_token(

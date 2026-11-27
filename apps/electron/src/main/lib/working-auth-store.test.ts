@@ -79,3 +79,20 @@ describe('Copis Working 认证存储', () => {
     expect(existsSync(authPath)).toBe(true)
   })
 })
+
+test('已登录且后端使用 ID 时，购买入口能识别缓存账号，账号变更通知也使用同一标识', async () => {
+  writeFileSync(authPath, JSON.stringify({ token: 'legacy-token', tokenEncoding: 'plain', user: { ID: 42 } }))
+  const { getWorkingTokenStore, saveWorkingAuthFromRust, subscribeWorkingIdentity } = await import('./working-auth-store')
+  const store = getWorkingTokenStore()
+  expect(store.getUser()?.id).toBe(42)
+  const changed = mock(() => {})
+  const unsubscribe = subscribeWorkingIdentity(changed)
+  try {
+    saveWorkingAuthFromRust({ accessToken: 'refreshed-token', provider: 'oidc', user: { ID: 42 } as unknown as { id: number } })
+    expect(store.getUser()?.id).toBe(42)
+    expect(changed).toHaveBeenCalledWith(42)
+  } finally {
+    unsubscribe()
+    store.clear()
+  }
+})

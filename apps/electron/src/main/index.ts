@@ -797,6 +797,10 @@ app.on('before-quit', (event) => {
           await chromeDesktopService.shutdown()
         } catch { console.warn('[退出] Chrome 组件清理失败，继续停止其他服务') }
         try {
+          const { stopSharedRoomExecutorService } = await import('./lib/dsh-group-chat/shared-room-executor-service')
+          await stopSharedRoomExecutorService()
+        } catch { console.warn('[退出] 共享群执行器清理失败') }
+        try {
           await stopAllAgents()
         } finally {
           await stopHttpApiServer()

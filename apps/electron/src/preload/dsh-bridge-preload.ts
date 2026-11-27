@@ -8,7 +8,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
-import { DSH_CORDIS_IPC_CHANNELS, AGENT_IPC_CHANNELS, type DshClientEvent, type DshMediaPreviewResult } from '@copis/shared'
+import { DSH_CORDIS_IPC_CHANNELS, AGENT_IPC_CHANNELS, DEFAULT_DSH_PINNED_MENU_IDS, isDshExpandedSidebarWidth, type DshClientEvent, type DshMediaPreviewResult } from '@copis/shared'
 import { SETTINGS_IPC_CHANNELS } from '../types'
 
 let currentThemeIsDark: boolean | null = null
@@ -172,9 +172,6 @@ async function initThemeSync(): Promise<void> {
       ? (settings?.creationThemeColorDark || settings?.creationThemeColor || undefined)
       : (settings?.creationThemeColorLight || settings?.creationThemeColor || undefined)
     applyCustomThemeColors(agentColor, creationColor)
-    if (Array.isArray(settings?.hiddenSidebarMenuItems)) {
-      applyHiddenSidebarMenuItems(settings.hiddenSidebarMenuItems)
-    }
   } catch {
     if (typeof window !== 'undefined' && window.matchMedia) {
       applyDshTheme(window.matchMedia('(prefers-color-scheme: dark)').matches)
@@ -220,11 +217,11 @@ const copisBridge = {
     ipcRenderer.send(DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT, { type: 'COPIS_OPEN_FEEDBACK' })
   },
   reportSidebarInfo: (info: { width: number; wide?: boolean; collapsed?: boolean }) => {
-    if (typeof info?.width === 'number' && info.width >= 200 && info.width <= 360) {
+    if (isDshExpandedSidebarWidth(info?.width)) {
       ipcRenderer.send(DSH_CORDIS_IPC_CHANNELS.CLIENT_EVENT, {
         type: 'COPIS_DSH_SIDEBAR_INFO',
         ...info,
-        width: Math.max(264, Math.min(360, Math.round(info.width))),
+        width: Math.round(info.width),
       })
     }
   },
@@ -244,11 +241,18 @@ const copisBridge = {
   getActiveWorkspacePath: (cwd?: string) => {
     return ipcRenderer.invoke(DSH_CORDIS_IPC_CHANNELS.GET_ACTIVE_WORKSPACE_PATH, cwd)
   },
-  hideMenuItem: (menuId: string) => {
-    void hideDshMenuItem(menuId)
+  getPinnedMenuItems: async (): Promise<string[]> => {
+    const settings = await ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.GET)
+    if (Array.isArray(settings?.pinnedDshSidebarMenuItems)) return settings.pinnedDshSidebarMenuItems
+    const previouslyHidden = Array.isArray(settings?.hiddenSidebarMenuItems) ? settings.hiddenSidebarMenuItems : []
+    // 旧版被隐藏的默认项改为未固定，可从「展开显示」找回。
+    return DEFAULT_DSH_PINNED_MENU_IDS.filter((id) => !previouslyHidden.includes(id))
   },
-  getHiddenMenuItems: () => {
-    return Array.from(currentHiddenMenuIds)
+  setPinnedMenuItems: async (ids: string[]): Promise<void> => {
+    if (!Array.isArray(ids) || ids.length > 32 || ids.some((id) => typeof id !== 'string' || !/^[a-z-]{1,32}$/.test(id))) {
+      throw new TypeError('无效的固定菜单项')
+    }
+    await ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.UPDATE, { pinnedDshSidebarMenuItems: [...new Set(ids)] })
   },
 }
 
@@ -309,7 +313,6 @@ ipcRenderer.on(DSH_CORDIS_IPC_CHANNELS.DISPATCH_EVENT_TO_CLIENT, (_event, payloa
       isDark?: boolean
       agentThemeColor?: string
       creationThemeColor?: string
-      hiddenSidebarMenuItems?: string[]
       subview?: string | null
       view?: string
     }
@@ -318,9 +321,6 @@ ipcRenderer.on(DSH_CORDIS_IPC_CHANNELS.DISPATCH_EVENT_TO_CLIENT, (_event, payloa
       const nextAgentColor = p.agentThemeColor !== undefined ? (p.agentThemeColor || undefined) : currentCustomAgentColor
       const nextCreationColor = p.creationThemeColor !== undefined ? (p.creationThemeColor || undefined) : currentCustomCreationColor
       applyCustomThemeColors(nextAgentColor, nextCreationColor)
-    }
-    if (p.type === 'COPIS_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED') {
-      applyHiddenSidebarMenuItems(Array.isArray(p.hiddenSidebarMenuItems) ? p.hiddenSidebarMenuItems : [])
     }
     if (p.type === 'COPIS_OPEN_SEARCH_MODAL') {
       window.dispatchEvent(new CustomEvent('COPIS_OPEN_SEARCH_MODAL'))
@@ -514,6 +514,7 @@ function injectCopisThemeAccent(): void {
     }
 
     /* 会话与项目行选中激活态：使用 WorkBuddy 浅灰/曜石微高光体系，彻底消除紫色 */
+    .copis-room-row:has(> .copis-menu-item[data-active="true"]),
     .YDXeBa_sessionRow.YDXeBa_selected,
     .YDXeBa_searchResultRow.YDXeBa_selected,
     .YDXeBa_projectRow.active,
@@ -522,13 +523,13 @@ function injectCopisThemeAccent(): void {
     [class*="projectRow"][class*="active"],
     [class*="sessionRow"][data-selected="true"],
     [class*="SessionRow"][data-selected="true"] {
-      background: rgba(255, 255, 255, 0.1) !important;
-      color: #ffffff !important;
+      background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.1)) !important;
+      color: var(--dsw-alias-label-primary, #ffffff) !important;
       font-weight: 500 !important;
     }
     .YDXeBa_sessionRow.YDXeBa_selected *,
     [class*="sessionRow"][class*="selected"] * {
-      color: #ffffff !important;
+      color: var(--dsw-alias-label-primary, #ffffff) !important;
     }
     .YDXeBa_sessionRow.YDXeBa_selected [class*="date"],
     .YDXeBa_sessionRow.YDXeBa_selected [class*="time"],
@@ -537,10 +538,11 @@ function injectCopisThemeAccent(): void {
     [class*="sessionRow"][class*="selected"] span:last-child {
       color: #a1a1aa !important;
     }
+    .copis-room-row > .copis-menu-item[data-active="true"] svg,
     [class*="sessionRow"][class*="selected"] svg,
     [class*="searchResultRow"][class*="selected"] svg,
     [class*="projectRow"][class*="active"] svg {
-      color: #d4d4d8 !important;
+      color: var(--dsw-alias-label-secondary, #d4d4d8) !important;
     }
     .YDXeBa_projectRow svg,
     [class*="projectRow"] svg,
@@ -666,52 +668,6 @@ function injectCopisThemeAccent(): void {
       padding: 0 !important;
     }
 
-    /* 创造模式 DSH 侧边栏菜单项与隐藏胶囊按钮契约 */
-    .copis-menu-section > button {
-      position: relative !important;
-    }
-
-    /* 隐藏菜单项：宽侧边栏与窄侧边栏均生效 */
-    .copis-menu-section button[data-copis-hidden="true"],
-    .copis-rail-menu-section button[data-copis-hidden="true"] {
-      display: none !important;
-    }
-
-    /* DSH 侧边栏菜单项隐藏胶囊按钮：无背景色，仅边框，悬停保持透明背景 */
-    .copis-dsh-menu-hide-btn {
-      position: static !important;
-      right: auto;
-      top: auto;
-      transform: none;
-      flex: none;
-      margin-left: auto;
-      height: 20px;
-      padding: 0 7px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      border: 1px solid var(--dsw-alias-border-l2, rgba(120, 120, 128, 0.4));
-      border-radius: 9999px;
-      background: transparent !important;
-      color: var(--dsw-alias-label-secondary, #8f8f99);
-      font-size: 11px;
-      font-weight: 500;
-      line-height: 1;
-      cursor: pointer;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.15s ease;
-      z-index: 2;
-      user-select: none;
-      box-sizing: border-box;
-    }
-
-    .copis-menu-section button:hover .copis-dsh-menu-hide-btn,
-    .copis-menu-section button:focus-within .copis-dsh-menu-hide-btn {
-      opacity: 1;
-      pointer-events: auto;
-    }
-
     /* 侧边栏底部隐藏意见反馈菜单项（统一移入设置菜单） */
     .hHd-Xa_footArea button[aria-label="意见反馈"],
     [class*="footArea"] button[aria-label="意见反馈"],
@@ -769,10 +725,9 @@ function injectCopisThemeAccent(): void {
       border-right: none !important;
     }
 
-    body.copis-subview-active aside.copis-creation-sidebar,
-    body.copis-subview-active aside.hHd-Xa_root,
-    body.copis-subview-active aside[class*="SidebarRoot"],
-    body.copis-subview-active aside {
+    /* RC2 侧栏根节点为 div，覆盖原生抽屉保留的 48px 宽度差。 */
+    body.copis-subview-active :is(.copis-creation-sidebar, .hHd-Xa_root, [class*="SidebarRoot_root"]) {
+      box-sizing: border-box;
       width: 100% !important;
       padding: 6px var(--dsh-sidebar-inline-padding, 12px) !important;
     }
@@ -848,8 +803,8 @@ function injectCopisThemeAccent(): void {
       display: none !important;
     }
 
-    body.copis-subview-active [class*="newSessionLabel"]::after,
-    body.copis-subview-active [class*="_newSessionLabel"]::after {
+    /* 只在文字节点生成标签，避免 RC2 的 LabelMask 再生成一次。 */
+    body.copis-subview-active [class*="newSessionLabel"]:not([class*="newSessionLabelMask"])::after {
       content: "返回会话" !important;
       font-size: 14px !important;
       font-weight: 600 !important;
@@ -951,53 +906,7 @@ if (typeof document !== 'undefined') {
   }
 }
 
-const DSH_MENU_LABEL_TO_ID: Record<string, string> = {
-  '搜索': 'search',
-  '日程表': 'schedule',
-  '定时任务': 'automations',
-  '记忆': 'memory',
-  '知识库': 'knowledge',
-  '专家团队': 'expert-team',
-  '群聊协作': 'group-chat',
-  '技能市场': 'agent-skills',
-  '我的投资': 'fund-stock',
-}
-
-let currentHiddenMenuIds: Set<string> = new Set()
-
-/**
- * 应用隐藏侧边栏菜单项配置到 DSH 侧边栏
- */
-function applyHiddenSidebarMenuItems(hiddenItems: string[]): void {
-  currentHiddenMenuIds = new Set(hiddenItems)
-  syncDshSidebarMenuDoms()
-}
-
-/**
- * 隐藏 DSH 侧边栏指定菜单项并持久化到设置
- */
-async function hideDshMenuItem(menuId: string): Promise<void> {
-  currentHiddenMenuIds.add(menuId)
-  syncDshSidebarMenuDoms()
-  try {
-    const settings = await ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.GET)
-    const existing: string[] = Array.isArray(settings?.hiddenSidebarMenuItems)
-      ? settings.hiddenSidebarMenuItems
-      : []
-    if (!existing.includes(menuId)) {
-      const nextHidden = [...existing, menuId]
-      await ipcRenderer.invoke(SETTINGS_IPC_CHANNELS.UPDATE, {
-        hiddenSidebarMenuItems: nextHidden,
-      })
-    }
-  } catch (err) {
-    console.error('[DSH 侧边栏] 隐藏菜单项失败:', err)
-  }
-}
-
-/**
- * 遍历 DSH 侧边栏菜单按钮，挂载 data-copis-menu-id、显隐状态以及悬停「隐藏」胶囊按钮
- */
+/** 清理旧版菜单节点并同步原生侧栏按钮。 */
 function syncDshSidebarMenuDoms(): void {
   if (typeof document === 'undefined') return
 
@@ -1007,50 +916,7 @@ function syncDshSidebarMenuDoms(): void {
   )
   legacySections.forEach((el) => el.remove())
 
-  // 1. 宽侧边栏菜单项 (.copis-menu-section button)
-  const wideButtons = document.querySelectorAll<HTMLButtonElement>('.copis-menu-section button')
-  wideButtons.forEach((btn) => {
-    if (btn.classList.contains('copis-dsh-menu-hide-btn')) return
-
-    const labelSpan = btn.querySelector('span')
-    const labelText = labelSpan?.textContent?.trim() || ''
-    const menuId = DSH_MENU_LABEL_TO_ID[labelText]
-    if (!menuId) return
-
-    btn.setAttribute('data-copis-menu-id', menuId)
-    const isHidden = currentHiddenMenuIds.has(menuId)
-    btn.setAttribute('data-copis-hidden', isHidden ? 'true' : 'false')
-
-    let hideBtn = btn.querySelector<HTMLButtonElement>(':scope > .copis-dsh-menu-hide-btn')
-    if (!hideBtn) {
-      hideBtn = document.createElement('button')
-      hideBtn.type = 'button'
-      hideBtn.className = 'copis-dsh-menu-hide-btn'
-      hideBtn.textContent = '隐藏'
-      hideBtn.setAttribute('aria-label', `隐藏${labelText}`)
-      hideBtn.setAttribute('title', '隐藏此菜单')
-      hideBtn.addEventListener('click', (e) => {
-        e.stopPropagation()
-        e.preventDefault()
-        void hideDshMenuItem(menuId)
-      })
-      btn.appendChild(hideBtn)
-    }
-  })
-
-  // 2. 窄侧边栏菜单项 (.copis-rail-menu-section button)
-  const railButtons = document.querySelectorAll<HTMLButtonElement>('.copis-rail-menu-section button')
-  railButtons.forEach((btn) => {
-    const ariaLabel = btn.getAttribute('aria-label')?.trim() || ''
-    const menuId = DSH_MENU_LABEL_TO_ID[ariaLabel]
-    if (!menuId) return
-
-    btn.setAttribute('data-copis-menu-id', menuId)
-    const isHidden = currentHiddenMenuIds.has(menuId)
-    btn.setAttribute('data-copis-hidden', isHidden ? 'true' : 'false')
-  })
-
-  // 3. 侧边栏底部隐藏意见反馈按钮（宽侧边栏与窄侧边栏，统一在设置菜单中呈现）
+  // 侧边栏底部隐藏意见反馈按钮（宽侧边栏与窄侧边栏，统一在设置菜单中呈现）
   const footButtons = document.querySelectorAll<HTMLButtonElement>(
     '.hHd-Xa_footArea button, [class*="footArea"] button, [class*="FootArea"] button',
   )
@@ -1062,7 +928,7 @@ function syncDshSidebarMenuDoms(): void {
     }
   })
 
-  // 4. 同步顶部「新建会话 / 返回会话」按钮属性
+  // 同步顶部「新建会话 / 返回会话」按钮属性
   const topNewSessionBtn = document.querySelector<HTMLButtonElement>(
     'button[class*="_newSession"], button[class*="newSession"]',
   )
@@ -1081,7 +947,7 @@ function syncDshSidebarMenuDoms(): void {
 }
 
 /**
- * 启动 DSH 侧边栏 DOM 观察器，确保在动态渲染/切换视图时菜单显隐与隐藏按钮始终就绪
+ * 启动 DSH 侧边栏 DOM 观察器，同步原生按钮，不改动插件菜单
  */
 function setupDshSidebarMenuObserver(): void {
   if (typeof document === 'undefined') return
@@ -1123,6 +989,7 @@ function setupSessionClickInterceptor(): void {
 
     // 1. 严格排除 Copis 自身注入的菜单项、模式切换器以及底部操作区
     if (
+      target.closest('[data-copis-placement="after-workspaces"]') ||
       target.closest('.copis-menu-section') ||
       target.closest('.copis-rail-menu-section') ||
       target.closest('.copis-mode-switcher') ||

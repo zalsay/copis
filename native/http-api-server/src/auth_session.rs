@@ -581,7 +581,7 @@ impl AuthSession {
         self.refresh_for_generation(generation)
     }
 
-    fn refresh_for_generation(&self, generation: u64) -> Result<String, AuthError> {
+    pub(crate) fn refresh_for_generation(&self, generation: u64) -> Result<String, AuthError> {
         let mut state = self.refresh_state.lock().unwrap();
         self.auth_snapshot_for_generation(Some(generation))?;
         if state.active {
@@ -651,7 +651,18 @@ impl AuthSession {
         body: Option<String>,
         headers: Vec<(String, String)>,
     ) -> Result<EduApiResponse, AuthError> {
-        let (auth, generation) = self.auth_snapshot_for_generation(None)?;
+        let snapshot = self.auth_snapshot_for_generation(None)?;
+        self.request_with_session_refresh(snapshot, method, path, body, headers)
+    }
+
+    fn request_with_session_refresh(
+        &self,
+        (auth, generation): (PersistedAuth, u64),
+        method: &str,
+        path: &str,
+        body: Option<String>,
+        headers: Vec<(String, String)>,
+    ) -> Result<EduApiResponse, AuthError> {
         let result = self.request_with_token(
             method,
             path,
@@ -699,25 +710,31 @@ impl AuthSession {
         path: &str,
         body: Option<String>,
     ) -> Result<EduApiResponse, UserBoundRequestError> {
-        let token = {
-            let auth = self.auth.lock().unwrap();
-            let auth = auth.as_ref().ok_or(UserBoundRequestError::Authentication(
-                AuthError::NotAuthenticated,
-            ))?;
-            let current_user_id = auth
-                .user
-                .as_ref()
-                .and_then(user_identifier)
-                .ok_or(UserBoundRequestError::UserMismatch)?;
-            if current_user_id != expected_user_id {
-                return Err(UserBoundRequestError::UserMismatch);
-            }
-            auth.access_token.clone()
-        };
-
-        // 浏览器同步不刷新重放：账号可能已切换，重放会把旧 payload 交给新账号。
-        self.request_with_token(method, path, body, Some(token), Vec::new())
+        let snapshot = self.auth_snapshot_for_generation(None)
+            .map_err(UserBoundRequestError::Authentication)?;
+        if snapshot.0.user.as_ref().and_then(user_identifier).as_deref() != Some(expected_user_id) {
+            return Err(UserBoundRequestError::UserMismatch);
+        }
+        // 只读请求可在同一登录代次内续期重试；群写操作和浏览器同步均不自动重放。
+        if method == "GET" {
+            return self.request_with_session_refresh(snapshot, method, path, body, Vec::new())
+                .map_err(UserBoundRequestError::Authentication);
+        }
+        self.request_with_token(method, path, body, Some(snapshot.0.access_token), Vec::new())
             .map_err(UserBoundRequestError::Authentication)
+    }
+
+    /// 在同一认证快照上核对群主并领取 token，不先查身份再另取当前 token。
+    pub(crate) fn room_model_token(
+        &self,
+        owner: &str,
+        generation: Option<u64>,
+    ) -> Result<(String, u64), AuthError> {
+        let (snapshot, generation) = self.auth_snapshot_for_generation(generation)?;
+        if snapshot.user.as_ref().and_then(user_identifier).as_deref() != Some(owner) {
+            return Err(AuthError::NotAuthenticated);
+        }
+        Ok((snapshot.access_token, generation))
     }
 
     pub(crate) fn current_access_token(&self) -> Result<String, AuthError> {

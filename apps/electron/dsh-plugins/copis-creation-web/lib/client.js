@@ -4,66 +4,32 @@ window.__ModuleLoader__.load({
     var module = { exports: {} };
     var exports = module.exports;
     Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
-var __create = Object.create;
-var __getProtoOf = Object.getPrototypeOf;
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
-function __accessProp(key) {
-  return this[key];
-}
-var __toESMCache_node;
-var __toESMCache_esm;
-var __toESM = (mod, isNodeMode, target) => {
-  var canCache = mod != null && typeof mod === "object";
-  if (canCache) {
-    var cache = isNodeMode ? __toESMCache_node ??= new WeakMap : __toESMCache_esm ??= new WeakMap;
-    var cached = cache.get(mod);
-    if (cached)
-      return cached;
-  }
-  target = mod != null ? __create(__getProtoOf(mod)) : {};
-  const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
-  for (let key of __getOwnPropNames(mod))
-    if (!__hasOwnProp.call(to, key))
-      __defProp(to, key, {
-        get: __accessProp.bind(mod, key),
-        enumerable: true
-      });
-  if (canCache)
-    cache.set(mod, to);
-  return to;
-};
+var __moduleCache = /* @__PURE__ */ new WeakMap;
 var __toCommonJS = (from) => {
-  var entry = (__moduleCache ??= new WeakMap).get(from), desc;
+  var entry = __moduleCache.get(from), desc;
   if (entry)
     return entry;
   entry = __defProp({}, "__esModule", { value: true });
-  if (from && typeof from === "object" || typeof from === "function") {
-    for (var key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(entry, key))
-        __defProp(entry, key, {
-          get: __accessProp.bind(from, key),
-          enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable
-        });
-  }
+  if (from && typeof from === "object" || typeof from === "function")
+    __getOwnPropNames(from).map((key) => !__hasOwnProp.call(entry, key) && __defProp(entry, key, {
+      get: () => from[key],
+      enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable
+    }));
   __moduleCache.set(from, entry);
   return entry;
 };
-var __moduleCache;
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
-var __returnValue = (v) => v;
-function __exportSetter(name, newValue) {
-  this[name] = __returnValue.bind(null, newValue);
-}
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, {
       get: all[name],
       enumerable: true,
       configurable: true,
-      set: __exportSetter.bind(all, name)
+      set: (newValue) => all[name] = () => newValue
     });
 };
 
@@ -1063,6 +1029,16 @@ __export(exports_client, {
   CopisSearchModal: () => CopisSearchModal
 });
 module.exports = __toCommonJS(exports_client);
+
+// ../../packages/shared/src/types/dsh.ts
+var DEFAULT_DSH_PINNED_MENU_IDS = ["search", "schedule", "automations"];
+var DSH_SIDEBAR_MIN_WIDTH = 264;
+var DSH_SIDEBAR_MAX_WIDTH = 420;
+function isDshExpandedSidebarWidth(width) {
+  return typeof width === "number" && width >= DSH_SIDEBAR_MIN_WIDTH && width <= DSH_SIDEBAR_MAX_WIDTH;
+}
+var ROOM_ACTION_LABELS = { roster: "群智能体", copy: "复制分享码", leave: "退出群", dissolve: "解散群" };
+
 // ../../node_modules/lucide-react/dist/esm/createLucideIcon.js
 var import_react2 = require("react");
 
@@ -1126,12 +1102,6 @@ var createLucideIcon = (iconName, iconNode) => {
   return Component;
 };
 
-// ../../node_modules/lucide-react/dist/esm/icons/users-round.js
-var UsersRound = createLucideIcon("UsersRound", [
-  ["path", { d: "M18 21a8 8 0 0 0-16 0", key: "3ypg7q" }],
-  ["circle", { cx: "10", cy: "8", r: "5", key: "o932ke" }],
-  ["path", { d: "M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3", key: "10s06x" }]
-]);
 // ../../node_modules/lucide-react/dist/esm/icons/book-open.js
 var BookOpen = createLucideIcon("BookOpen", [
   ["path", { d: "M12 7v14", key: "1akyts" }],
@@ -1143,6 +1113,7 @@ var BookOpen = createLucideIcon("BookOpen", [
     }
   ]
 ]);
+
 // ../../node_modules/lucide-react/dist/esm/icons/brain.js
 var Brain = createLucideIcon("Brain", [
   [
@@ -1167,6 +1138,7 @@ var Brain = createLucideIcon("Brain", [
   ["path", { d: "M6 18a4 4 0 0 1-1.967-.516", key: "2e4loj" }],
   ["path", { d: "M19.967 17.484A4 4 0 0 1 18 18", key: "159ez6" }]
 ]);
+
 // ../../node_modules/lucide-react/dist/esm/icons/calendar-clock.js
 var CalendarClock = createLucideIcon("CalendarClock", [
   ["path", { d: "M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5", key: "1osxxc" }],
@@ -1176,12 +1148,33 @@ var CalendarClock = createLucideIcon("CalendarClock", [
   ["path", { d: "M17.5 17.5 16 16.3V14", key: "akvzfd" }],
   ["circle", { cx: "16", cy: "16", r: "6", key: "qoo3c4" }]
 ]);
+
 // ../../node_modules/lucide-react/dist/esm/icons/chevron-down.js
 var ChevronDown = createLucideIcon("ChevronDown", [
   ["path", { d: "m6 9 6 6 6-6", key: "qrunsl" }]
 ]);
+
+// ../../node_modules/lucide-react/dist/esm/icons/chevron-right.js
+var ChevronRight = createLucideIcon("ChevronRight", [
+  ["path", { d: "m9 18 6-6-6-6", key: "mthhwq" }]
+]);
+
 // ../../node_modules/lucide-react/dist/esm/icons/chevron-up.js
 var ChevronUp = createLucideIcon("ChevronUp", [["path", { d: "m18 15-6-6-6 6", key: "153udz" }]]);
+
+// ../../node_modules/lucide-react/dist/esm/icons/copy.js
+var Copy = createLucideIcon("Copy", [
+  ["rect", { width: "14", height: "14", x: "8", y: "8", rx: "2", ry: "2", key: "17jyea" }],
+  ["path", { d: "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2", key: "zix9uf" }]
+]);
+
+// ../../node_modules/lucide-react/dist/esm/icons/ellipsis.js
+var Ellipsis = createLucideIcon("Ellipsis", [
+  ["circle", { cx: "12", cy: "12", r: "1", key: "41hilf" }],
+  ["circle", { cx: "19", cy: "12", r: "1", key: "1wjl8i" }],
+  ["circle", { cx: "5", cy: "12", r: "1", key: "1pcz8c" }]
+]);
+
 // ../../node_modules/lucide-react/dist/esm/icons/layout-grid.js
 var LayoutGrid = createLucideIcon("LayoutGrid", [
   ["rect", { width: "7", height: "7", x: "3", y: "3", rx: "1", key: "1g98yp" }],
@@ -1189,6 +1182,39 @@ var LayoutGrid = createLucideIcon("LayoutGrid", [
   ["rect", { width: "7", height: "7", x: "14", y: "14", rx: "1", key: "nxv5o0" }],
   ["rect", { width: "7", height: "7", x: "3", y: "14", rx: "1", key: "1bb6yr" }]
 ]);
+
+// ../../node_modules/lucide-react/dist/esm/icons/log-in.js
+var LogIn = createLucideIcon("LogIn", [
+  ["path", { d: "M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4", key: "u53s6r" }],
+  ["polyline", { points: "10 17 15 12 10 7", key: "1ail0h" }],
+  ["line", { x1: "15", x2: "3", y1: "12", y2: "12", key: "v6grx8" }]
+]);
+
+// ../../node_modules/lucide-react/dist/esm/icons/log-out.js
+var LogOut = createLucideIcon("LogOut", [
+  ["path", { d: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4", key: "1uf3rs" }],
+  ["polyline", { points: "16 17 21 12 16 7", key: "1gabdz" }],
+  ["line", { x1: "21", x2: "9", y1: "12", y2: "12", key: "1uyos4" }]
+]);
+
+// ../../node_modules/lucide-react/dist/esm/icons/message-square-plus.js
+var MessageSquarePlus = createLucideIcon("MessageSquarePlus", [
+  ["path", { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z", key: "1lielz" }],
+  ["path", { d: "M12 7v6", key: "lw1j43" }],
+  ["path", { d: "M9 10h6", key: "9gxzsh" }]
+]);
+
+// ../../node_modules/lucide-react/dist/esm/icons/message-square.js
+var MessageSquare = createLucideIcon("MessageSquare", [
+  ["path", { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z", key: "1lielz" }]
+]);
+
+// ../../node_modules/lucide-react/dist/esm/icons/plus.js
+var Plus = createLucideIcon("Plus", [
+  ["path", { d: "M5 12h14", key: "1ays0h" }],
+  ["path", { d: "M12 5v14", key: "s699le" }]
+]);
+
 // ../../node_modules/lucide-react/dist/esm/icons/puzzle.js
 var Puzzle = createLucideIcon("Puzzle", [
   [
@@ -1199,11 +1225,19 @@ var Puzzle = createLucideIcon("Puzzle", [
     }
   ]
 ]);
+
+// ../../node_modules/lucide-react/dist/esm/icons/rotate-cw.js
+var RotateCw = createLucideIcon("RotateCw", [
+  ["path", { d: "M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8", key: "1p45f6" }],
+  ["path", { d: "M21 3v5h-5", key: "1q7to0" }]
+]);
+
 // ../../node_modules/lucide-react/dist/esm/icons/search.js
 var Search = createLucideIcon("Search", [
   ["circle", { cx: "11", cy: "11", r: "8", key: "4ej97u" }],
   ["path", { d: "m21 21-4.3-4.3", key: "1qie3q" }]
 ]);
+
 // ../../node_modules/lucide-react/dist/esm/icons/settings.js
 var Settings = createLucideIcon("Settings", [
   [
@@ -1215,29 +1249,273 @@ var Settings = createLucideIcon("Settings", [
   ],
   ["circle", { cx: "12", cy: "12", r: "3", key: "1v7zrd" }]
 ]);
+
 // ../../node_modules/lucide-react/dist/esm/icons/timer.js
 var Timer = createLucideIcon("Timer", [
   ["line", { x1: "10", x2: "14", y1: "2", y2: "2", key: "14vaq8" }],
   ["line", { x1: "12", x2: "15", y1: "14", y2: "11", key: "17fdiu" }],
   ["circle", { cx: "12", cy: "14", r: "8", key: "1e1u0o" }]
 ]);
+
+// ../../node_modules/lucide-react/dist/esm/icons/trash-2.js
+var Trash2 = createLucideIcon("Trash2", [
+  ["path", { d: "M3 6h18", key: "d0wm0j" }],
+  ["path", { d: "M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6", key: "4alrt4" }],
+  ["path", { d: "M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2", key: "v07s0e" }],
+  ["line", { x1: "10", x2: "10", y1: "11", y2: "17", key: "1uufr5" }],
+  ["line", { x1: "14", x2: "14", y1: "11", y2: "17", key: "xtxkd" }]
+]);
+
 // ../../node_modules/lucide-react/dist/esm/icons/trending-up.js
 var TrendingUp = createLucideIcon("TrendingUp", [
   ["polyline", { points: "22 7 13.5 15.5 8.5 10.5 2 17", key: "126l90" }],
   ["polyline", { points: "16 7 22 7 22 13", key: "kwv8wd" }]
 ]);
+
+// ../../node_modules/lucide-react/dist/esm/icons/users-round.js
+var UsersRound = createLucideIcon("UsersRound", [
+  ["path", { d: "M18 21a8 8 0 0 0-16 0", key: "3ypg7q" }],
+  ["circle", { cx: "10", cy: "8", r: "5", key: "o932ke" }],
+  ["path", { d: "M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3", key: "10s06x" }]
+]);
+
 // ../../node_modules/lucide-react/dist/esm/icons/x.js
 var X = createLucideIcon("X", [
   ["path", { d: "M18 6 6 18", key: "1bl5f8" }],
   ["path", { d: "m6 6 12 12", key: "d8bk6v" }]
 ]);
 // dsh-plugins/copis-creation-web/src/client.tsx
-var import_react4 = require("react");
+var import_react5 = require("react");
 var import_react_dom = require("react-dom");
 
-// dsh-plugins/copis-creation-web/src/MediaPreview.tsx
+// dsh-plugins/copis-creation-web/src/SharedRoomSection.tsx
 var import_react3 = require("react");
 var jsx_runtime = require("react/jsx-runtime");
+var empty = {
+  type: "COPIS_SHARED_ROOM_SIDEBAR",
+  status: "loading",
+  rooms: [],
+  epoch: -1,
+  selected: null,
+  busy: false
+};
+var moreIcons = { roster: UsersRound, copy: Copy, leave: LogOut, dissolve: Trash2 };
+function RoomActionMenu({ disabled, label, menuLabel, row, items, choose }) {
+  const anchor = "--copis-room-" + import_react3.useId().replace(/[^a-z0-9_-]/gi, "");
+  const [open, setOpen] = import_react3.useState(false);
+  const root = import_react3.useRef(null);
+  const menu = import_react3.useRef(null);
+  const trigger = import_react3.useRef(null);
+  import_react3.useLayoutEffect(() => {
+    if (!open)
+      return;
+    if (disabled) {
+      setOpen(false);
+      return;
+    }
+    const panel = menu.current;
+    panel.popover = "manual";
+    panel.showPopover();
+    panel.querySelector("button")?.focus();
+    const outside = (event) => {
+      if (!root.current?.contains(event.target))
+        setOpen(false);
+    };
+    const dismiss = () => setOpen(false);
+    document.addEventListener("pointerdown", outside, true);
+    window.addEventListener("blur", dismiss);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      window.removeEventListener("blur", dismiss);
+    };
+  }, [open, disabled]);
+  return /* @__PURE__ */ jsx_runtime.jsxs("div", {
+    ref: root,
+    style: { "--copis-room-anchor": anchor },
+    onKeyDown: (e) => {
+      if (!open)
+        return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setOpen(false);
+        trigger.current?.focus();
+      } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const items2 = Array.from(menu.current.querySelectorAll("button"));
+        const index = items2.indexOf(document.activeElement);
+        items2[(index + (e.key === "ArrowDown" ? 1 : -1) + items2.length) % items2.length]?.focus();
+      }
+    },
+    onBlur: (e) => {
+      if (!e.currentTarget.contains(e.relatedTarget))
+        setOpen(false);
+    },
+    children: [
+      /* @__PURE__ */ jsx_runtime.jsx("button", {
+        ref: trigger,
+        type: "button",
+        className: row ? "copis-room-action copis-room-more" : "copis-room-action",
+        disabled,
+        "aria-label": label,
+        title: label,
+        "aria-haspopup": "menu",
+        "aria-expanded": open,
+        onClick: () => setOpen(!open),
+        children: row ? /* @__PURE__ */ jsx_runtime.jsx(Ellipsis, {}) : /* @__PURE__ */ jsx_runtime.jsx(Plus, {})
+      }),
+      open && /* @__PURE__ */ jsx_runtime.jsx("div", {
+        ref: menu,
+        role: "menu",
+        "aria-label": menuLabel,
+        className: "copis-room-action-menu",
+        children: items.map(([tab, label2, Icon2]) => /* @__PURE__ */ jsx_runtime.jsxs("button", {
+          type: "button",
+          role: "menuitem",
+          "aria-label": label2,
+          onClick: () => {
+            setOpen(false);
+            choose(tab);
+          },
+          children: [
+            /* @__PURE__ */ jsx_runtime.jsx(Icon2, {
+              "aria-hidden": "true"
+            }),
+            label2
+          ]
+        }, tab))
+      })
+    ]
+  });
+}
+function SharedRoomSection({ wide, active, open, directory }) {
+  const [expanded, setExpanded] = import_react3.useState(true);
+  const [snapshot, setSnapshot] = import_react3.useState(empty);
+  import_react3.useEffect(() => {
+    const onSnapshot = (e) => {
+      if (e.source && e.source !== window || e.origin && e.origin !== window.location.origin)
+        return;
+      const s = e.data;
+      if (s?.type !== empty.type || !Array.isArray(s.rooms) || !s.rooms.every((r) => typeof r?.id === "string" && typeof r.name === "string"))
+        return;
+      setSnapshot({
+        type: empty.type,
+        epoch: Number.isSafeInteger(s.epoch) ? s.epoch : -1,
+        status: s.status ?? "loading",
+        rooms: s.rooms,
+        selected: s.selected ?? null,
+        busy: s.busy === true
+      });
+    };
+    window.addEventListener("message", onSnapshot);
+    directory("sidebar-sync");
+    return () => window.removeEventListener("message", onSnapshot);
+  }, [directory]);
+  const disabled = snapshot.busy || snapshot.status === "signed-out";
+  if (!wide)
+    return /* @__PURE__ */ jsx_runtime.jsx("button", {
+      type: "button",
+      className: "copis-rail-menu-item copis-workspace-group-entry",
+      "aria-label": "群聊协作",
+      title: "群聊协作",
+      "data-active": active,
+      onClick: () => {
+        setExpanded(true);
+        open();
+      },
+      children: /* @__PURE__ */ jsx_runtime.jsx(UsersRound, {
+        size: 16
+      })
+    });
+  return /* @__PURE__ */ jsx_runtime.jsxs("section", {
+    className: "copis-room-section",
+    "aria-label": "群聊协作目录",
+    children: [
+      /* @__PURE__ */ jsx_runtime.jsxs("div", {
+        className: "copis-room-heading",
+        children: [
+          /* @__PURE__ */ jsx_runtime.jsxs("button", {
+            type: "button",
+            className: "copis-menu-item copis-room-toggle",
+            "aria-label": "群聊协作",
+            "aria-expanded": expanded,
+            onClick: () => {
+              if (!expanded && !disabled)
+                directory("refresh");
+              setExpanded(!expanded);
+            },
+            children: [
+              expanded ? /* @__PURE__ */ jsx_runtime.jsx(ChevronDown, {}) : /* @__PURE__ */ jsx_runtime.jsx(ChevronRight, {}),
+              /* @__PURE__ */ jsx_runtime.jsx("span", {
+                children: "群聊协作"
+              })
+            ]
+          }),
+          /* @__PURE__ */ jsx_runtime.jsx(RoomActionMenu, {
+            disabled,
+            label: "群聊操作",
+            menuLabel: "群聊操作菜单",
+            items: [["create", "创建群聊", MessageSquarePlus], ["join", "加入群聊", LogIn]],
+            choose: (tab) => {
+              setExpanded(true);
+              open(tab);
+            }
+          })
+        ]
+      }),
+      expanded && /* @__PURE__ */ jsx_runtime.jsxs("div", {
+        className: "copis-room-children",
+        "aria-label": "我的共享群",
+        children: [
+          snapshot.rooms.map((room) => /* @__PURE__ */ jsx_runtime.jsxs("div", {
+            className: "copis-room-row",
+            children: [
+              /* @__PURE__ */ jsx_runtime.jsxs("button", {
+                type: "button",
+                className: "copis-menu-item",
+                disabled: snapshot.busy,
+                "data-active": active && snapshot.selected === room.id,
+                "aria-current": active && snapshot.selected === room.id ? "page" : undefined,
+                "aria-label": room.name,
+                title: room.name,
+                onClick: () => open(`room:${room.id}`),
+                children: [
+                  /* @__PURE__ */ jsx_runtime.jsx(MessageSquare, {}),
+                  /* @__PURE__ */ jsx_runtime.jsx("span", {
+                    children: room.name
+                  })
+                ]
+              }),
+              Array.isArray(room.actions) && room.actions.length > 0 && /* @__PURE__ */ jsx_runtime.jsx(RoomActionMenu, {
+                row: true,
+                disabled: disabled || snapshot.epoch < 0,
+                label: `管理「${room.name}」`,
+                menuLabel: `${room.name}管理菜单`,
+                items: room.actions.filter((a) => Object.hasOwn(ROOM_ACTION_LABELS, a)).map((a) => [a, ROOM_ACTION_LABELS[a], moreIcons[a]]),
+                choose: (action) => directory(`manage:${snapshot.epoch}:${action}:${room.id}`)
+              })
+            ]
+          }, `${snapshot.epoch}:${room.id}`)),
+          snapshot.status === "error" ? /* @__PURE__ */ jsx_runtime.jsxs("button", {
+            type: "button",
+            className: "copis-menu-item",
+            onClick: () => directory("refresh"),
+            children: [
+              /* @__PURE__ */ jsx_runtime.jsx(RotateCw, {}),
+              "重试加载群列表"
+            ]
+          }) : !snapshot.rooms.length && /* @__PURE__ */ jsx_runtime.jsx("small", {
+            children: snapshot.status === "signed-out" ? "登录后可查看共享群" : snapshot.status === "loading" ? "正在读取…" : "暂无共享群"
+          })
+        ]
+      })
+    ]
+  });
+}
+
+// dsh-plugins/copis-creation-web/src/MediaPreview.tsx
+var import_react4 = require("react");
+var jsx_runtime2 = require("react/jsx-runtime");
 function stopMedia(element) {
   if (!element?.hasAttribute("src"))
     return;
@@ -1252,19 +1530,19 @@ function MediaPreview({ resourceAddress, content, useResource, useTabInfo, bridg
   const version = meta.value?.version;
   const prepare = bridge?.prepareMediaPreview;
   const release = bridge?.releaseMediaPreview;
-  const [state, setState] = import_react3.useState({ status: "loading" });
-  const element = import_react3.useRef(null);
-  const lease = import_react3.useRef(null);
-  const reported = import_react3.useRef(false);
-  const callbacks = import_react3.useRef(content);
+  const [state, setState] = import_react4.useState({ status: "loading" });
+  const element = import_react4.useRef(null);
+  const lease = import_react4.useRef(null);
+  const reported = import_react4.useRef(false);
+  const callbacks = import_react4.useRef(content);
   callbacks.current = content;
-  const disposeRef = import_react3.useRef(() => {});
-  const bindElement = import_react3.useCallback((node) => {
+  const disposeRef = import_react4.useRef(() => {});
+  const bindElement = import_react4.useCallback((node) => {
     if (element.current !== node)
       stopMedia(element.current);
     element.current = node;
   }, []);
-  import_react3.useEffect(() => {
+  import_react4.useEffect(() => {
     setState({ status: "loading" });
     reported.current = false;
     disposeRef.current = () => {};
@@ -1323,7 +1601,7 @@ function MediaPreview({ resourceAddress, content, useResource, useTabInfo, bridg
       dispose();
     };
   }, [resourceAddress, content.revision, path, version, meta.status, tab.visible, tab.signal, prepare, release]);
-  import_react3.useEffect(() => {
+  import_react4.useEffect(() => {
     const pauseWhenHidden = () => {
       if (document.hidden)
         element.current?.pause();
@@ -1344,28 +1622,28 @@ function MediaPreview({ resourceAddress, content, useResource, useTabInfo, bridg
     setState({ status: "failed", error: "无法播放此文件，文件可能已删除或媒体编码不受支持" });
     callbacks.current.failed();
   };
-  return /* @__PURE__ */ jsx_runtime.jsxs("div", {
+  return /* @__PURE__ */ jsx_runtime2.jsxs("div", {
     "data-copis-media-preview": true,
     style: { padding: 16, display: "flex", flexDirection: "column", gap: 12, width: "100%", height: "100%", minWidth: 0, minHeight: 0, overflow: "hidden", whiteSpace: "normal", boxSizing: "border-box", color: "var(--dsw-alias-label-primary)", background: "var(--dsw-alias-bg-base)" },
     children: [
-      state.status === "loading" && /* @__PURE__ */ jsx_runtime.jsx("p", {
+      state.status === "loading" && /* @__PURE__ */ jsx_runtime2.jsx("p", {
         role: "status",
         children: "正在加载媒体…"
       }),
-      state.status === "failed" && /* @__PURE__ */ jsx_runtime.jsxs(jsx_runtime.Fragment, {
+      state.status === "failed" && /* @__PURE__ */ jsx_runtime2.jsxs(jsx_runtime2.Fragment, {
         children: [
-          /* @__PURE__ */ jsx_runtime.jsx("p", {
+          /* @__PURE__ */ jsx_runtime2.jsx("p", {
             role: "alert",
             children: state.error
           }),
-          /* @__PURE__ */ jsx_runtime.jsx("button", {
+          /* @__PURE__ */ jsx_runtime2.jsx("button", {
             type: "button",
             onClick: () => callbacks.current.reload(),
             children: "重试"
           })
         ]
       }),
-      state.status === "ready" && (state.media.kind === "video" ? /* @__PURE__ */ jsx_runtime.jsx("video", {
+      state.status === "ready" && (state.media.kind === "video" ? /* @__PURE__ */ jsx_runtime2.jsx("video", {
         ref: bindElement,
         src: state.media.url,
         controls: true,
@@ -1375,7 +1653,7 @@ function MediaPreview({ resourceAddress, content, useResource, useTabInfo, bridg
         onLoadedMetadata,
         onError,
         style: { flex: "1 1 0", width: "100%", height: "100%", minWidth: 0, minHeight: 0, objectFit: "contain", background: "#000", borderRadius: 8 }
-      }, state.media.url) : /* @__PURE__ */ jsx_runtime.jsx("audio", {
+      }, state.media.url) : /* @__PURE__ */ jsx_runtime2.jsx("audio", {
         ref: bindElement,
         src: state.media.url,
         controls: true,
@@ -1391,7 +1669,7 @@ function MediaPreview({ resourceAddress, content, useResource, useTabInfo, bridg
 function registerMediaPreview(ctx, getBridge) {
   const id = "@copis-ext/creation-web/media";
   ctx.effect(() => ctx.documentPreviews.register({ id, extensions: ["mp4", "mp3"], binaryExtensions: ["mp4", "mp3"], priority: "extension", title: () => "音视频", loading: "renderer" }));
-  ctx.effect(() => ctx.slots.inject("sidebar.right.tab.document", () => ctx.slots.register({ name: "sidebar.right.tab.document", key: id }, (props) => /* @__PURE__ */ jsx_runtime.jsx(MediaPreview, {
+  ctx.effect(() => ctx.slots.inject("sidebar.right.tab.document", () => ctx.slots.register({ name: "sidebar.right.tab.document", key: id }, (props) => /* @__PURE__ */ jsx_runtime2.jsx(MediaPreview, {
     ...props,
     bridge: getBridge()
   }))));
@@ -1493,11 +1771,12 @@ function registerSessionCompletion(ctx, getBridge, host = {
 }
 
 // dsh-plugins/copis-creation-web/src/client.tsx
-var jsx_runtime2 = require("react/jsx-runtime");
+var jsx_runtime3 = require("react/jsx-runtime");
 var CREATION_STYLES_ID = "copis-creation-web-styles";
 var { atom, useAtom } = require_jotai();
-var COLLAPSED_MENU_COUNT = 3;
 var menuExpandedAtom = atom(false);
+var pinnedMenuIdsAtom = atom(DEFAULT_DSH_PINNED_MENU_IDS);
+var WORKSPACE_GROUP_CHAT = { id: "group-chat", label: "群聊协作", icon: UsersRound, view: "group-chat" };
 var SIDEBAR_MENU_ITEMS = [
   { id: "search", label: "搜索", icon: Search, action: "search" },
   { id: "schedule", label: "日程表", icon: CalendarClock, view: "planning", tab: "schedule" },
@@ -1505,7 +1784,6 @@ var SIDEBAR_MENU_ITEMS = [
   { id: "memory", label: "记忆", icon: Brain, view: "memory" },
   { id: "knowledge", label: "知识库", icon: BookOpen, view: "knowledge" },
   { id: "expert-team", label: "专家团队", icon: UsersRound, view: "expert-team" },
-  { id: "group-chat", label: "群聊协作", icon: UsersRound, view: "group-chat" },
   { id: "agent-skills", label: "技能市场", icon: Puzzle, view: "agent-skills" },
   { id: "fund-stock", label: "我的投资", icon: TrendingUp, view: "fund-stock" }
 ];
@@ -1543,6 +1821,32 @@ var CREATION_UI_CSS = `
     display: none !important;
   }
 
+  .copis-room-section { width: 100%; min-width: 0; margin: 8px 0; }
+  .copis-room-heading { display:flex; align-items:center; gap:2px; }
+  .copis-room-toggle { flex:1; min-width:0; font-weight:600; }
+  .copis-room-action { anchor-name:var(--copis-room-anchor); display:grid; place-items:center; width:26px; height:26px; border:0; border-radius:6px; background:transparent; color:var(--dsw-alias-label-secondary,currentColor); cursor:pointer; }
+  .copis-room-action:disabled { opacity:.5; cursor:default; }
+  .copis-room-action svg { width:15px; height:15px; }
+  .copis-room-action-menu {
+    position:fixed; position-anchor:var(--copis-room-anchor); inset:auto; top:anchor(bottom); right:anchor(right);
+    position-try-fallbacks:flip-block; margin:5px 0; width:158px; padding:4px; box-sizing:border-box;
+    color:var(--dsw-alias-label-primary,#242832);
+    border:1px solid color-mix(in srgb,currentColor 14%,transparent); border-radius:9px; box-shadow:0 6px 18px #0002;
+  }
+  body[data-ds-dark-theme] .copis-room-action-menu { color:var(--dsw-alias-label-primary,#e6eaf0); }
+  .copis-room-action-menu button { display:flex; align-items:center; gap:10px; width:100%; padding:9px 10px; border:0; border-radius:6px; background:transparent; color:inherit; font:inherit; font-size:13px; cursor:pointer; }
+  .copis-room-action-menu button:is(:hover,:focus-visible) { color:var(--creation-ui-primary); background:var(--creation-ui-primary-background); }
+  .copis-room-action-menu svg { width:15px; height:15px; }
+  .copis-room-children { margin-block-start:6px; padding-inline-start:16px; min-width:0; }
+  .copis-room-row { display:grid; grid-template-columns:minmax(0,1fr) 26px; align-items:center; border-radius:7px; }
+  .copis-room-row > .copis-menu-item span { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .copis-room-more { opacity:0; pointer-events:none; }
+  .copis-room-row:is(:hover,:focus-within) .copis-room-more, .copis-room-more[aria-expanded="true"] { opacity:1; pointer-events:auto; }
+  @media (hover:none) { .copis-room-more { opacity:1; pointer-events:auto; } }
+  .copis-room-children small { display:block; padding:4px 8px; color:var(--dsw-alias-label-secondary,currentColor); }
+  .copis-workspace-group-entry { margin: 8px 0; }
+  .copis-workspace-group-entry.copis-rail-menu-item { margin-inline: auto; }
+
   .copis-menu-section {
     box-sizing: border-box;
     display: grid;
@@ -1567,7 +1871,7 @@ var CREATION_UI_CSS = `
     font-weight: 600;
   }
 
-  .copis-menu-section > [data-copis-menu-id],
+  .copis-menu-section > .copis-menu-row,
   .copis-menu-section > .copis-menu-toggle {
     margin-inline-start: 16px;
     width: calc(100% - 16px);
@@ -1602,17 +1906,35 @@ var CREATION_UI_CSS = `
     user-select: none;
   }
 
-  .copis-menu-item:hover,
-  .copis-menu-item:focus-visible {
-    background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.05));
-    outline: 0;
+  .copis-menu-row:hover > .copis-menu-item,
+  .copis-menu-row:focus-within > .copis-menu-item,
+  .copis-menu-item:hover:where(:not(.copis-room-toggle)),
+  .copis-menu-item:focus-visible,
+  .copis-menu-item[data-active="true"],
+  .copis-rail-menu-item:hover:where(:not(.copis-workspace-group-entry)),
+  .copis-rail-menu-item:focus-visible,
+  .copis-rail-menu-item[data-active="true"] {
+    background: var(--creation-ui-primary-background, rgba(108, 0, 204, 0.15));
+    color: var(--creation-ui-primary, #6c00cc);
   }
 
   .copis-menu-item[data-active="true"] {
-    background: rgba(255, 255, 255, 0.12) !important;
-    color: #ffffff !important;
-    font-weight: 500 !important;
+    font-weight: 600;
   }
+
+  /* 群行只在父容器绘制一次底色，群名与更多按钮仍是两个独立点击区。 */
+  .copis-room-heading .copis-room-toggle:focus-visible,
+  .copis-room-heading .copis-room-action:enabled:is(:hover,:focus-visible,[aria-expanded="true"]),
+  .copis-rail-menu-item.copis-workspace-group-entry:is(:focus-visible,[data-active="true"]),
+  .copis-room-row:is(:hover,:focus-within,:has(.copis-room-more[aria-expanded="true"])) {
+    background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.1));
+    color: var(--dsw-alias-label-primary, currentColor);
+  }
+  .copis-room-row > .copis-menu-item {
+    background: transparent;
+    color: var(--dsw-alias-label-primary, inherit);
+  }
+  .copis-room-row > .copis-menu-item[data-active="true"] { font-weight:500; }
 
   .copis-menu-heading svg,
   .copis-menu-item svg {
@@ -1634,30 +1956,45 @@ var CREATION_UI_CSS = `
     white-space: nowrap;
   }
 
-  .copis-menu-item > .copis-dsh-menu-hide-btn {
-    position: static !important;
-    margin-left: auto;
-    flex: none;
-    display: none;
-    padding: 1px 6px;
-    font-size: 11px;
-    line-height: 16px;
+  .copis-menu-row {
+    position: relative;
+    min-width: 0;
+  }
+
+  .copis-menu-pin-btn {
+    position: absolute;
+    inset-inline-end: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 20px;
+    padding: 0 7px;
+    border: 1px solid currentColor;
     border-radius: 9999px;
-    background: rgba(0, 0, 0, 0.08);
-    color: var(--dsw-alias-label-secondary, #71717a);
-    border: none;
+    background: transparent;
+    color: var(--creation-ui-primary, #6c00cc);
+    font-size: 11px;
+    line-height: 1;
     cursor: pointer;
-    transition: background-color 120ms ease, color 120ms ease;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
   }
 
-  .copis-menu-item:hover > .copis-dsh-menu-hide-btn {
-    display: inline-flex;
-    align-items: center;
+  .copis-menu-row:is(:hover, :focus-within) > .copis-menu-pin-btn {
+    opacity: 1;
+    pointer-events: auto;
   }
 
-  .copis-menu-item > .copis-dsh-menu-hide-btn:hover {
-    background: rgba(239, 68, 68, 0.15);
-    color: #ef4444;
+  .copis-menu-row:is(:hover, :focus-within) > .copis-menu-item {
+    padding-inline-end: 76px !important;
+  }
+
+  .copis-menu-pin-btn:is(:hover, :focus-visible) {
+    background: var(--creation-ui-primary-background, rgba(108, 0, 204, 0.15));
+  }
+
+  .copis-menu-pin-btn:disabled {
+    cursor: default;
   }
 
   .copis-rail-menu-section {
@@ -1683,18 +2020,6 @@ var CREATION_UI_CSS = `
     color: var(--dsw-alias-label-secondary, #71717a);
     cursor: pointer;
     transition: background-color 120ms ease, color 120ms ease;
-  }
-
-  .copis-rail-menu-item:hover,
-  .copis-rail-menu-item:focus-visible {
-    background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.05));
-    color: var(--dsw-alias-label-primary, #18181b);
-    outline: 0;
-  }
-
-  .copis-rail-menu-item[data-active="true"] {
-    background: rgba(255, 255, 255, 0.12) !important;
-    color: #ffffff !important;
   }
 
   .copis-rail-menu-item svg {
@@ -1728,6 +2053,7 @@ var CREATION_UI_CSS = `
     background: rgba(255, 255, 255, 0.04) !important;
   }
   /* WorkBuddy 浅灰/曜石微高光卡片会话行选中态，彻底去除紫色 */
+  .copis-room-row:has(> .copis-menu-item[data-active="true"]),
   .YDXeBa_sessionRow.YDXeBa_selected,
   .YDXeBa_searchResultRow.YDXeBa_selected,
   .YDXeBa_projectRow.active,
@@ -1736,13 +2062,13 @@ var CREATION_UI_CSS = `
   [class*="projectRow"][class*="active"],
   [class*="sessionRow"][data-selected="true"],
   [class*="SessionRow"][data-selected="true"] {
-    background: rgba(255, 255, 255, 0.1) !important;
-    color: #ffffff !important;
+    background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.1)) !important;
+    color: var(--dsw-alias-label-primary, #ffffff) !important;
     font-weight: 500 !important;
   }
   .YDXeBa_sessionRow.YDXeBa_selected *,
   [class*="sessionRow"][class*="selected"] * {
-    color: #ffffff !important;
+    color: var(--dsw-alias-label-primary, #ffffff) !important;
   }
   .YDXeBa_sessionRow.YDXeBa_selected [class*="date"],
   .YDXeBa_sessionRow.YDXeBa_selected [class*="time"],
@@ -1751,10 +2077,11 @@ var CREATION_UI_CSS = `
   [class*="sessionRow"][class*="selected"] span:last-child {
     color: #a1a1aa !important;
   }
+  .copis-room-row > .copis-menu-item[data-active="true"] svg,
   [class*="sessionRow"][class*="selected"] svg,
   [class*="searchResultRow"][class*="selected"] svg,
   [class*="projectRow"][class*="active"] svg {
-    color: #d4d4d8 !important;
+    color: var(--dsw-alias-label-secondary, #d4d4d8) !important;
   }
   /* 侧栏工作区目录/项目图标：全部对齐 WorkBuddy 浅银灰色，绝不显示亮紫色 */
   .YDXeBa_projectRow svg,
@@ -2010,10 +2337,9 @@ var CREATION_UI_CSS = `
     border-right: none !important;
   }
 
-  body.copis-subview-active aside.copis-creation-sidebar,
-  body.copis-subview-active aside.hHd-Xa_root,
-  body.copis-subview-active aside[class*="SidebarRoot"],
-  body.copis-subview-active aside {
+  /* RC2 侧栏根节点为 div，覆盖原生抽屉保留的 48px 宽度差。 */
+  body.copis-subview-active :is(.copis-creation-sidebar, .hHd-Xa_root, [class*="SidebarRoot_root"]) {
+    box-sizing: border-box;
     width: 100% !important;
     padding: 6px var(--dsh-sidebar-inline-padding, 12px) !important;
   }
@@ -2089,8 +2415,8 @@ var CREATION_UI_CSS = `
     display: none !important;
   }
 
-  body.copis-subview-active [class*="newSessionLabel"]::after,
-  body.copis-subview-active [class*="_newSessionLabel"]::after {
+  /* 只在文字节点生成标签，避免 RC2 的 LabelMask 再生成一次。 */
+  body.copis-subview-active [class*="newSessionLabel"]:not([class*="newSessionLabelMask"])::after {
     content: "返回会话" !important;
     font-size: 14px !important;
     font-weight: 600 !important;
@@ -2206,11 +2532,15 @@ var CREATION_UI_CSS = `
     to { opacity: 1; }
   }
 
+  .copis-room-action-menu,
+  .copis-search-modal-card {
+    background: var(--dsw-alias-bg-base, #ffffff);
+  }
+
   .copis-search-modal-card {
     width: 580px;
     max-width: calc(100vw - 32px);
     max-height: 520px;
-    background: var(--dsw-alias-bg-base, #ffffff);
     color: var(--dsw-alias-label-primary, #18181b);
     border: 1px solid var(--dsw-alias-border-l3, rgba(255, 255, 255, 0.1));
     border-radius: 12px;
@@ -2362,6 +2692,12 @@ function sendNavigation(view, tab) {
   }
   window.postMessage({ type: "COPIS_NAVIGATE", view, tab }, "*");
 }
+function requestRoomDirectory(tab) {
+  if (window.copisBridge?.navigate)
+    window.copisBridge.navigate("group-chat", tab);
+  else
+    window.postMessage({ type: "COPIS_NAVIGATE", view: "group-chat", tab }, "*");
+}
 function sendSearchRequest() {
   window.dispatchEvent(new CustomEvent("COPIS_OPEN_SEARCH_MODAL"));
   if (window.copisBridge?.openSearch) {
@@ -2369,15 +2705,6 @@ function sendSearchRequest() {
     return;
   }
   window.postMessage({ type: "COPIS_OPEN_SEARCH" }, "*");
-}
-function getInitialHiddenMenuIds() {
-  if (typeof window === "undefined")
-    return [];
-  try {
-    return window.copisBridge?.getHiddenMenuItems?.() ?? [];
-  } catch {
-    return [];
-  }
 }
 function attachSidebarMenu(element) {
   const sidebar = element.closest('[class*="_root"]') ?? element.closest('[class*="SidebarRoot"]') ?? element.closest('[class*="_sidebarCol"], [class*="sidebarCol"]') ?? element.closest("aside");
@@ -2396,75 +2723,81 @@ function attachSidebarMenu(element) {
   } else {
     target.before(host);
   }
-  return host;
+  const afterWorkspaces = document.createElement("div");
+  afterWorkspaces.dataset.copisPlacement = "after-workspaces";
+  if (target.parentElement.matches('[class*="_scrollArea"]')) {
+    afterWorkspaces.style.gridArea = "-1 / 2";
+  }
+  target.after(afterWorkspaces);
+  return { before: host, after: afterWorkspaces };
 }
 var cachedCordisContext = null;
 function CreationSidebarNavigation(props) {
-  const [activeView, setActiveView] = import_react4.useState("conversations");
+  const [activeView, setActiveView] = import_react5.useState("conversations");
   const [expanded, setExpanded] = useAtom(menuExpandedAtom);
-  const [hiddenMenuIds, setHiddenMenuIds] = import_react4.useState(getInitialHiddenMenuIds);
-  const rootRef = import_react4.useRef(null);
-  const [menuHost, setMenuHost] = import_react4.useState(null);
+  const [pinnedMenuIds, setPinnedMenuIds] = useAtom(pinnedMenuIdsAtom);
+  const [pinsReady, setPinsReady] = import_react5.useState(false);
+  const [savingPins, setSavingPins] = import_react5.useState(false);
+  const rootRef = import_react5.useRef(null);
+  const [menuHost, setMenuHost] = import_react5.useState(null);
   const isSubviewActive = activeView !== "conversations";
   const effectiveCtx = props.ctx ?? cachedCordisContext;
   const wide = isSubviewActive || Boolean(props.wide) || !props.collapsed && (props.width === undefined || props.width >= 200);
-  import_react4.useLayoutEffect(() => {
+  import_react5.useLayoutEffect(() => {
     const host = rootRef.current && attachSidebarMenu(rootRef.current);
     setMenuHost(host);
-    return () => host?.remove();
-  }, [props.collapsed, props.wide]);
-  import_react4.useLayoutEffect(() => {
-    if (rootRef.current) {
-      const sidebar = rootRef.current.closest('[class*="_root"], [class*="SidebarRoot"], [class*="_sidebarCol"], [class*="sidebarCol"], aside');
-      if (sidebar && !isSubviewActive && typeof document !== "undefined" && !document.body.classList.contains("copis-subview-active")) {
-        const w = sidebar.getBoundingClientRect().width;
-        if (w >= 200 && w <= 360 && window.copisBridge?.reportSidebarInfo) {
-          window.copisBridge.reportSidebarInfo({ width: Math.round(w), wide: true });
-        }
-      }
-    }
-  }, [props.collapsed, props.width, hiddenMenuIds, activeView, isSubviewActive]);
-  import_react4.useEffect(() => {
-    if (!isSubviewActive)
-      return;
-    let calling = false;
-    const expandIfCollapsed = () => {
-      if (calling)
-        return;
-      const frame2 = document.querySelector("[data-sidebar-collapsed]");
-      const sidebar = rootRef.current?.closest('aside.copis-creation-sidebar, aside.hHd-Xa_root, aside[class*="SidebarRoot"], aside');
-      const isCollapsed = Boolean(frame2 || props.collapsed === true || sidebar?.classList.contains("hHd-Xa_collapsed")) && props.wide !== true;
-      if (isCollapsed && effectiveCtx?.layout?.toggleSidebar) {
-        calling = true;
-        try {
-          effectiveCtx.layout.toggleSidebar();
-        } catch (err) {
-          console.warn("[Copis Creation Web] 自动展开侧边栏失败:", err);
-        } finally {
-          setTimeout(() => {
-            calling = false;
-          }, 60);
-        }
-      }
-    };
-    expandIfCollapsed();
-    const timer1 = setTimeout(expandIfCollapsed, 60);
-    const timer2 = setTimeout(expandIfCollapsed, 200);
-    let observer = null;
-    const frame = document.querySelector('[class*="_frame"], [class*="frame"]') || document.body;
-    if (typeof MutationObserver !== "undefined") {
-      observer = new MutationObserver(() => {
-        expandIfCollapsed();
-      });
-      observer.observe(frame, { attributes: true, attributeFilter: ["data-sidebar-collapsed", "class"] });
-    }
     return () => {
-      clearTimeout(timer1);
-      clearTimeout(timer2);
-      observer?.disconnect();
+      host?.before.remove();
+      host?.after.remove();
     };
-  }, [isSubviewActive, props.collapsed, props.wide, effectiveCtx]);
-  import_react4.useEffect(() => {
+  }, [props.collapsed, props.wide]);
+  import_react5.useLayoutEffect(() => {
+    if (isSubviewActive || !wide)
+      return;
+    const anchor = rootRef.current;
+    const sidebar = anchor?.closest('[class*="_sidebarCol"]') ?? anchor?.closest(".copis-creation-sidebar");
+    if (!sidebar)
+      return;
+    let lastWidth = 0;
+    const reportWidth = () => {
+      if (document.body.classList.contains("copis-subview-active") || sidebar.closest("[data-sidebar-drawer], [data-sidebar-collapsed]"))
+        return;
+      const width = Math.round(sidebar.getBoundingClientRect().width);
+      if (width === lastWidth || !isDshExpandedSidebarWidth(width))
+        return;
+      lastWidth = width;
+      window.copisBridge?.reportSidebarInfo?.({ width, wide: true });
+    };
+    const observer = typeof window.ResizeObserver !== "undefined" ? new window.ResizeObserver(reportWidth) : null;
+    observer?.observe(sidebar);
+    reportWidth();
+    return () => observer?.disconnect();
+  }, [isSubviewActive, wide, props.width]);
+  import_react5.useEffect(() => {
+    const layout = effectiveCtx?.layout;
+    if (!isSubviewActive || !layout)
+      return;
+    const anchor = rootRef.current;
+    const frame = anchor?.closest('[class*="_frame"], [data-sidebar-drawer]');
+    let requested = false;
+    const expandIfCollapsed = () => {
+      const collapsed = frame ? frame.hasAttribute("data-sidebar-collapsed") : props.collapsed === true || Boolean(anchor?.closest(".hHd-Xa_collapsed"));
+      if (!collapsed) {
+        requested = false;
+        return;
+      }
+      if (requested)
+        return;
+      requested = true;
+      layout.toggleSidebar();
+    };
+    const observer = frame && typeof window.MutationObserver !== "undefined" ? new window.MutationObserver(expandIfCollapsed) : null;
+    if (frame)
+      observer?.observe(frame, { attributes: true, attributeFilter: ["data-sidebar-collapsed"] });
+    expandIfCollapsed();
+    return () => observer?.disconnect();
+  }, [isSubviewActive, props.collapsed, effectiveCtx]);
+  import_react5.useEffect(() => {
     const handleTopButtonClick = (event) => {
       if (!isSubviewActive)
         return;
@@ -2483,7 +2816,7 @@ function CreationSidebarNavigation(props) {
     document.addEventListener("click", handleTopButtonClick, true);
     return () => document.removeEventListener("click", handleTopButtonClick, true);
   }, [isSubviewActive]);
-  import_react4.useEffect(() => {
+  import_react5.useEffect(() => {
     const topBtn = document.querySelector('button[class*="_newSession"], button[class*="newSession"]');
     if (!topBtn)
       return;
@@ -2497,7 +2830,7 @@ function CreationSidebarNavigation(props) {
       topBtn.setAttribute("aria-label", "新建会话");
     }
   }, [isSubviewActive]);
-  import_react4.useEffect(() => {
+  import_react5.useEffect(() => {
     const handlePopState = () => {
       const path = window.location.pathname.toLowerCase();
       if (path.includes("planning"))
@@ -2521,7 +2854,7 @@ function CreationSidebarNavigation(props) {
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
-  import_react4.useEffect(() => {
+  import_react5.useEffect(() => {
     const handleActiveViewMessage = (event) => {
       if (event.data && typeof event.data === "object") {
         const d = event.data;
@@ -2551,18 +2884,21 @@ function CreationSidebarNavigation(props) {
     window.addEventListener("message", handleActiveViewMessage);
     return () => window.removeEventListener("message", handleActiveViewMessage);
   }, []);
-  import_react4.useEffect(() => {
-    const handleHiddenItemsChange = (event) => {
-      const customEvent = event;
-      if (Array.isArray(customEvent.detail?.hiddenMenuIds)) {
-        setHiddenMenuIds(customEvent.detail.hiddenMenuIds);
-      } else {
-        setHiddenMenuIds(getInitialHiddenMenuIds());
-      }
+  import_react5.useEffect(() => {
+    const bridge = window.copisBridge;
+    if (!bridge?.getPinnedMenuItems)
+      return;
+    let active = true;
+    bridge.getPinnedMenuItems().then((ids) => {
+      if (!active)
+        return;
+      setPinnedMenuIds(Array.isArray(ids) ? ids : DEFAULT_DSH_PINNED_MENU_IDS);
+      setPinsReady(true);
+    }).catch((err) => console.warn("[Copis 功能] 读取固定菜单失败:", err));
+    return () => {
+      active = false;
     };
-    window.addEventListener("COPIS_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED", handleHiddenItemsChange);
-    return () => window.removeEventListener("COPIS_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED", handleHiddenItemsChange);
-  }, []);
+  }, [setPinnedMenuIds]);
   const selectItem = (item) => {
     if (item.action === "search") {
       sendSearchRequest();
@@ -2575,74 +2911,90 @@ function CreationSidebarNavigation(props) {
     document.documentElement?.classList.add("copis-subview-active");
     sendNavigation(item.view, item.tab);
   };
-  const handleHideMenuItem = (menuId) => {
-    setHiddenMenuIds((prev) => Array.from(new Set([...prev, menuId])));
-    if (window.copisBridge?.hideMenuItem) {
-      window.copisBridge.hideMenuItem(menuId);
+  const togglePin = async (menuId) => {
+    const bridge = window.copisBridge;
+    if (!pinsReady || savingPins || !bridge?.setPinnedMenuItems)
+      return;
+    const next = SIDEBAR_MENU_ITEMS.filter(({ id }) => id === menuId ? !pinnedMenuIds.includes(id) : pinnedMenuIds.includes(id)).map(({ id }) => id);
+    setSavingPins(true);
+    setPinnedMenuIds(next);
+    try {
+      await bridge.setPinnedMenuItems(next);
+    } catch (err) {
+      setPinnedMenuIds(pinnedMenuIds);
+      console.warn("[Copis 功能] 保存固定菜单失败:", err);
+    } finally {
+      setSavingPins(false);
     }
   };
-  const visibleMenuItems = SIDEBAR_MENU_ITEMS.filter((item) => !hiddenMenuIds.includes(item.id));
-  const items = expanded ? visibleMenuItems : visibleMenuItems.slice(0, COLLAPSED_MENU_COUNT);
+  const pinned = SIDEBAR_MENU_ITEMS.filter(({ id }) => pinnedMenuIds.includes(id));
+  const unpinned = SIDEBAR_MENU_ITEMS.filter(({ id }) => !pinnedMenuIds.includes(id));
   const itemClass = wide ? "copis-menu-item" : "copis-rail-menu-item";
   const ToggleIcon = expanded ? ChevronUp : ChevronDown;
   const toggleLabel = expanded ? "收起" : "展开显示";
-  const menu = /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+  const renderMenuItem = (item, isPinned) => {
+    const Icon2 = item.icon;
+    const action = isPinned ? "取消固定" : "固定显示";
+    const button = /* @__PURE__ */ jsx_runtime3.jsxs("button", {
+      type: "button",
+      className: itemClass,
+      "data-copis-menu-id": item.id,
+      "data-active": item.view === activeView ? "true" : "false",
+      "aria-label": item.label,
+      title: wide ? undefined : item.label,
+      onClick: () => selectItem(item),
+      children: [
+        /* @__PURE__ */ jsx_runtime3.jsx(Icon2, {
+          size: wide ? 16 : 18,
+          strokeWidth: 1.8,
+          "aria-hidden": "true"
+        }),
+        wide && /* @__PURE__ */ jsx_runtime3.jsx("span", {
+          children: item.label
+        }),
+        wide && item.badge && /* @__PURE__ */ jsx_runtime3.jsx("span", {
+          className: `copis-menu-badge ${item.badge === "BETA" ? "copis-menu-badge-beta" : "copis-menu-badge-flexible"}`,
+          children: item.badge
+        })
+      ]
+    }, item.id);
+    return wide ? /* @__PURE__ */ jsx_runtime3.jsxs("div", {
+      className: "copis-menu-row",
+      children: [
+        button,
+        /* @__PURE__ */ jsx_runtime3.jsx("button", {
+          type: "button",
+          className: "copis-menu-pin-btn",
+          "aria-label": `${action}${item.label}`,
+          title: action,
+          disabled: !pinsReady || savingPins,
+          onClick: () => void togglePin(item.id),
+          children: action
+        })
+      ]
+    }, item.id) : button;
+  };
+  const menu = /* @__PURE__ */ jsx_runtime3.jsxs("div", {
     className: wide ? "copis-menu-section" : "copis-rail-menu-section",
     "data-copis-placement": "before-workspaces",
     role: "group",
     "aria-label": "Copis功能",
     children: [
-      wide && /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+      wide && /* @__PURE__ */ jsx_runtime3.jsxs("div", {
         className: "copis-menu-heading",
         children: [
-          /* @__PURE__ */ jsx_runtime2.jsx(LayoutGrid, {
+          /* @__PURE__ */ jsx_runtime3.jsx(LayoutGrid, {
             size: 16,
             strokeWidth: 1.8,
             "aria-hidden": "true"
           }),
-          /* @__PURE__ */ jsx_runtime2.jsx("span", {
+          /* @__PURE__ */ jsx_runtime3.jsx("span", {
             children: "Copis功能"
           })
         ]
       }),
-      items.map((item) => {
-        const Icon2 = item.icon;
-        return /* @__PURE__ */ jsx_runtime2.jsxs("button", {
-          type: "button",
-          className: itemClass,
-          "data-copis-menu-id": item.id,
-          "data-active": item.view === activeView ? "true" : "false",
-          "aria-label": item.label,
-          title: wide ? undefined : item.label,
-          onClick: () => selectItem(item),
-          children: [
-            /* @__PURE__ */ jsx_runtime2.jsx(Icon2, {
-              size: wide ? 16 : 18,
-              strokeWidth: 1.8
-            }),
-            wide && /* @__PURE__ */ jsx_runtime2.jsx("span", {
-              children: item.label
-            }),
-            wide && item.badge && /* @__PURE__ */ jsx_runtime2.jsx("span", {
-              className: `copis-menu-badge ${item.badge === "BETA" ? "copis-menu-badge-beta" : "copis-menu-badge-flexible"}`,
-              children: item.badge
-            }),
-            wide && /* @__PURE__ */ jsx_runtime2.jsx("button", {
-              type: "button",
-              className: "copis-dsh-menu-hide-btn",
-              "aria-label": `隐藏${item.label}`,
-              title: "隐藏此菜单",
-              onClick: (e) => {
-                e.stopPropagation();
-                e.preventDefault();
-                handleHideMenuItem(item.id);
-              },
-              children: "隐藏"
-            })
-          ]
-        }, item.id);
-      }),
-      visibleMenuItems.length > COLLAPSED_MENU_COUNT && /* @__PURE__ */ jsx_runtime2.jsxs("button", {
+      pinned.map((item) => renderMenuItem(item, true)),
+      unpinned.length > 0 && /* @__PURE__ */ jsx_runtime3.jsxs("button", {
         type: "button",
         className: `${itemClass} copis-menu-toggle`,
         "aria-expanded": expanded,
@@ -2650,45 +3002,53 @@ function CreationSidebarNavigation(props) {
         title: wide ? undefined : toggleLabel,
         onClick: () => setExpanded(!expanded),
         children: [
-          /* @__PURE__ */ jsx_runtime2.jsx(ToggleIcon, {
+          /* @__PURE__ */ jsx_runtime3.jsx(ToggleIcon, {
             size: 14
           }),
-          wide && /* @__PURE__ */ jsx_runtime2.jsx("span", {
+          wide && /* @__PURE__ */ jsx_runtime3.jsx("span", {
             children: toggleLabel
           })
         ]
       }),
-      /* @__PURE__ */ jsx_runtime2.jsxs("button", {
+      expanded && unpinned.map((item) => renderMenuItem(item, false)),
+      /* @__PURE__ */ jsx_runtime3.jsxs("button", {
         type: "button",
         className: `${itemClass} copis-settings-entry`,
         "aria-label": "Copis 设置",
         title: wide ? undefined : "Copis 设置",
         onClick: () => sendNavigation("settings"),
         children: [
-          /* @__PURE__ */ jsx_runtime2.jsx(Settings, {
+          /* @__PURE__ */ jsx_runtime3.jsx(Settings, {
             size: wide ? 16 : 18,
             strokeWidth: 1.8
           }),
-          wide && /* @__PURE__ */ jsx_runtime2.jsx("span", {
+          wide && /* @__PURE__ */ jsx_runtime3.jsx("span", {
             children: "Copis 设置"
           })
         ]
       })
     ]
   });
-  return /* @__PURE__ */ jsx_runtime2.jsxs(jsx_runtime2.Fragment, {
+  const groupEntry = /* @__PURE__ */ jsx_runtime3.jsx(SharedRoomSection, {
+    wide,
+    active: activeView === "group-chat",
+    directory: requestRoomDirectory,
+    open: (tab) => selectItem({ ...WORKSPACE_GROUP_CHAT, tab })
+  });
+  return /* @__PURE__ */ jsx_runtime3.jsxs(jsx_runtime3.Fragment, {
     children: [
-      /* @__PURE__ */ jsx_runtime2.jsx("span", {
+      /* @__PURE__ */ jsx_runtime3.jsx("span", {
         ref: rootRef,
         hidden: true
       }),
-      menuHost ? import_react_dom.createPortal(menu, menuHost) : menu
+      menuHost ? import_react_dom.createPortal(menu, menuHost.before) : menu,
+      menuHost ? import_react_dom.createPortal(groupEntry, menuHost.after) : groupEntry
     ]
   });
 }
 function HighlightSearchText({ text, query }) {
   if (!query || !query.trim())
-    return /* @__PURE__ */ jsx_runtime2.jsx(jsx_runtime2.Fragment, {
+    return /* @__PURE__ */ jsx_runtime3.jsx(jsx_runtime3.Fragment, {
       children: text
     });
   const trimmed = query.trim();
@@ -2699,11 +3059,11 @@ function HighlightSearchText({ text, query }) {
   let idx = lowerText.indexOf(lowerQuery);
   while (idx !== -1) {
     if (idx > lastIndex) {
-      parts.push(/* @__PURE__ */ jsx_runtime2.jsx("span", {
+      parts.push(/* @__PURE__ */ jsx_runtime3.jsx("span", {
         children: text.slice(lastIndex, idx)
       }, `t-${lastIndex}`));
     }
-    parts.push(/* @__PURE__ */ jsx_runtime2.jsx("mark", {
+    parts.push(/* @__PURE__ */ jsx_runtime3.jsx("mark", {
       style: {
         background: "rgba(255, 255, 255, 0.18)",
         color: "#ffffff",
@@ -2717,23 +3077,23 @@ function HighlightSearchText({ text, query }) {
     idx = lowerText.indexOf(lowerQuery, lastIndex);
   }
   if (lastIndex < text.length) {
-    parts.push(/* @__PURE__ */ jsx_runtime2.jsx("span", {
+    parts.push(/* @__PURE__ */ jsx_runtime3.jsx("span", {
       children: text.slice(lastIndex)
     }, `end-${lastIndex}`));
   }
-  return /* @__PURE__ */ jsx_runtime2.jsx(jsx_runtime2.Fragment, {
+  return /* @__PURE__ */ jsx_runtime3.jsx(jsx_runtime3.Fragment, {
     children: parts
   });
 }
 function CopisSearchModal(props) {
-  const [query, setQuery] = import_react4.useState("");
-  const [committedQuery, setCommittedQuery] = import_react4.useState("");
-  const [hasSearched, setHasSearched] = import_react4.useState(false);
-  const [titleResults, setTitleResults] = import_react4.useState([]);
-  const [selectedIndex, setSelectedIndex] = import_react4.useState(0);
-  const inputRef = import_react4.useRef(null);
-  const isComposingRef = import_react4.useRef(false);
-  import_react4.useEffect(() => {
+  const [query, setQuery] = import_react5.useState("");
+  const [committedQuery, setCommittedQuery] = import_react5.useState("");
+  const [hasSearched, setHasSearched] = import_react5.useState(false);
+  const [titleResults, setTitleResults] = import_react5.useState([]);
+  const [selectedIndex, setSelectedIndex] = import_react5.useState(0);
+  const inputRef = import_react5.useRef(null);
+  const isComposingRef = import_react5.useRef(false);
+  import_react5.useEffect(() => {
     if (props.open) {
       setTimeout(() => {
         inputRef.current?.focus();
@@ -2746,7 +3106,7 @@ function CopisSearchModal(props) {
       setSelectedIndex(0);
     }
   }, [props.open]);
-  const runSearch = import_react4.useCallback(() => {
+  const runSearch = import_react5.useCallback(() => {
     const q = query.trim();
     if (!q) {
       setTitleResults([]);
@@ -2779,11 +3139,11 @@ function CopisSearchModal(props) {
     titles.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     setTitleResults(titles);
   }, [query, props.ctx.sessions]);
-  const navigateToResult = import_react4.useCallback((item) => {
+  const navigateToResult = import_react5.useCallback((item) => {
     props.onClose();
     props.ctx.uiWorkspace.openSession(item.id);
   }, [props.ctx.uiWorkspace, props.onClose]);
-  const handleKeyDown = import_react4.useCallback((e) => {
+  const handleKeyDown = import_react5.useCallback((e) => {
     if (e.key === "Escape") {
       e.preventDefault();
       props.onClose();
@@ -2807,25 +3167,25 @@ function CopisSearchModal(props) {
   if (!props.open)
     return null;
   const isQueryDirty = query.trim() !== committedQuery;
-  return /* @__PURE__ */ jsx_runtime2.jsx("div", {
+  return /* @__PURE__ */ jsx_runtime3.jsx("div", {
     className: "copis-search-modal-backdrop",
     onClick: (e) => {
       if (e.target === e.currentTarget) {
         props.onClose();
       }
     },
-    children: /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+    children: /* @__PURE__ */ jsx_runtime3.jsxs("div", {
       className: "copis-search-modal-card",
       onKeyDown: handleKeyDown,
       children: [
-        /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+        /* @__PURE__ */ jsx_runtime3.jsxs("div", {
           className: "copis-search-input-row",
           children: [
-            /* @__PURE__ */ jsx_runtime2.jsx(Search, {
+            /* @__PURE__ */ jsx_runtime3.jsx(Search, {
               size: 16,
               style: { color: "var(--dsw-alias-label-tertiary, #a1a1aa)", flexShrink: 0 }
             }),
-            /* @__PURE__ */ jsx_runtime2.jsx("input", {
+            /* @__PURE__ */ jsx_runtime3.jsx("input", {
               ref: inputRef,
               type: "text",
               className: "copis-search-main-input",
@@ -2839,7 +3199,7 @@ function CopisSearchModal(props) {
                 isComposingRef.current = false;
               }
             }),
-            query && /* @__PURE__ */ jsx_runtime2.jsx("button", {
+            query && /* @__PURE__ */ jsx_runtime3.jsx("button", {
               type: "button",
               onClick: () => {
                 setQuery("");
@@ -2859,34 +3219,34 @@ function CopisSearchModal(props) {
                 alignItems: "center"
               },
               title: "清空",
-              children: /* @__PURE__ */ jsx_runtime2.jsx(X, {
+              children: /* @__PURE__ */ jsx_runtime3.jsx(X, {
                 size: 14
               })
             }),
-            /* @__PURE__ */ jsx_runtime2.jsxs("button", {
+            /* @__PURE__ */ jsx_runtime3.jsxs("button", {
               type: "button",
               className: "copis-search-submit-btn",
               disabled: !query.trim(),
               onClick: () => runSearch(),
               children: [
-                /* @__PURE__ */ jsx_runtime2.jsx(Search, {
+                /* @__PURE__ */ jsx_runtime3.jsx(Search, {
                   size: 13
                 }),
-                /* @__PURE__ */ jsx_runtime2.jsx("span", {
+                /* @__PURE__ */ jsx_runtime3.jsx("span", {
                   children: "搜索"
                 })
               ]
             })
           ]
         }),
-        /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+        /* @__PURE__ */ jsx_runtime3.jsxs("div", {
           className: "copis-search-results-list",
           children: [
-            !hasSearched && /* @__PURE__ */ jsx_runtime2.jsx("div", {
+            !hasSearched && /* @__PURE__ */ jsx_runtime3.jsx("div", {
               style: { padding: "36px 16px", textAlign: "center", fontSize: "13px", color: "var(--dsw-alias-label-tertiary, #a1a1aa)" },
               children: "输入关键词后按 Enter 或点击搜索开始查找"
             }),
-            hasSearched && titleResults.length === 0 && /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+            hasSearched && titleResults.length === 0 && /* @__PURE__ */ jsx_runtime3.jsxs("div", {
               style: { padding: "36px 16px", textAlign: "center", fontSize: "13px", color: "var(--dsw-alias-label-tertiary, #a1a1aa)" },
               children: [
                 '未找到与 "',
@@ -2894,9 +3254,9 @@ function CopisSearchModal(props) {
                 '" 匹配的会话标题'
               ]
             }),
-            titleResults.length > 0 && /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+            titleResults.length > 0 && /* @__PURE__ */ jsx_runtime3.jsxs("div", {
               children: [
-                /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+                /* @__PURE__ */ jsx_runtime3.jsxs("div", {
                   style: { padding: "6px 14px 2px", fontSize: "11px", fontWeight: 600, color: "var(--dsw-alias-label-tertiary, #a1a1aa)", textTransform: "uppercase" },
                   children: [
                     "会话匹配 (",
@@ -2904,20 +3264,20 @@ function CopisSearchModal(props) {
                     ")"
                   ]
                 }),
-                titleResults.map((item, idx) => /* @__PURE__ */ jsx_runtime2.jsxs("button", {
+                titleResults.map((item, idx) => /* @__PURE__ */ jsx_runtime3.jsxs("button", {
                   type: "button",
                   className: "copis-search-item-row",
                   "data-selected": selectedIndex === idx ? "true" : "false",
                   onClick: () => navigateToResult(item),
                   onMouseEnter: () => setSelectedIndex(idx),
                   children: [
-                    /* @__PURE__ */ jsx_runtime2.jsx("span", {
+                    /* @__PURE__ */ jsx_runtime3.jsx("span", {
                       className: "copis-search-badge-creation",
                       children: "创造"
                     }),
-                    /* @__PURE__ */ jsx_runtime2.jsx("span", {
+                    /* @__PURE__ */ jsx_runtime3.jsx("span", {
                       style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "13px", fontWeight: 500 },
-                      children: /* @__PURE__ */ jsx_runtime2.jsx(HighlightSearchText, {
+                      children: /* @__PURE__ */ jsx_runtime3.jsx(HighlightSearchText, {
                         text: item.title,
                         query: committedQuery
                       })
@@ -2928,19 +3288,19 @@ function CopisSearchModal(props) {
             })
           ]
         }),
-        /* @__PURE__ */ jsx_runtime2.jsxs("div", {
+        /* @__PURE__ */ jsx_runtime3.jsxs("div", {
           className: "copis-search-footer",
           children: [
-            /* @__PURE__ */ jsx_runtime2.jsxs("span", {
+            /* @__PURE__ */ jsx_runtime3.jsxs("span", {
               children: [
                 "↵ ",
                 isQueryDirty || !hasSearched ? "搜索" : "打开"
               ]
             }),
-            /* @__PURE__ */ jsx_runtime2.jsx("span", {
+            /* @__PURE__ */ jsx_runtime3.jsx("span", {
               children: "↑↓ 选择"
             }),
-            /* @__PURE__ */ jsx_runtime2.jsx("span", {
+            /* @__PURE__ */ jsx_runtime3.jsx("span", {
               children: "Esc 关闭"
             })
           ]
@@ -2950,8 +3310,8 @@ function CopisSearchModal(props) {
   });
 }
 function CopisShellOverlayManager(props) {
-  const [searchOpen, setSearchOpen] = import_react4.useState(false);
-  import_react4.useEffect(() => {
+  const [searchOpen, setSearchOpen] = import_react5.useState(false);
+  import_react5.useEffect(() => {
     const handleOpenSearch = () => setSearchOpen(true);
     const handleMessage = (event) => {
       if (event.source && event.source !== window)
@@ -2988,7 +3348,7 @@ function CopisShellOverlayManager(props) {
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [props.ctx.uiWorkspace]);
-  return searchOpen ? /* @__PURE__ */ jsx_runtime2.jsx(CopisSearchModal, {
+  return searchOpen ? /* @__PURE__ */ jsx_runtime3.jsx(CopisSearchModal, {
     open: true,
     onClose: () => setSearchOpen(false),
     ctx: props.ctx
@@ -2999,7 +3359,7 @@ function apply(ctx) {
   cachedCordisContext = ctx;
   console.log("[Copis Creation Web] 客户端插件正在激活...", ctx);
   installCreationStyles();
-  ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({ name: "sidebar.footer.action", id: "copis-creation-sidebar", order: -100 }, (props) => /* @__PURE__ */ jsx_runtime2.jsx(CreationSidebarNavigation, {
+  ctx.slots.inject("sidebar.footer.action", () => ctx.slots.register({ name: "sidebar.footer.action", id: "copis-creation-sidebar", order: -100 }, (props) => /* @__PURE__ */ jsx_runtime3.jsx(CreationSidebarNavigation, {
     ...props,
     ctx
   })));
@@ -3007,7 +3367,7 @@ function apply(ctx) {
     name: "shell.overlay",
     id: "copis-shell-overlay-manager",
     order: 100
-  }, () => /* @__PURE__ */ jsx_runtime2.jsx(CopisShellOverlayManager, {
+  }, () => /* @__PURE__ */ jsx_runtime3.jsx(CopisShellOverlayManager, {
     ctx
   })));
   registerMediaPreview(ctx, () => window.copisBridge);

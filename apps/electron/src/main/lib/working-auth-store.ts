@@ -162,6 +162,17 @@ export function createWorkingTokenStore(): WorkingTokenStore {
 	}
 }
 
+/** Rust 原样存储服务端用户字段，旧记录也可能只有大写 ID。 */
+function normalizeStoredWorkingUser(user: WorkingUser | null): WorkingUser | null {
+  if (!user) return null
+  const fields = user as unknown as Record<string, unknown>
+  for (const id of [fields.id, fields.ID, fields.user_id, fields.userId]) {
+    if (typeof id === 'number' && Number.isSafeInteger(id) && id > 0) return { ...user, id }
+    if (typeof id === 'string' && id.trim()) return { ...user, id: id.trim() }
+  }
+  return null
+}
+
 const storedCredentials = createWorkingTokenStore()
 const identityListeners = new Set<(id: WorkingUser['id'] | null) => void>()
 export function subscribeWorkingIdentity(listener: (id: WorkingUser['id'] | null) => void): () => void {
@@ -170,7 +181,12 @@ export function subscribeWorkingIdentity(listener: (id: WorkingUser['id'] | null
 }
 const workingTokenStore: WorkingTokenStore = {
   ...storedCredentials,
-  save(...args) { storedCredentials.save(...args); for (const fn of identityListeners) fn(args[1]?.id ?? null) },
+  getUser: () => normalizeStoredWorkingUser(storedCredentials.getUser()),
+  save(...args) {
+    storedCredentials.save(...args)
+    const id = workingTokenStore.getUser()?.id ?? null
+    for (const fn of identityListeners) fn(id)
+  },
   clear() { storedCredentials.clear(); for (const fn of identityListeners) fn(null) },
 }
 

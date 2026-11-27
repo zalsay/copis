@@ -1650,6 +1650,18 @@ fn handle_connection(
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
+    if path == working_gateway::DSH_SHARED_ROOMS_PATH {
+        if !is_internal_token_valid(&request) || origin.is_some() {
+            send_json_response(&mut stream, 403, r#"{"code":"internal_token_required","error":"共享群接口仅允许桌面主进程调用"}"#, origin);
+            let _ = stream.shutdown(Shutdown::Both);
+            return;
+        }
+        if working_gateway.is_none() {
+            send_json_response(&mut stream, 503, r#"{"code":"working_gateway_unavailable","error":"共享群网关未就绪"}"#, origin);
+            let _ = stream.shutdown(Shutdown::Both);
+            return;
+        }
+    }
     if is_private_auth_bridge_path(path) {
         send_json_response(
             &mut stream,
@@ -1925,6 +1937,19 @@ fn handle_connection(
             }
         }
         let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+
+    if request.method == "POST" && path == "/api/internal/shared-room-model-capability" {
+        let result = if origin.is_none() && is_internal_token_valid(&request) {
+            workers.room_model_capability(&request.body)
+        } else {
+            Err(WorkingModelError::Unauthorized)
+        };
+        match result {
+            Ok(value) => send_json_response(&mut stream, 200, &value.to_string(), origin),
+            Err(err) => send_working_model_error(&mut stream, err, origin),
+        }
         return;
     }
 

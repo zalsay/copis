@@ -10,7 +10,7 @@ const teamTabSource = readFileSync(join(import.meta.dir, 'inspector/TeamInspecto
 const inspectorPanelSource = readFileSync(join(import.meta.dir, 'inspector/CopisInspectorPanel.tsx'), 'utf8')
 
 test('Given macOS 创造模式侧栏 When 检查内置插件菜单 Then 功能入口文案和顺序与参考界面一致', () => {
-  const labels = ['搜索', '日程表', '定时任务', '记忆', '知识库', '专家团队', '群聊协作', '技能市场', '我的投资']
+  const labels = ['搜索', '日程表', '定时任务', '记忆', '知识库', '专家团队', '技能市场', '我的投资']
   let previousIndex = -1
 
   for (const label of labels) {
@@ -58,26 +58,14 @@ test('Given 创造模式左栏 When 插件加载 Then 不提供返回旧模式�
   expect(preloadSource).toContain('[class*="_localBuildBrand"]')
 })
 
-test('Given 创造模式宽侧栏菜单 When 悬停显示隐藏按钮 Then 菜单标签占据剩余宽度且按钮贴右对齐', () => {
-  expect(source).toContain('.copis-menu-item > span')
-  expect(source).toContain('.copis-menu-item > .copis-dsh-menu-hide-btn')
-  expect(source).toContain('flex: 1;')
-  expect(source).toContain('position: static !important;')
-  expect(source).toContain('margin-left: auto;')
-  expect(preloadSource).toContain('position: static !important;')
-  expect(preloadSource).toContain('margin-left: auto;')
-  expect(preloadSource).toContain('flex: none;')
-})
-
-test('Given 创造模式侧栏菜单图标与隐藏机制 When 检查源码 Then 对齐 CalendarClock 与 Puzzle 且支持菜单隐藏持久化', () => {
-  expect(source).toContain('CalendarClock')
-  expect(source).toContain('Puzzle')
-  expect(source).not.toContain('CalendarDays')
-  expect(source).not.toContain('Blocks')
-  expect(source).toContain('COPIS_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED')
-  expect(source).toContain('window.copisBridge?.hideMenuItem')
-  expect(source).toContain('window.copisBridge?.getHiddenMenuItems')
-  expect(source).toContain('data-copis-menu-id')
+test('Given Copis 功能 When 悬停或键盘聚焦 Then 右侧显示固定操作并使用创造模式主题', () => {
+  expect(source).toContain('.copis-menu-row:is(:hover, :focus-within) > .copis-menu-pin-btn')
+  expect(source).toContain('.copis-menu-row:hover > .copis-menu-item')
+  expect(source).toContain('background: var(--creation-ui-primary-background,')
+  expect(source).toContain('color: var(--creation-ui-primary,')
+  expect(source).toContain('inset-inline-end: 8px;')
+  expect(source).toContain("const action = isPinned ? '取消固定' : '固定显示'")
+  expect(source).not.toContain('.copis-dsh-menu-hide-btn')
 })
 
 test('Given DSH 官方右侧详情区 When Copis 插件加载 Then 不再注册自定义侧栏按钮或干预官方详情区', () => {
@@ -184,6 +172,16 @@ test('Given 创造模式与 Agent 模式视觉对齐契约 When 检查菜单栏�
   expect(source).toContain('[class*="sessionRow"]')
   expect(preloadSource).toContain('button[class*="_newSession"]')
   expect(preloadSource).toContain('.YDXeBa_sessionRow')
+})
+
+test('群聊菜单和建群、入群弹窗使用搜索弹框面板底色', () => {
+  expect(source).toMatch(/\.copis-room-action-menu,\s*\.copis-search-modal-card\s*\{\s*background: var\(--dsw-alias-bg-base, #ffffff\);/)
+  expect(source).not.toContain('--dsw-specific-popover-fill')
+  const dialog = readFileSync(join(import.meta.dir, '../../../src/renderer/components/dsh-group-chat/RoomDialog.tsx'), 'utf8')
+  expect(dialog).toContain('bg-[var(--copis-search-panel-bg)]')
+  const css = readFileSync(join(import.meta.dir, '../../../src/renderer/styles/globals.css'), 'utf8')
+  expect(css).toMatch(/:root\s*\{\s*--copis-search-panel-bg: var\(--dsw-alias-bg-base, #ffffff\)/)
+  expect(css).toMatch(/\.dark\s*\{\s*--copis-search-panel-bg: var\(--dsw-alias-bg-base, #151517\)/)
 })
 
 test('Given 创造模式内建搜索浮层 When 检查组件与样式契约 Then 具备独立浮层与半透明遮罩避免背景白屏', () => {

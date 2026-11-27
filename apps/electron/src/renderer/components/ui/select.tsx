@@ -74,9 +74,9 @@ SelectScrollDownButton.displayName =
 
 const SelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content>
->(({ className, children, position = "popper", ...props }, ref) => (
-  <SelectPrimitive.Portal>
+  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content> & { container?: HTMLElement | null }
+>(({ className, children, position = "popper", container, ...props }, ref) => (
+  <SelectPrimitive.Portal container={container}>
     <SelectPrimitive.Content
       ref={ref}
       className={cn(
@@ -190,6 +190,11 @@ export function AppSelect({
   title,
   children,
 }: AppSelectProps): React.ReactElement {
+  // 原生 dialog 在浏览器顶层，挂到 body 的菜单会被遮挡且不可点击。
+  const [portalContainer, setPortalContainer] = React.useState<HTMLDialogElement | null>(null)
+  const attachTrigger = React.useCallback((node: HTMLButtonElement | null) => {
+    setPortalContainer(node?.closest('dialog') ?? null)
+  }, [])
   const selectedOption = React.useMemo(
     () => (options ? options.find((opt) => opt.value === value) : undefined),
     [options, value],
@@ -198,6 +203,7 @@ export function AppSelect({
   return (
     <Select value={value} defaultValue={defaultValue} onValueChange={onValueChange} disabled={disabled}>
       <SelectTrigger
+        ref={attachTrigger}
         aria-label={ariaLabel}
         title={title}
         className={cn(
@@ -221,7 +227,7 @@ export function AppSelect({
           )}
         </SelectValue>
       </SelectTrigger>
-      <SelectContent className={contentClassName}>
+      <SelectContent container={portalContainer} className={contentClassName}>
         {options
           ? options.map((opt) => (
               <SelectItem key={opt.value} value={opt.value} disabled={opt.disabled}>

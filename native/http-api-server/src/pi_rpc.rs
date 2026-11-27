@@ -482,6 +482,16 @@ impl PiWorkerManager {
             .model_json_get(path)
     }
 
+    pub fn room_model_capability(&self, body: &[u8]) -> Result<Value, WorkingModelError> {
+        let proxy = self
+            .working_model_proxy
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or(WorkingModelError::Unauthorized)?;
+        proxy.room_capability_command(body)
+    }
+
     /// 为 DSH 进程签发长期的本机 Working 模型 capability。
     pub fn issue_dsh_working_model_capability(
         &self,

@@ -1,3 +1,4 @@
+import { DEFAULT_DSH_PINNED_MENU_IDS, isDshExpandedSidebarWidth } from '@copis/shared/types/dsh'
 import {
   BookOpen,
   Brain,
@@ -23,6 +24,7 @@ import {
   type ReactElement,
 } from 'react'
 import { createPortal } from 'react-dom'
+import { SharedRoomSection } from './SharedRoomSection'
 import { registerMediaPreview, type MediaPreviewContext, type MediaPreviewBridge } from './MediaPreview'
 import { registerSessionCompletion, type CompletionContext, type CompletionBridge } from './session-completion'
 
@@ -124,8 +126,8 @@ declare global {
       navigate?: (view: string, tab?: string) => void
       openSearch?: () => void
       openSettings?: () => void
-      hideMenuItem?: (menuId: string) => void
-      getHiddenMenuItems?: () => string[]
+      getPinnedMenuItems?: () => Promise<string[]>
+      setPinnedMenuItems?: (ids: string[]) => Promise<void>
       listDirectory?: (dirPath?: string, cwd?: string) => Promise<DirectoryEntry[]>
       getActiveWorkspacePath?: (cwd?: string) => Promise<string>
       readFile?: (filePath: string, cwd?: string) => Promise<ReadFileResult>
@@ -140,8 +142,10 @@ const CREATION_STYLES_ID = 'copis-creation-web-styles'
 
 // DSH 以普通 script 加载插件，使用 Jotai 的 CommonJS 入口以避免引入 import.meta。
 const { atom, useAtom } = require('jotai') as typeof import('jotai')
-const COLLAPSED_MENU_COUNT = 3
 const menuExpandedAtom = atom(false)
+const pinnedMenuIdsAtom = atom<readonly string[]>(DEFAULT_DSH_PINNED_MENU_IDS)
+
+const WORKSPACE_GROUP_CHAT: SidebarMenuItem = { id: 'group-chat', label: '群聊协作', icon: UsersRound, view: 'group-chat' }
 
 const SIDEBAR_MENU_ITEMS: SidebarMenuItem[] = [
   { id: 'search', label: '搜索', icon: Search, action: 'search' },
@@ -150,7 +154,6 @@ const SIDEBAR_MENU_ITEMS: SidebarMenuItem[] = [
   { id: 'memory', label: '记忆', icon: Brain, view: 'memory' },
   { id: 'knowledge', label: '知识库', icon: BookOpen, view: 'knowledge' },
   { id: 'expert-team', label: '专家团队', icon: UsersRound, view: 'expert-team' },
-  { id: 'group-chat', label: '群聊协作', icon: UsersRound, view: 'group-chat' },
   { id: 'agent-skills', label: '技能市场', icon: Puzzle, view: 'agent-skills' },
   { id: 'fund-stock', label: '我的投资', icon: TrendingUp, view: 'fund-stock' },
 ]
@@ -189,6 +192,32 @@ const CREATION_UI_CSS = `
     display: none !important;
   }
 
+  .copis-room-section { width: 100%; min-width: 0; margin: 8px 0; }
+  .copis-room-heading { display:flex; align-items:center; gap:2px; }
+  .copis-room-toggle { flex:1; min-width:0; font-weight:600; }
+  .copis-room-action { anchor-name:var(--copis-room-anchor); display:grid; place-items:center; width:26px; height:26px; border:0; border-radius:6px; background:transparent; color:var(--dsw-alias-label-secondary,currentColor); cursor:pointer; }
+  .copis-room-action:disabled { opacity:.5; cursor:default; }
+  .copis-room-action svg { width:15px; height:15px; }
+  .copis-room-action-menu {
+    position:fixed; position-anchor:var(--copis-room-anchor); inset:auto; top:anchor(bottom); right:anchor(right);
+    position-try-fallbacks:flip-block; margin:5px 0; width:158px; padding:4px; box-sizing:border-box;
+    color:var(--dsw-alias-label-primary,#242832);
+    border:1px solid color-mix(in srgb,currentColor 14%,transparent); border-radius:9px; box-shadow:0 6px 18px #0002;
+  }
+  body[data-ds-dark-theme] .copis-room-action-menu { color:var(--dsw-alias-label-primary,#e6eaf0); }
+  .copis-room-action-menu button { display:flex; align-items:center; gap:10px; width:100%; padding:9px 10px; border:0; border-radius:6px; background:transparent; color:inherit; font:inherit; font-size:13px; cursor:pointer; }
+  .copis-room-action-menu button:is(:hover,:focus-visible) { color:var(--creation-ui-primary); background:var(--creation-ui-primary-background); }
+  .copis-room-action-menu svg { width:15px; height:15px; }
+  .copis-room-children { margin-block-start:6px; padding-inline-start:16px; min-width:0; }
+  .copis-room-row { display:grid; grid-template-columns:minmax(0,1fr) 26px; align-items:center; border-radius:7px; }
+  .copis-room-row > .copis-menu-item span { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .copis-room-more { opacity:0; pointer-events:none; }
+  .copis-room-row:is(:hover,:focus-within) .copis-room-more, .copis-room-more[aria-expanded="true"] { opacity:1; pointer-events:auto; }
+  @media (hover:none) { .copis-room-more { opacity:1; pointer-events:auto; } }
+  .copis-room-children small { display:block; padding:4px 8px; color:var(--dsw-alias-label-secondary,currentColor); }
+  .copis-workspace-group-entry { margin: 8px 0; }
+  .copis-workspace-group-entry.copis-rail-menu-item { margin-inline: auto; }
+
   .copis-menu-section {
     box-sizing: border-box;
     display: grid;
@@ -213,7 +242,7 @@ const CREATION_UI_CSS = `
     font-weight: 600;
   }
 
-  .copis-menu-section > [data-copis-menu-id],
+  .copis-menu-section > .copis-menu-row,
   .copis-menu-section > .copis-menu-toggle {
     margin-inline-start: 16px;
     width: calc(100% - 16px);
@@ -248,17 +277,35 @@ const CREATION_UI_CSS = `
     user-select: none;
   }
 
-  .copis-menu-item:hover,
-  .copis-menu-item:focus-visible {
-    background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.05));
-    outline: 0;
+  .copis-menu-row:hover > .copis-menu-item,
+  .copis-menu-row:focus-within > .copis-menu-item,
+  .copis-menu-item:hover:where(:not(.copis-room-toggle)),
+  .copis-menu-item:focus-visible,
+  .copis-menu-item[data-active="true"],
+  .copis-rail-menu-item:hover:where(:not(.copis-workspace-group-entry)),
+  .copis-rail-menu-item:focus-visible,
+  .copis-rail-menu-item[data-active="true"] {
+    background: var(--creation-ui-primary-background, rgba(108, 0, 204, 0.15));
+    color: var(--creation-ui-primary, #6c00cc);
   }
 
   .copis-menu-item[data-active="true"] {
-    background: rgba(255, 255, 255, 0.12) !important;
-    color: #ffffff !important;
-    font-weight: 500 !important;
+    font-weight: 600;
   }
+
+  /* 群行只在父容器绘制一次底色，群名与更多按钮仍是两个独立点击区。 */
+  .copis-room-heading .copis-room-toggle:focus-visible,
+  .copis-room-heading .copis-room-action:enabled:is(:hover,:focus-visible,[aria-expanded="true"]),
+  .copis-rail-menu-item.copis-workspace-group-entry:is(:focus-visible,[data-active="true"]),
+  .copis-room-row:is(:hover,:focus-within,:has(.copis-room-more[aria-expanded="true"])) {
+    background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.1));
+    color: var(--dsw-alias-label-primary, currentColor);
+  }
+  .copis-room-row > .copis-menu-item {
+    background: transparent;
+    color: var(--dsw-alias-label-primary, inherit);
+  }
+  .copis-room-row > .copis-menu-item[data-active="true"] { font-weight:500; }
 
   .copis-menu-heading svg,
   .copis-menu-item svg {
@@ -280,30 +327,45 @@ const CREATION_UI_CSS = `
     white-space: nowrap;
   }
 
-  .copis-menu-item > .copis-dsh-menu-hide-btn {
-    position: static !important;
-    margin-left: auto;
-    flex: none;
-    display: none;
-    padding: 1px 6px;
-    font-size: 11px;
-    line-height: 16px;
+  .copis-menu-row {
+    position: relative;
+    min-width: 0;
+  }
+
+  .copis-menu-pin-btn {
+    position: absolute;
+    inset-inline-end: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 20px;
+    padding: 0 7px;
+    border: 1px solid currentColor;
     border-radius: 9999px;
-    background: rgba(0, 0, 0, 0.08);
-    color: var(--dsw-alias-label-secondary, #71717a);
-    border: none;
+    background: transparent;
+    color: var(--creation-ui-primary, #6c00cc);
+    font-size: 11px;
+    line-height: 1;
     cursor: pointer;
-    transition: background-color 120ms ease, color 120ms ease;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
   }
 
-  .copis-menu-item:hover > .copis-dsh-menu-hide-btn {
-    display: inline-flex;
-    align-items: center;
+  .copis-menu-row:is(:hover, :focus-within) > .copis-menu-pin-btn {
+    opacity: 1;
+    pointer-events: auto;
   }
 
-  .copis-menu-item > .copis-dsh-menu-hide-btn:hover {
-    background: rgba(239, 68, 68, 0.15);
-    color: #ef4444;
+  .copis-menu-row:is(:hover, :focus-within) > .copis-menu-item {
+    padding-inline-end: 76px !important;
+  }
+
+  .copis-menu-pin-btn:is(:hover, :focus-visible) {
+    background: var(--creation-ui-primary-background, rgba(108, 0, 204, 0.15));
+  }
+
+  .copis-menu-pin-btn:disabled {
+    cursor: default;
   }
 
   .copis-rail-menu-section {
@@ -329,18 +391,6 @@ const CREATION_UI_CSS = `
     color: var(--dsw-alias-label-secondary, #71717a);
     cursor: pointer;
     transition: background-color 120ms ease, color 120ms ease;
-  }
-
-  .copis-rail-menu-item:hover,
-  .copis-rail-menu-item:focus-visible {
-    background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.05));
-    color: var(--dsw-alias-label-primary, #18181b);
-    outline: 0;
-  }
-
-  .copis-rail-menu-item[data-active="true"] {
-    background: rgba(255, 255, 255, 0.12) !important;
-    color: #ffffff !important;
   }
 
   .copis-rail-menu-item svg {
@@ -374,6 +424,7 @@ const CREATION_UI_CSS = `
     background: rgba(255, 255, 255, 0.04) !important;
   }
   /* WorkBuddy 浅灰/曜石微高光卡片会话行选中态，彻底去除紫色 */
+  .copis-room-row:has(> .copis-menu-item[data-active="true"]),
   .YDXeBa_sessionRow.YDXeBa_selected,
   .YDXeBa_searchResultRow.YDXeBa_selected,
   .YDXeBa_projectRow.active,
@@ -382,13 +433,13 @@ const CREATION_UI_CSS = `
   [class*="projectRow"][class*="active"],
   [class*="sessionRow"][data-selected="true"],
   [class*="SessionRow"][data-selected="true"] {
-    background: rgba(255, 255, 255, 0.1) !important;
-    color: #ffffff !important;
+    background: var(--dsw-alias-interactive-bg-hover, rgba(255, 255, 255, 0.1)) !important;
+    color: var(--dsw-alias-label-primary, #ffffff) !important;
     font-weight: 500 !important;
   }
   .YDXeBa_sessionRow.YDXeBa_selected *,
   [class*="sessionRow"][class*="selected"] * {
-    color: #ffffff !important;
+    color: var(--dsw-alias-label-primary, #ffffff) !important;
   }
   .YDXeBa_sessionRow.YDXeBa_selected [class*="date"],
   .YDXeBa_sessionRow.YDXeBa_selected [class*="time"],
@@ -397,10 +448,11 @@ const CREATION_UI_CSS = `
   [class*="sessionRow"][class*="selected"] span:last-child {
     color: #a1a1aa !important;
   }
+  .copis-room-row > .copis-menu-item[data-active="true"] svg,
   [class*="sessionRow"][class*="selected"] svg,
   [class*="searchResultRow"][class*="selected"] svg,
   [class*="projectRow"][class*="active"] svg {
-    color: #d4d4d8 !important;
+    color: var(--dsw-alias-label-secondary, #d4d4d8) !important;
   }
   /* 侧栏工作区目录/项目图标：全部对齐 WorkBuddy 浅银灰色，绝不显示亮紫色 */
   .YDXeBa_projectRow svg,
@@ -656,10 +708,9 @@ const CREATION_UI_CSS = `
     border-right: none !important;
   }
 
-  body.copis-subview-active aside.copis-creation-sidebar,
-  body.copis-subview-active aside.hHd-Xa_root,
-  body.copis-subview-active aside[class*="SidebarRoot"],
-  body.copis-subview-active aside {
+  /* RC2 侧栏根节点为 div，覆盖原生抽屉保留的 48px 宽度差。 */
+  body.copis-subview-active :is(.copis-creation-sidebar, .hHd-Xa_root, [class*="SidebarRoot_root"]) {
+    box-sizing: border-box;
     width: 100% !important;
     padding: 6px var(--dsh-sidebar-inline-padding, 12px) !important;
   }
@@ -735,8 +786,8 @@ const CREATION_UI_CSS = `
     display: none !important;
   }
 
-  body.copis-subview-active [class*="newSessionLabel"]::after,
-  body.copis-subview-active [class*="_newSessionLabel"]::after {
+  /* 只在文字节点生成标签，避免 RC2 的 LabelMask 再生成一次。 */
+  body.copis-subview-active [class*="newSessionLabel"]:not([class*="newSessionLabelMask"])::after {
     content: "返回会话" !important;
     font-size: 14px !important;
     font-weight: 600 !important;
@@ -852,11 +903,15 @@ const CREATION_UI_CSS = `
     to { opacity: 1; }
   }
 
+  .copis-room-action-menu,
+  .copis-search-modal-card {
+    background: var(--dsw-alias-bg-base, #ffffff);
+  }
+
   .copis-search-modal-card {
     width: 580px;
     max-width: calc(100vw - 32px);
     max-height: 520px;
-    background: var(--dsw-alias-bg-base, #ffffff);
     color: var(--dsw-alias-label-primary, #18181b);
     border: 1px solid var(--dsw-alias-border-l3, rgba(255, 255, 255, 0.1));
     border-radius: 12px;
@@ -1010,6 +1065,12 @@ function sendNavigation(view: CreationView, tab?: string): void {
   window.postMessage({ type: 'COPIS_NAVIGATE', view, tab }, '*')
 }
 
+// 读取目录不等于导航：不能激活子视图或改变左栏宽度。
+function requestRoomDirectory(tab: 'refresh' | 'sidebar-sync' | `manage:${string}`) {
+  if (window.copisBridge?.navigate) window.copisBridge.navigate('group-chat', tab)
+  else window.postMessage({ type: 'COPIS_NAVIGATE', view: 'group-chat', tab }, '*')
+}
+
 function sendSearchRequest(): void {
   window.dispatchEvent(new CustomEvent('COPIS_OPEN_SEARCH_MODAL'))
   if (window.copisBridge?.openSearch) {
@@ -1075,16 +1136,7 @@ function formatSize(bytes?: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function getInitialHiddenMenuIds(): string[] {
-  if (typeof window === 'undefined') return []
-  try {
-    return window.copisBridge?.getHiddenMenuItems?.() ?? []
-  } catch {
-    return []
-  }
-}
-
-function attachSidebarMenu(element: HTMLElement): HTMLElement | null {
+function attachSidebarMenu(element: HTMLElement) {
   const sidebar = (element.closest('[class*="_root"]') ??
     element.closest('[class*="SidebarRoot"]') ??
     element.closest('[class*="_sidebarCol"], [class*="sidebarCol"]') ??
@@ -1113,7 +1165,14 @@ function attachSidebarMenu(element: HTMLElement): HTMLElement | null {
   } else {
     target.before(host)
   }
-  return host
+  const afterWorkspaces = document.createElement('div')
+  afterWorkspaces.dataset.copisPlacement = 'after-workspaces'
+  if (target.parentElement.matches('[class*="_scrollArea"]')) {
+    // 不参与 RC2 的网格自动选列，否则按钮会被放进 4px 留白列。
+    afterWorkspaces.style.gridArea = '-1 / 2' // 显式行末尾，避免自动布局回填到顶部空行。
+  }
+  target.after(afterWorkspaces)
+  return { before: host, after: afterWorkspaces }
 }
 
 let cachedCordisContext: CordisContext | null = null
@@ -1126,9 +1185,11 @@ export function CreationSidebarNavigation(props: {
 }): ReactElement {
   const [activeView, setActiveView] = useState<CreationView>('conversations')
   const [expanded, setExpanded] = useAtom(menuExpandedAtom)
-  const [hiddenMenuIds, setHiddenMenuIds] = useState<string[]>(getInitialHiddenMenuIds)
+  const [pinnedMenuIds, setPinnedMenuIds] = useAtom(pinnedMenuIdsAtom)
+  const [pinsReady, setPinsReady] = useState(false)
+  const [savingPins, setSavingPins] = useState(false)
   const rootRef = useRef<HTMLSpanElement>(null)
-  const [menuHost, setMenuHost] = useState<HTMLElement | null>(null)
+  const [menuHost, setMenuHost] = useState<ReturnType<typeof attachSidebarMenu>>(null)
   const isSubviewActive = activeView !== 'conversations'
   const effectiveCtx = props.ctx ?? cachedCordisContext
 
@@ -1141,81 +1202,60 @@ export function CreationSidebarNavigation(props: {
   useLayoutEffect(() => {
     const host = rootRef.current && attachSidebarMenu(rootRef.current)
     setMenuHost(host)
-    return () => host?.remove()
+    return () => { host?.before.remove(); host?.after.remove() }
   }, [props.collapsed, props.wide])
 
   useLayoutEffect(() => {
-    if (rootRef.current) {
-      const sidebar = rootRef.current.closest(
-        '[class*="_root"], [class*="SidebarRoot"], [class*="_sidebarCol"], [class*="sidebarCol"], aside',
-      ) as HTMLElement | null
-      if (
-        sidebar &&
-        !isSubviewActive &&
-        typeof document !== 'undefined' &&
-        !document.body.classList.contains('copis-subview-active')
-      ) {
-        const w = sidebar.getBoundingClientRect().width
-        if (w >= 200 && w <= 360 && window.copisBridge?.reportSidebarInfo) {
-          window.copisBridge.reportSidebarInfo({ width: Math.round(w), wide: true })
-        }
-      }
-    }
-  }, [props.collapsed, props.width, hiddenMenuIds, activeView, isSubviewActive])
+    if (isSubviewActive || !wide) return
+    const anchor = rootRef.current
+    const sidebar = anchor?.closest('[class*="_sidebarCol"]') ?? anchor?.closest('.copis-creation-sidebar')
+    if (!sidebar) return
 
-  // 当激活子功能视图时，DSH 原生视口宽度被收缩为 280px，DSH AppFrame 会将 narrow 判定为 true 并折叠侧栏。
-  // 通过主动调用 ctx.layout.toggleSidebar()，将 narrowExpanded 翻转为 true，使得 DSH computeColumns 重新计算为宽态侧栏 (280px)，
-  // 恢复原生“新会话”按钮、完整会话历史列表及完整菜单文本。
+    let lastWidth = 0
+    const reportWidth = () => {
+      // 只记住进入功能页前的真实宽度，不把功能页裁切或原生抽屉的宽度当成新偏好。
+      if (document.body.classList.contains('copis-subview-active') || sidebar.closest('[data-sidebar-drawer], [data-sidebar-collapsed]')) return
+      const width = Math.round(sidebar.getBoundingClientRect().width)
+      if (width === lastWidth || !isDshExpandedSidebarWidth(width)) return
+      lastWidth = width
+      window.copisBridge?.reportSidebarInfo?.({ width, wide: true })
+    }
+    const observer = typeof window.ResizeObserver !== 'undefined' ? new window.ResizeObserver(reportWidth) : null
+    observer?.observe(sidebar)
+    reportWidth()
+    return () => observer?.disconnect()
+  }, [isSubviewActive, wide, props.width])
+
+  // RC2 进入抽屉布局时，即使原生栏已折叠且不可交互，footer slot 仍会报告 wide=true。
+  // 以当前 AppFrame 的实际折叠状态为准，通过 DSH 布局服务展开，不修改原生 DOM 状态。
   useEffect(() => {
-    if (!isSubviewActive) return
+    const layout = effectiveCtx?.layout
+    if (!isSubviewActive || !layout) return
 
-    let calling = false
+    const anchor = rootRef.current
+    const frame = anchor?.closest('[class*="_frame"], [data-sidebar-drawer]')
+    let requested = false
     const expandIfCollapsed = () => {
-      if (calling) return
-      const frame = document.querySelector('[data-sidebar-collapsed]')
-      const sidebar = rootRef.current?.closest(
-        'aside.copis-creation-sidebar, aside.hHd-Xa_root, aside[class*="SidebarRoot"], aside',
-      ) as HTMLElement | null
-
-      const isCollapsed = Boolean(
-        frame ||
-        props.collapsed === true ||
-        sidebar?.classList.contains('hHd-Xa_collapsed')
-      ) && props.wide !== true
-
-      if (isCollapsed && effectiveCtx?.layout?.toggleSidebar) {
-        calling = true
-        try {
-          effectiveCtx.layout.toggleSidebar()
-        } catch (err) {
-          console.warn('[Copis Creation Web] 自动展开侧边栏失败:', err)
-        } finally {
-          setTimeout(() => {
-            calling = false
-          }, 60)
-        }
+      const collapsed = frame
+        ? frame.hasAttribute('data-sidebar-collapsed')
+        : props.collapsed === true || Boolean(anchor?.closest('.hHd-Xa_collapsed'))
+      if (!collapsed) {
+        requested = false
+        return
       }
+      if (requested) return
+      requested = true
+      layout.toggleSidebar()
     }
 
+    // 宿主缩窄发生在 Copis 功能激活之后，监听布局变化才能捕捉后到的折叠状态。
+    const observer = frame && typeof window.MutationObserver !== 'undefined'
+      ? new window.MutationObserver(expandIfCollapsed)
+      : null
+    if (frame) observer?.observe(frame, { attributes: true, attributeFilter: ['data-sidebar-collapsed'] })
     expandIfCollapsed()
-    const timer1 = setTimeout(expandIfCollapsed, 60)
-    const timer2 = setTimeout(expandIfCollapsed, 200)
-
-    let observer: MutationObserver | null = null
-    const frame = document.querySelector('[class*="_frame"], [class*="frame"]') || document.body
-    if (typeof MutationObserver !== 'undefined') {
-      observer = new MutationObserver(() => {
-        expandIfCollapsed()
-      })
-      observer.observe(frame, { attributes: true, attributeFilter: ['data-sidebar-collapsed', 'class'] })
-    }
-
-    return () => {
-      clearTimeout(timer1)
-      clearTimeout(timer2)
-      observer?.disconnect()
-    }
-  }, [isSubviewActive, props.collapsed, props.wide, effectiveCtx])
+    return () => observer?.disconnect()
+  }, [isSubviewActive, props.collapsed, effectiveCtx])
 
   // 当子视图激活时，原「新会话」按钮切换为「返回会话」，点击时拦截 startSession 并平滑返回原会话
   useEffect(() => {
@@ -1305,18 +1345,16 @@ export function CreationSidebarNavigation(props: {
   }, [])
 
   useEffect(() => {
-    const handleHiddenItemsChange = (event: Event) => {
-      const customEvent = event as CustomEvent<{ hiddenMenuIds?: string[] }>
-      if (Array.isArray(customEvent.detail?.hiddenMenuIds)) {
-        setHiddenMenuIds(customEvent.detail.hiddenMenuIds)
-      } else {
-        setHiddenMenuIds(getInitialHiddenMenuIds())
-      }
-    }
-
-    window.addEventListener('COPIS_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED', handleHiddenItemsChange)
-    return () => window.removeEventListener('COPIS_HIDDEN_SIDEBAR_MENU_ITEMS_CHANGED', handleHiddenItemsChange)
-  }, [])
+    const bridge = window.copisBridge
+    if (!bridge?.getPinnedMenuItems) return
+    let active = true
+    void bridge.getPinnedMenuItems().then((ids) => {
+      if (!active) return
+      setPinnedMenuIds(Array.isArray(ids) ? ids : DEFAULT_DSH_PINNED_MENU_IDS)
+      setPinsReady(true)
+    }).catch((err) => console.warn('[Copis 功能] 读取固定菜单失败:', err))
+    return () => { active = false }
+  }, [setPinnedMenuIds])
 
   const selectItem = (item: SidebarMenuItem) => {
     if (item.action === 'search') {
@@ -1330,18 +1368,50 @@ export function CreationSidebarNavigation(props: {
     sendNavigation(item.view, item.tab)
   }
 
-  const handleHideMenuItem = (menuId: string) => {
-    setHiddenMenuIds((prev) => Array.from(new Set([...prev, menuId])))
-    if (window.copisBridge?.hideMenuItem) {
-      window.copisBridge.hideMenuItem(menuId)
+  const togglePin = async (menuId: string) => {
+    const bridge = window.copisBridge
+    if (!pinsReady || savingPins || !bridge?.setPinnedMenuItems) return
+    const next = SIDEBAR_MENU_ITEMS.filter(({ id }) => id === menuId
+      ? !pinnedMenuIds.includes(id)
+      : pinnedMenuIds.includes(id)).map(({ id }) => id)
+    setSavingPins(true)
+    setPinnedMenuIds(next)
+    try {
+      await bridge.setPinnedMenuItems(next)
+    } catch (err) {
+      setPinnedMenuIds(pinnedMenuIds)
+      console.warn('[Copis 功能] 保存固定菜单失败:', err)
+    } finally {
+      setSavingPins(false)
     }
   }
 
-  const visibleMenuItems = SIDEBAR_MENU_ITEMS.filter((item) => !hiddenMenuIds.includes(item.id))
-  const items = expanded ? visibleMenuItems : visibleMenuItems.slice(0, COLLAPSED_MENU_COUNT)
+  const pinned = SIDEBAR_MENU_ITEMS.filter(({ id }) => pinnedMenuIds.includes(id))
+  const unpinned = SIDEBAR_MENU_ITEMS.filter(({ id }) => !pinnedMenuIds.includes(id))
   const itemClass = wide ? 'copis-menu-item' : 'copis-rail-menu-item'
   const ToggleIcon = expanded ? ChevronUp : ChevronDown
   const toggleLabel = expanded ? '收起' : '展开显示'
+
+  const renderMenuItem = (item: SidebarMenuItem, isPinned: boolean) => {
+    const Icon = item.icon
+    const action = isPinned ? '取消固定' : '固定显示'
+    const button = (
+      <button key={item.id} type="button" className={itemClass} data-copis-menu-id={item.id}
+        data-active={item.view === activeView ? 'true' : 'false'} aria-label={item.label} title={wide ? undefined : item.label}
+        onClick={() => selectItem(item)}>
+        <Icon size={wide ? 16 : 18} strokeWidth={1.8} aria-hidden="true" />
+        {wide && <span>{item.label}</span>}
+        {wide && item.badge && <span className={`copis-menu-badge ${item.badge === 'BETA' ? 'copis-menu-badge-beta' : 'copis-menu-badge-flexible'}`}>{item.badge}</span>}
+      </button>
+    )
+    return wide ? (
+      <div key={item.id} className="copis-menu-row">
+        {button}
+        <button type="button" className="copis-menu-pin-btn" aria-label={`${action}${item.label}`} title={action}
+          disabled={!pinsReady || savingPins} onClick={() => void togglePin(item.id)}>{action}</button>
+      </div>
+    ) : button
+  }
 
   const menu = (
     <div className={wide ? 'copis-menu-section' : 'copis-rail-menu-section'} data-copis-placement="before-workspaces" role="group" aria-label="Copis功能">
@@ -1351,33 +1421,24 @@ export function CreationSidebarNavigation(props: {
           <span>Copis功能</span>
         </div>
       )}
-      {items.map((item) => {
-        const Icon = item.icon
-        return (
-          <button key={item.id} type="button" className={itemClass} data-copis-menu-id={item.id}
-            data-active={item.view === activeView ? 'true' : 'false'} aria-label={item.label} title={wide ? undefined : item.label}
-            onClick={() => selectItem(item)}>
-            <Icon size={wide ? 16 : 18} strokeWidth={1.8} />
-            {wide && <span>{item.label}</span>}
-            {wide && item.badge && <span className={`copis-menu-badge ${item.badge === 'BETA' ? 'copis-menu-badge-beta' : 'copis-menu-badge-flexible'}`}>{item.badge}</span>}
-            {wide && <button type="button" className="copis-dsh-menu-hide-btn" aria-label={`隐藏${item.label}`} title="隐藏此菜单"
-              onClick={(e) => { e.stopPropagation(); e.preventDefault(); handleHideMenuItem(item.id) }}>隐藏</button>}
-          </button>
-        )
-      })}
-      {visibleMenuItems.length > COLLAPSED_MENU_COUNT && (
+      {pinned.map((item) => renderMenuItem(item, true))}
+      {unpinned.length > 0 && (
         <button type="button" className={`${itemClass} copis-menu-toggle`} aria-expanded={expanded} aria-label={toggleLabel}
           title={wide ? undefined : toggleLabel} onClick={() => setExpanded(!expanded)}>
           <ToggleIcon size={14} />{wide && <span>{toggleLabel}</span>}
         </button>
       )}
+      {expanded && unpinned.map((item) => renderMenuItem(item, false))}
       <button type="button" className={`${itemClass} copis-settings-entry`} aria-label="Copis 设置" title={wide ? undefined : 'Copis 设置'}
         onClick={() => sendNavigation('settings')}>
         <Settings size={wide ? 16 : 18} strokeWidth={1.8} />{wide && <span>Copis 设置</span>}
       </button>
     </div>
   )
-  return <><span ref={rootRef} hidden />{menuHost ? createPortal(menu, menuHost) : menu}</>
+  const groupEntry = <SharedRoomSection wide={wide} active={activeView==='group-chat'} directory={requestRoomDirectory}
+    open={tab=>selectItem({...WORKSPACE_GROUP_CHAT,tab})}/>
+  return <><span ref={rootRef} hidden />{menuHost ? createPortal(menu, menuHost.before) : menu}
+    {menuHost ? createPortal(groupEntry, menuHost.after) : groupEntry}</>
 }
 
 interface CopisSearchItem {
