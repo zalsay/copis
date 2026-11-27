@@ -1,4 +1,7 @@
-import { beforeEach, expect, mock, test } from 'bun:test'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, beforeEach, expect, mock, test } from 'bun:test'
 import {
   BUILTIN_CHANNEL_DEFINITIONS, COPIS_WORKING_DEEPSEEK_CHANNEL_ID as deepseek,
   getCopisWorkingModelDisplayName, type WorkingCustomModel,
@@ -14,8 +17,10 @@ const privateDetail = 'https://fixture.invalid/?key=private-value'
 const baseModel: WorkingCustomModel = { id: 'a', name: '我的模型', modelId: custom.modelId, protocol: 'anthropic-messages', thinkingLevel: 'low', baseUrl: 'https://fixture.invalid', apiKeyConfigured: true }
 const readCredential = mock(() => ({ model: baseModel, apiKey: 'private-value' }))
 const session = mock(async (_options: unknown) => ({ submit: async () => '完成', revoke: async () => {} }))
+const home = mkdtempSync(join(tmpdir(), 'room-native-'))
+afterAll(() => rmSync(home, {recursive:true, force:true}))
 const moduleEntry = mock(() => '/fixture/bin/dsh')
-mock.module('../config-paths', () => ({ getConfigDir: () => '/fixture', getDesktopModuleEntry: moduleEntry }))
+mock.module('../config-paths', () => ({ getConfigDir: () => '/fixture', getDshHomeDir: () => home, getDesktopModuleEntry: moduleEntry }))
 mock.module('../http-api-server', () => ({ getHttpApiInternalToken: () => undefined }))
 mock.module('../working-auth-store', () => ({ getWorkingTokenStore: () => ({ getUser: () => ({ id: authOwner }) }), subscribeWorkingIdentity: () => () => {} }))
 mock.module('../dsh-model-config', () => ({ resolveDshWorkingReasoningEffort: () => 'low' }))
@@ -93,4 +98,46 @@ test('适配器异步加载期间凭据被撤回，释放新会话而不是报�
   })
   await expect(open({ ...binding, modelSelection: custom })).rejects.toThrow(/凭据/)
   expect(revoke).toHaveBeenCalledTimes(1)
+})
+
+
+test('群主直接选 DSH 设置里的模型：仅列公开名称，复用原生密钥，删除后不回落', async () => {
+  const profile = join(home, 'profiles/copis'); mkdirSync(profile, {recursive:true})
+  const file = join(profile, 'cordis.patch.yml'), creds = join(home, '.credentials.yaml')
+  const provider = { displayName:'家庭服务', api:'openai-responses', baseURL:'https://fixture.invalid/v1', apiKeyEnv:'FAMILY_API_KEY', models:[{id:'ours',name:'家用',input:['text']}] }
+  writeFileSync(file, JSON.stringify([{id:'llm-pi-ai',config:{providers:{family:provider,
+    spoof:{...provider,apiKeyEnv:'COPIS_API_KEY'}, 'copis-working-test':provider,
+    unsupported:{...provider,api:'other'}, bad:{...provider,baseURL:'https://fixture.invalid/?key=private'},
+  }}}]))
+  const choice = { channelId:'dsh-native-family',modelId:'ours' }
+  const options = catalog('owner').options.filter(o => o.channelId.startsWith('dsh-native-'))
+  expect(options).toEqual([{...choice,name:'DSH · 家庭服务 · 家用'}])
+  expect(catalog('owner').current).toEqual(defaultModel)
+  const selected = {...binding,modelSelection:choice}
+  await expect(open(selected)).rejects.toThrow(/凭据/)
+  const saveKey = (key:string) => writeFileSync(creds,JSON.stringify({version:1,refs:{FAMILY_API_KEY:key}}),{mode:0o600})
+  saveKey('fixture-native'); const runtime = await open(selected)
+  const {transport} = session.mock.calls.at(-1)![0] as {transport:{baseURL:string;readKey:()=>string}}
+  expect(transport.baseURL).toBe(provider.baseURL); expect(transport.readKey()).toBe('fixture-native')
+  saveKey('rotated'); expect(transport.readKey()).toBe('rotated'); expect(readCredential).not.toHaveBeenCalled()
+  writeFileSync(file,'[]'); expect(catalog('owner',choice).current).toBeNull(); expect(transport.readKey).toThrow(/变更|失效/)
+  await runtime.revoke()
+})
+
+test('原生设置在已有 Copis 自定义渠道追加模型：不重复托管条目，账号或地址不符不借用凭据', async () => {
+  const {createHash} = await import('node:crypto')
+  const profile = join(home, 'profiles/copis'); mkdirSync(profile,{recursive:true})
+  const ref = 'COPIS_DSH_CUSTOM_'+createHash('sha256').update('owner:a').digest('hex').toUpperCase()
+  const save = (baseURL:string) => writeFileSync(join(profile,'cordis.patch.yml'),JSON.stringify([{id:'llm-pi-ai',config:{providers:{[custom.channelId]:{
+    displayName:'已有服务', apiKeyEnv:ref, baseURL, api:baseModel.protocol, models:[{id:custom.modelId},{id:'extra',name:'附加'}]
+  }}}}]))
+  save(baseModel.baseUrl)
+  const choice = {channelId:'dsh-native-'+custom.channelId,modelId:'extra'}
+  const opts = () => catalog('owner').options.filter(o => o.channelId.startsWith('dsh-native-'))
+  expect(opts()).toEqual([{...choice,name:'DSH · 已有服务 · 附加'}])
+  await open({...binding,modelSelection:choice})
+  const {transport} = session.mock.calls.at(-1)![0] as {transport:{readKey:()=>string}}
+  expect(transport.readKey()).toBe('private-value'); expect(readCredential).toHaveBeenCalledWith(custom.channelId,true,'owner')
+  save('https://elsewhere.invalid'); expect(opts()).toEqual([]); expect(transport.readKey).toThrow()
+  save(baseModel.baseUrl); models=[]; expect(opts()).toEqual([]); expect(transport.readKey).toThrow()
 })

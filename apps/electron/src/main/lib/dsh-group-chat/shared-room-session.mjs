@@ -26,7 +26,7 @@ async function loadCore(runtimeDir, protocol) {
     if (pkg.version !== '0.2.2-rc.2') throw new Error(`不支持的 DSH 模块版本：${name}`);
   }
   if (protocol) {
-    if (!['openai-responses', 'anthropic-messages'].includes(protocol)) throw new Error('不支持的共享模型协议');
+    if (!['openai-completions', 'openai-responses', 'anthropic-messages', 'google-generative-ai'].includes(protocol)) throw new Error('不支持的共享模型协议');
     // RC2 插件延迟加载具体协议，提前验证它实际使用的 ESM 文件，而不是等首条消息才发现 SDK 缺失。
     const plugin = resolve('@deepseek-ai/dsh-llm-pi-ai');
     const manifest = withinRuntime(findPackageJSON('@earendil-works/pi-ai', pathToFileURL(plugin)));
@@ -60,7 +60,7 @@ function publicAnswer(session, from) {
 /**
  * documents 仅接收群主发布的文本快照，不是路径；更新资料须重建会话。
  * @param {{runtimeDir:string, provider:string, model:string, adapter?:object,
- * transport?:{protocol:string, baseURL:string, reasoning?:string, readKey:()=>string, assertActive:()=>void},
+ * transport?:{protocol:string, baseURL:string, reasoning?:string, modelConfig?:Record<string,unknown>, readKey:()=>string, assertActive:()=>void},
  * documents:{title:string,text:string}[], responsibility?:string, journalDir:string,
  * ownerId:string, roomId:string, agentId:string}} options
  */
@@ -137,7 +137,7 @@ export async function createSharedRoomSession({
       await ctx.plugin(providerPlugin, { providers: { [provider]: {
         api: transport.protocol, baseURL: transport.baseURL, apiKeyEnv: key,
         ...(effort === undefined ? {} : { reasoning: effort }),
-        models: [{ id: model, name: model, input: ['text', 'image'], ...(effort === undefined ? {} : { reasoningEfforts }) }],
+        models: [{ ...(transport.modelConfig ?? { name: model, input: ['text', 'image'], ...(effort === undefined ? {} : { reasoningEfforts }) }), id: model }],
         retryPolicy: { mode: 'normal', maxRetries: 0 },
       } } });
       // RC2 的 listModels 校验凭据和本地注册表，无推理请求；注册失败不能成为在线设备。

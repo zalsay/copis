@@ -25,7 +25,7 @@ for (const [availability, label] of [['busy', '思考中'], ['online', '空闲']
       switch (cmd.action) {
         case 'list': return [room]
         case 'detail': return { room, agents: [agent] }
-        case 'messages': return [message]
+        case 'messages': return [message, { ...message, messageId: 'reply', seq: 2, senderType: 'agent', senderAgentId: 'a' }]
         case 'events': return []
         default: throw new Error(`意外请求：${cmd.action}`)
       }
@@ -41,6 +41,8 @@ for (const [availability, label] of [['busy', '思考中'], ['online', '空闲']
       await act(async () => root.render(<Provider store={store}><DshGroupChatView /></Provider>))
       const status = host.querySelector('header [role="status"]')!
       expect(Array.from(status.children, e => e.textContent)).toEqual(['思考中', label, '排队 2'])
+      const avatars = host.querySelectorAll('.dsh-room-avatar')
+      expect(Array.from(avatars, el => el.classList.contains('dsh-room-agent-avatar'))).toEqual([false, true])
       const animated = host.querySelectorAll('.dsh-room-thinking')
       expect(animated.length).toBe(availability === 'busy' ? 1 : 0)
       if (availability === 'busy') expect(animated[0]).toBe(status.children[1])

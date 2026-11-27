@@ -3,7 +3,6 @@ import {
   type DshRoomModelSelection,
   COPIS_WORKING_MODEL_ENDPOINT_PATH,
   isWorkingCustomModelChannelId,
-  type WorkingCustomModelProtocol,
 } from '@copis/shared'
 import { getConfigDir, getDesktopModuleEntry } from '../config-paths'
 import { resolveDshWorkingReasoningEffort } from '../dsh-model-config'
@@ -14,6 +13,8 @@ import { getWorkingCustomModelRuntime } from '../working-model-catalog'
 import type { RoomImage } from './attachment-transfer'
 import { createSharedRoomSession } from './shared-room-session.mjs'
 import { RoomModelError, assertRoomModelOwner, getRoomModelCatalog, supportsRoomCustomModel } from './shared-room-model-catalog'
+
+import { NATIVE_CHANNEL_PREFIX, nativeRoomRoute, type RoomProtocol } from './shared-room-native-models'
 
 export { getRoomModelCatalog }
 
@@ -27,10 +28,11 @@ type Binding = {
 }
 type RoomSession = { submit(id: string, prompt: string, images?: RoomImage[]): Promise<string>; revoke(): Promise<void> }
 type Route = {
-  protocol: WorkingCustomModelProtocol
+  protocol: RoomProtocol
   reasoning?: string
   baseURL: string
   readKey: () => string
+  modelConfig?: Record<string, unknown>
   release?: () => Promise<void>
 }
 const grantUnavailable = () => new RoomModelError('内置模型的本机授权服务不可用，请确认已登录且服务已就绪')
@@ -52,6 +54,7 @@ async function roomGrant(base: string, command: object) {
 }
 
 async function resolveRoute({ channelId: provider, modelId: model }: DshRoomModelSelection, owner: string): Promise<Route> {
+  if (provider.startsWith(NATIVE_CHANNEL_PREFIX)) return nativeRoomRoute(owner, provider, model)
   if (isWorkingCustomModelChannelId(provider)) {
     // 只解密此群主选中的一条模型凭据。
     const read = () => {
@@ -137,6 +140,7 @@ async function openBoundRuntime(binding: Binding) {
   try {
     route = await resolveRoute(modelSelection, userId)
     assertActive()
+    if (modelSelection.channelId.startsWith(NATIVE_CHANNEL_PREFIX)) route.readKey()
     // 本文件和 session 静态打入 main.cjs；只有已激活模块内的 RC2 包走原生 ESM import。
     const active: RoomSession = await createSharedRoomSession({
       runtimeDir: resolve(dirname(entry), '../runtime'),
@@ -146,6 +150,7 @@ async function openBoundRuntime(binding: Binding) {
         protocol: route.protocol,
         baseURL: route.baseURL,
         reasoning: route.reasoning,
+        modelConfig: route.modelConfig,
         readKey: route.readKey,
         assertActive,
       },
@@ -159,7 +164,7 @@ async function openBoundRuntime(binding: Binding) {
     session = active
     assertActive()
     // 适配器异步注册期间配置可能被移除；交给执行端前再核对选中的路由。
-    if (isWorkingCustomModelChannelId(modelSelection.channelId)) route.readKey()
+    if (isWorkingCustomModelChannelId(modelSelection.channelId) || modelSelection.channelId.startsWith(NATIVE_CHANNEL_PREFIX)) route.readKey()
     unsubscribe = subscribeWorkingIdentity((id) => {
       if (String(id ?? '') !== userId) void revoke().catch(() => {})
     })

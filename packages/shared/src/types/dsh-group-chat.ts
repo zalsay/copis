@@ -345,6 +345,7 @@ export type DshSharedRoomCommand =
   | { action: 'create'; name: string; shareCode: string }
   | { action: 'join'; shareCode: string }
   | { action: 'messages'; roomId: string; beforeSeq?: number }
+  | { action: 'removeMember'; roomId: string; memberId: number }
   | { action: 'leave' | 'dissolve'; roomId: string }
   | { action: 'detail'; roomId: string }
   | { action: 'events'; roomId: string; afterSeq: number }

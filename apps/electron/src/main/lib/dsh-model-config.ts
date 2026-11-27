@@ -12,7 +12,6 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { Document, parseDocument } from 'yaml'
 import {
@@ -38,6 +37,7 @@ import { resolvePiThinkingLevel } from './agent-thinking-level'
 import { getSettings } from './settings-service'
 import { getChannelById, listChannels, resolveChannelRuntimeApiKey } from './channel-manager'
 import { getWorkingApiClient } from './working-api-service'
+import { dshAccountKeyRef, DSH_CUSTOM_KEY_PREFIX, readDshProfilePatch } from './dsh-profile-patch'
 import { getDshHomeDir } from './config-paths'
 import { getWorkingModelCatalog, getWorkingModelCatalogOwnerId, getWorkingCustomModelRuntime } from './working-model-catalog'
 import { writeJsonFileAtomic } from './safe-file'
@@ -275,8 +275,6 @@ async function resolveDshWorkingProviders(): Promise<DshWorkingProviderConfig[]>
   })
 }
 
-const CUSTOM_KEY_PREFIX = 'COPIS_DSH_CUSTOM_'
-
 /** 与 Agent 共用账号目录模型配置，每个模型保留独立协议及凭据。 */
 function resolveDshCustomProviders(): DshWorkingProviderConfig[] {
   const user = getWorkingApiClient().getCachedUser()
@@ -286,7 +284,7 @@ function resolveDshCustomProviders(): DshWorkingProviderConfig[] {
     const providerRoute = workingCustomModelChannelIdFor(model.id)
     try {
       const runtime = getWorkingCustomModelRuntime(providerRoute, true, ownerId)
-      const apiKeyEnv = CUSTOM_KEY_PREFIX + createHash('sha256').update(`${ownerId ?? 'default'}:${model.id}`).digest('hex').toUpperCase()
+      const apiKeyEnv = dshAccountKeyRef(ownerId, model.id)
       return [{
         providerRoute,
         displayName: catalog.categories.find((category) => category.id === model.categoryId)?.name ?? '自定义模型',
@@ -540,15 +538,7 @@ export function applyDshModelConfig(
   }
 
   const patchFile = join(profileDir, 'cordis.patch.yml')
-  let patchItems: any[] = []
-  if (existsSync(patchFile)) {
-    const parsed = parseDocument(readFileSync(patchFile, 'utf-8'))
-    const items = parsed.toJS()
-    if (parsed.errors.length || !Array.isArray(items)) {
-      throw new Error('DSH 原生 Profile 格式无效，已停止同步以保护模型配置')
-    }
-    patchItems = items
-  }
+  const patchItems = readDshProfilePatch(patchFile)
   const syncStatePath = join(profileDir, 'copis-model-sync.json')
   const previouslyManaged = readDshManagedModels(syncStatePath)
 
@@ -653,7 +643,7 @@ export function applyDshModelConfig(
 
   const oldRefs = credDoc.toJS()?.refs ?? {}
   for (const key of Object.keys(oldRefs)) {
-    if (key.startsWith(CUSTOM_KEY_PREFIX)) credDoc.deleteIn(['refs', key])
+    if (key.startsWith(DSH_CUSTOM_KEY_PREFIX)) credDoc.deleteIn(['refs', key])
   }
   const refs = Object.assign({}, config.credentialsRefs, ...(config.providerConfigs ?? []).map((provider) => provider.credentialsRefs))
   for (const [key, val] of Object.entries(refs)) {

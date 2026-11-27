@@ -506,7 +506,7 @@ export function DshGroupChatWorkspace({ headerAction, shared }: DshGroupChatWork
               >
                 {/* 头像 */}
                 <div
-                  className={`dsh-room-avatar w-7 h-7 rounded-full flex items-center justify-center font-medium text-xs shrink-0 ${
+                  className={`dsh-room-avatar ${msg.kind === 'agent' ? 'dsh-room-agent-avatar' : ''} w-7 h-7 rounded-full flex items-center justify-center font-medium text-xs shrink-0 ${
                     isUser
                       ? 'bg-white/[0.12] text-zinc-100 border border-white/[0.14] font-medium shadow-xs'
                       : 'bg-white/[0.08] text-zinc-300 border border-white/[0.08]'

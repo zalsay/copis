@@ -43,7 +43,7 @@ function responses(res, model) {
 }
 
 test(
-  '真实 Electron ASAR → RC2 → 账号自定义渠道 / Rust 群主专用内置代理',
+  '真实 Electron ASAR → RC2 → DSH 原生自定义 / Copis 账号自定义 / 内置代理',
   { skip: !runtime || !binary, timeout: 60000 },
   async (t) => {
     const dir = await mkdtemp(join(tmpdir(), 'copis-room-model-'));
@@ -68,12 +68,16 @@ test(
         model: data.model,
         path: req.url,
         owner:
-          data.model === 'custom'
+          data.model === 'local-chat' ? req.headers.authorization === 'Bearer fixture-native' : data.model === 'custom'
             ? req.headers['x-api-key'] === 'fixture-custom'
             : req.headers.authorization === 'Bearer fixture-owner',
         tools: data.tools?.length ?? 0,
       });
       res.setHeader('Content-Type', 'text/event-stream');
+      if (data.model === 'local-chat') {
+        const chunk = (delta, finish_reason) => res.write(`data: ${JSON.stringify({id:'chat',object:'chat.completion.chunk',created:1,model:data.model,choices:[{index:0,delta,finish_reason}]})}\n\n`);
+        chunk({role:'assistant',content:'本机回答'},null); chunk({},'stop'); res.end('data: [DONE]\n\n'); return;
+      }
       if (data.model !== 'custom') return responses(res, data.model);
       const events = [
         {
@@ -166,6 +170,10 @@ test(
     await symlink(installed, join(modules, versionDir), 'junction');
     const manifest = join(modules, 'active.json');
     await writeFile(manifest, JSON.stringify({ modules: { dsh: { ...lock.package, versionDir } } }));
+    const dsh = join(root, 'dsh');
+    await mkdir(join(dsh,'profiles/copis'),{recursive:true});
+    await writeFile(join(dsh,'profiles/copis/cordis.patch.yml'), JSON.stringify([{id:'llm-pi-ai',config:{providers:{local:{api:'openai-completions',baseURL:upstream+'/v1',apiKeyEnv:'LOCAL_API_KEY',models:[{id:'local-chat',name:'本地模型'}]}}}}]));
+    await writeFile(join(dsh,'.credentials.yaml'),JSON.stringify({version:1,refs:{LOCAL_API_KEY:'fixture-native'}}),{mode:0o600});
     const catalogFile = join(root, 'working-model-catalog.json');
     const account = (key) => ({
       apiKeys: { a: Buffer.from(key).toString('base64') },
@@ -225,6 +233,8 @@ test(
         const images=i<2?[{mimeType:'image/png',bytes:Buffer.from(${JSON.stringify(png)},'base64')}]:[];
         assert.deepEqual(await Promise.all([s.submit(id,'你好',images),s.submit(id,'你好',images)]),['本机回答','本机回答']);
       }
+      const native=list('owner').options.find(o=>o.name==='DSH · local · 本地模型'); assert.ok(native,'缺少原生模型');
+      const local=await open({...b,modelSelection:native}); assert.equal(await local.submit('local-call','你好'),'本机回答'); await local.revoke();
       globalThis.rev++;
       for(const [i,s] of [old,next,nonDefault].entries()){
         await assert.rejects(s.submit('changed','切号')); await s.revoke();
@@ -298,6 +308,7 @@ test(
       { hasImage: true, model: 'deepseek-v4-flash', path: '/v1/responses', owner: true, tools: 0 },
       { hasImage: true, model: 'custom', path: '/v1/messages?beta=true', owner: true, tools: 0 },
       { hasImage: false, model: 'deepseek-v4-pro', path: '/v1/responses', owner: true, tools: 0 },
+      { hasImage: false, model: 'local-chat', path: '/v1/chat/completions', owner: true, tools: 0 },
     ]);
   },
 );

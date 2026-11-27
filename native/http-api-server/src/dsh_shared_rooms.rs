@@ -28,6 +28,7 @@ enum Command {
     Join {
         share_code: String,
     },
+    RemoveMember { room_id: String, member_id: u64 },
     Leave { room_id: String },
     Dissolve { room_id: String },
     Detail {
@@ -105,7 +106,7 @@ pub(super) fn handle(
     if (200..300).contains(&result.status) {
         if let Some(raw) = result.body.take() {
             result.body = Some(cmd.for_display(&raw, &expected)?);
-        } else if matches!(cmd, Command::ReadRoom { .. } | Command::UnreadEvents { .. }) {
+        } else if matches!(cmd, Command::ReadRoom { .. } | Command::UnreadEvents { .. } | Command::RemoveMember { .. }) {
             return Err(upstream_invalid());
         }
     }
@@ -188,6 +189,10 @@ impl Command {
                 "/api/chatrooms/v2/join".into(),
                 Some(json!({"shareCode":share_code(&code)?})),
             ),
+            Command::RemoveMember { room_id, member_id } => {
+                if !(1..=MAX_SAFE_SEQ).contains(member_id) { return Err(invalid()); }
+                ("DELETE", format!("{}/{}/members/{}", rooms, identifier(room_id)?, member_id), None)
+            }
             Command::Leave { room_id } => ("POST", format!("{}/{}/leave", rooms, identifier(room_id)?), None),
             Command::Dissolve { room_id } => ("DELETE", format!("{}/{}", rooms, identifier(room_id)?), None),
             Command::Detail { room_id } => {
@@ -315,6 +320,10 @@ impl Command {
             }
             Command::List {} => Value::Array(rows(raw)?.iter().map(room).collect::<Result<Vec<_>, _>>()?),
             Command::Create { .. } | Command::Join { .. } => room(raw)?,
+            Command::RemoveMember { room_id, member_id } => {
+                if raw["roomId"] != *room_id || raw["memberId"].as_u64() != Some(*member_id) { return Err(upstream_invalid()); }
+                fields(raw, &["roomId", "memberId"])
+            }
             Command::Leave { .. } => fields(raw, &["roomId"]),
             Command::Dissolve { .. } => fields(&raw["room"], &["roomId"]),
             Command::Messages { .. } => Value::Array(rows(raw)?.iter().map(message).collect()),
@@ -341,7 +350,10 @@ impl Command {
                 let mut detail = json!({"room":room(&raw["room"])?,"agents":raw["agents"].as_array().into_iter().flatten().map(|a| fields(a,&["roomId","roomAgentId","ownerUserId","displayName","availability","queuedCount"])).collect::<Vec<_>>() });
                 if let Some(members) = raw.get("members") {
                     let members = rows(members)?;
-                    let own: Vec<_> = members.iter().filter(|m| m["status"] == "active" && m["roomId"] == *room_id && m["userId"].as_u64().map(|n| n.to_string()).as_deref() == Some(user_id)).collect();
+                    let active = members.iter().filter(|m| m["status"] == "active" && m["roomId"] == *room_id);
+                    let ids = active.clone().map(|m| safe_seq(&m["userId"]).filter(|n| *n > 0).ok_or_else(upstream_invalid)).collect::<Result<Vec<_>, _>>()?;
+                    detail["memberIds"] = json!(ids);
+                    let own: Vec<_> = active.filter(|m| m["userId"].as_u64().map(|n| n.to_string()).as_deref() == Some(user_id)).collect();
                     if own.len() > 1 { return Err(upstream_invalid()); }
                     if let Some(seq) = own.first().and_then(|member| member.get("lastReadSeq")) {
                         detail["lastReadSeq"] = safe_seq(seq).ok_or_else(upstream_invalid)?.into();
@@ -478,11 +490,21 @@ mod unread_tests {
         for bad in [json!([event(2,"message.created",message(2,"user",Value::Null))]), json!([event(2,"message.created",message(3,"user",json!(8)))]), json!([event(2,"message.created",message(2,"invalid",json!(8)))]), json!([event(1,"member.joined",json!({}))]),json!([event(2,"member.joined",json!({})),event(2,"member.joined",json!({}))]),json!([{"roomId":"other","seq":2,"eventType":"member.joined"}]),json!([{"roomId":"r","seq":9007199254740992u64,"eventType":"member.joined"}])] { assert!(cmd.for_display(&bad,"7").is_err(), "{bad}"); }
     }
     #[test]
+    fn member_removal_checks_target_and_receipt() {
+        let remove = command(json!({"action":"removeMember","roomId":"r","memberId":8}));
+        assert_eq!(remove.request().unwrap(), ("DELETE", "/api/chatrooms/v2/rooms/r/members/8".into(), None));
+        let ack = json!({"roomId":"r","memberId":8});
+        assert_eq!(remove.for_display(&ack,"7").unwrap(), ack);
+        assert!(remove.for_display(&json!({"roomId":"other","memberId":8}),"7").is_err());
+        assert!(remove.for_display(&json!({"roomId":"r","memberId":9}),"7").is_err());
+        assert!(command(json!({"action":"removeMember","roomId":"r","memberId":0})).request().is_err());
+    }
+    #[test]
     fn detail_only_exposes_active_expected_member_cursor_and_safe_next_seq() {
         let detail = command(json!({"action":"detail","roomId":"r"}));
         let raw = json!({"room":{"roomId":"r","nextSeq":10},"members":[{"roomId":"r","userId":8,"status":"active","lastReadSeq":9},{"roomId":"r","userId":7,"status":"left","lastReadSeq":8},{"roomId":"r","userId":7,"status":"active","lastReadSeq":3}],"agents":[]});
         let result = detail.for_display(&raw,"7").unwrap();
-        assert_eq!(result["lastReadSeq"],3); assert_eq!(result["room"]["nextSeq"],10); assert!(result.get("members").is_none());
+        assert_eq!(result["lastReadSeq"],3); assert_eq!(result["room"]["nextSeq"],10); assert!(result.get("members").is_none()); assert_eq!(result["memberIds"],json!([8,7]));
         let list = command(json!({"action":"list"}));
         assert_eq!(list.for_display(&json!([{"roomId":"r","nextSeq":10}]),"7").unwrap()[0]["nextSeq"],10);
         assert!(list.for_display(&json!([{"roomId":"r","nextSeq":9007199254740992u64}]),"7").is_err());

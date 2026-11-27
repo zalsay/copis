@@ -32,6 +32,8 @@
 .dsh-room-pane .dsh-room-text { color: var(--room-text); }
 .dsh-room-pane .dsh-room-secondary,
 .dsh-room-pane .dsh-room-avatar svg { color: var(--room-secondary); }
+.dsh-room-pane .dsh-room-agent-avatar { background-color: var(--room-accent); }
+.dsh-room-pane .dsh-room-agent-avatar svg { color: var(--room-canvas); }
 .dsh-room-pane .dsh-room-draft:empty::before { content: attr(data-placeholder); color: var(--room-tertiary); pointer-events: none; }
 
 .dsh-room-pane .dsh-room-mention-chip {

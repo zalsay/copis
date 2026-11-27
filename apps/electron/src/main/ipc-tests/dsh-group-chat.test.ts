@@ -132,6 +132,9 @@ test('共享群 IPC 只接受主窗口顶层，不把内部令牌交给渲染进
   expect(command).not.toHaveBeenCalled()
   expect(await h.invoke(channel, {sender: contents, senderFrame: contents.mainFrame}, '7', {action:'list'})).toEqual(['room-1'])
   expect(command).toHaveBeenCalledWith('7', {action:'list'}, 'internal-fixture')
+  const remove = {action:'removeMember', roomId:'room1', memberId:8}
+  await h.invoke(channel, {sender: contents, senderFrame: contents.mainFrame}, '7', remove)
+  expect(command).toHaveBeenCalledWith('7', remove, 'internal-fixture')
 })
 
 test('共享群 IPC 禁止渲染进程直接调用内部智能体管理命令', async () => {

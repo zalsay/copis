@@ -8,8 +8,8 @@ import { getWorkingApiClient } from '../working-api-service'
 import { getWorkingTokenStore } from '../working-auth-store'
 import { getWorkingModelCatalog } from '../working-model-catalog'
 
-/** 只允许固定的、可公开的原因越过运行时边界。 */
-export class RoomModelError extends Error {}
+import { nativeRoomModels, RoomModelError, supportsRoomEndpoint } from './shared-room-native-models'
+export { RoomModelError }
 
 export function assertRoomModelOwner(userId: string) {
   if (typeof userId !== 'string' || !userId || userId !== userId.trim() ||
@@ -19,15 +19,9 @@ export function assertRoomModelOwner(userId: string) {
   }
 }
 
-/** RC2 仅注册这两种协议，不接受在地址里携带凭据或查询参数。 */
+/** Copis 账号模型目录目前支持两种协议，不接受在地址里携带凭据或查询参数。 */
 export function supportsRoomCustomModel(model: WorkingCustomModel): boolean {
-  if (!['openai-responses', 'anthropic-messages'].includes(model.protocol)) return false
-  try {
-    const url = new URL(model.baseUrl)
-    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash
-  } catch {
-    return false
-  }
+  return (model.protocol === 'openai-responses' || model.protocol === 'anthropic-messages') && supportsRoomEndpoint(model.protocol, model.baseUrl)
 }
 
 function readOptions(userId: string): DshRoomModelCatalog['options'] {
@@ -35,7 +29,8 @@ function readOptions(userId: string): DshRoomModelCatalog['options'] {
     group.models.map(({ id: modelId, name }) => ({ channelId, modelId, name: getCopisWorkingModelDisplayName(channelId, modelId, name) })))
   const catalog = getWorkingModelCatalog(true, userId)
   const custom = workingModelCatalogToOptions({ ...catalog, models: catalog.models.filter(supportsRoomCustomModel) })
-  return [...builtins, ...custom.map(({ channelId, modelId, modelName }) => ({ channelId, modelId, name: modelName }))]
+  return [...builtins, ...custom.map(({ channelId, modelId, modelName }) => ({ channelId, modelId, name: modelName })),
+    ...nativeRoomModels(userId, catalog.models).map(({channelId, modelId, name}) => ({channelId, modelId, name}))]
 }
 
 /** 目录枚举不解密或探测模型。只有打开会话才验证所选凭据及已安装适配器。 */

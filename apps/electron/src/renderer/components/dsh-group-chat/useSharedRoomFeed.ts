@@ -21,6 +21,8 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : '无�
 export function useSharedRoomFeed(request: RoomRequest, roomId: string, userId: string) {
   const [messages, setMessages] = useAtom(messagesAtom)
   const [ready, setReady] = useState(false)
+  const [memberIds, setMemberIds] = useState<number[]>()
+  const [hostId, setHostId] = useState<number>()
   const [agents, setAgents] = useState<HostAgent[]>([])
   const [error, setError] = useState('')
   const [sendError, setSendError] = useState('')
@@ -44,6 +46,9 @@ export function useSharedRoomFeed(request: RoomRequest, roomId: string, userId: 
     const agents = readHostAgents(detail, roomId)
     const room = readSharedRoom((detail as { room: unknown }).room, userId)
     if (seq === detailRevision.current) {
+      const data = detail as { memberIds?: unknown; room: { hostUserId?: number } }
+      setMemberIds(Array.isArray(data.memberIds) && data.memberIds.every(id => Number.isSafeInteger(id) && id > 0) ? [...new Set<number>(data.memberIds)] : undefined)
+      setHostId(data.room.hostUserId)
       setAgents(agents)
       setShareCode(room.shareCode)
     }
@@ -86,6 +91,8 @@ export function useSharedRoomFeed(request: RoomRequest, roomId: string, userId: 
         setShareCode(undefined)
         revision.current++
         initialized = false
+        setMemberIds(undefined)
+        setHostId(undefined)
         setAgents([])
         setMessages([])
         setHasOlder(false)
@@ -105,6 +112,15 @@ export function useSharedRoomFeed(request: RoomRequest, roomId: string, userId: 
       clearTimeout(timer)
     }
   }, [request, roomId, receive, setMessages, refreshAgents])
+
+  async function removeMember(memberId: number) {
+    if (!ready || String(hostId) !== userId || memberId === hostId || !memberIds?.includes(memberId)) throw new Error('不能移除此成员')
+    const ack = await request({action:'removeMember', roomId, memberId}) as {roomId?: string; memberId?: number} | null
+    if (ack?.roomId !== roomId || ack.memberId !== memberId) throw new Error('未收到有效的移除回执')
+    // 丢弃移除前发出的详情请求，避免旧列表短暂恢复已移除成员。
+    detailRevision.current++
+    setMemberIds(ids => ids?.filter(id => id !== memberId))
+  }
 
   async function older() {
     if (!ready || !hasOlder || loadingOlder || !messages[0]) return
@@ -218,5 +234,5 @@ export function useSharedRoomFeed(request: RoomRequest, roomId: string, userId: 
   }, [ready, request, roomId])
   const displayMessages = [...messages, ...(ready ? outbox.map(row => displayOutgoing(row, roomId, userId)) : [])]
   const loadedIncomingSeq = messages.reduce((seq,m) => m.kind === 'agent' || (m.kind === 'user' && m.authorUserId !== userId) ? Math.max(seq,m.seq) : seq, 0)
-  return { messages:displayMessages, loadedIncomingSeq, retry, agents, shareCode, refreshAgents, ready, error: error || sendError, send, download, older, hasOlder, loadingOlder }
+  return { messages:displayMessages, loadedIncomingSeq, retry, agents, memberIds, hostId, removeMember, shareCode, refreshAgents, ready, error: error || sendError, send, download, older, hasOlder, loadingOlder }
 }

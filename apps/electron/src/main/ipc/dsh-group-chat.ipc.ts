@@ -50,7 +50,7 @@ export function registerDshGroupChatIpcHandlers(): void {
     }
     const { getWorkingApiClient } = await import('../lib/working-api-service')
     const { getHttpApiInternalToken } = await import('../lib/http-api-server')
-    const allowed = ['list', 'create', 'join', 'leave', 'dissolve', 'detail', 'events', 'unreadEvents', 'readRoom', 'messages', 'send', 'agentOptions', 'registerAgent', 'removeAgent', 'roomModelOptions', 'setRoomModel', 'uploadAttachment', 'downloadAttachment']
+    const allowed = ['list', 'create', 'join', 'removeMember', 'leave', 'dissolve', 'detail', 'events', 'unreadEvents', 'readRoom', 'messages', 'send', 'agentOptions', 'registerAgent', 'removeAgent', 'roomModelOptions', 'setRoomModel', 'uploadAttachment', 'downloadAttachment']
     if (!command || typeof command !== 'object' || !allowed.includes(command.action)) throw new Error('共享群命令无效')
     if (command.action === 'readRoom' || command.action === 'unreadEvents') {
       if (command.action === 'readRoom' && (!main.isFocused() || !main.isVisible() || main.isMinimized())) return null

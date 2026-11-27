@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef } from 'react'
 import { Provider, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { SharedRoomForm } from './SharedRoomForm'
+import { RoomMembers } from './RoomMembers'
 import { RoomManagement } from './RoomManagement'
 import { ManagedRoomDialog } from './ManagedRoomDialog'
 import { DshGroupChatWorkspace } from './DshGroupChatWorkspace'
@@ -35,8 +36,10 @@ function SharedConversation({
   return (
     <main ref={pane} className="flex min-h-0 min-w-0 flex-1 flex-col">
       <DshGroupChatWorkspace
-        headerAction={<RoomManagement room={room} shareCode={feed.shareCode}
-          ready={feed.ready} disabled={disabled} onChoose={action => void act({kind:'manage', id:room.id, action})} />}
+        headerAction={<><RoomMembers agents={feed.agents} ids={feed.memberIds} hostId={feed.hostId} userId={userId}
+          disabled={!feed.ready || disabled} removeMember={feed.removeMember} />
+          <RoomManagement room={room} shareCode={feed.shareCode}
+          ready={feed.ready} disabled={disabled} onChoose={action => void act({kind:'manage', id:room.id, action})} /></>}
         shared={{
           agent: single,
           status: <span role="status" className="flex min-w-0 items-center gap-1.5 text-xs dsh-room-secondary">
