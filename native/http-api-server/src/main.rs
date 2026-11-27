@@ -4083,12 +4083,14 @@ fn main() {
             process::exit(1);
         }
     };
-    start_desktop_payment_poller(
-        Arc::clone(&working_payment_state),
-        Arc::clone(&workers),
-        Arc::clone(&payment_workspace),
-        Arc::clone(&skill_market_state),
-    );
+    if cfg!(feature = "legacy-desktop-payment-poller") {
+        start_desktop_payment_poller(
+            Arc::clone(&working_payment_state),
+            Arc::clone(&workers),
+            Arc::clone(&payment_workspace),
+            Arc::clone(&skill_market_state),
+        );
+    }
     let workspace_mcp_store = Arc::new(WorkspaceMcpStore::open(resolve_config_directory()));
     let workspace_dev_store = Arc::new(WorkspaceDevStore::open(resolve_config_directory()));
     let workspace_skills_store = Arc::new(WorkspaceSkillsStore::open(resolve_config_directory()));

@@ -40,6 +40,7 @@ import { getChannelById, listChannels, resolveChannelRuntimeApiKey } from './cha
 import { getWorkingApiClient } from './working-api-service'
 import { getDshHomeDir } from './config-paths'
 import { getWorkingModelCatalog, getWorkingModelCatalogOwnerId, getWorkingCustomModelRuntime } from './working-model-catalog'
+import { writeJsonFileAtomic } from './safe-file'
 
 async function resolveHttpApiInternalToken(): Promise<string> {
   try {
@@ -299,8 +300,8 @@ function resolveDshCustomProviders(): DshWorkingProviderConfig[] {
         credentialsRefs: { [apiKeyEnv]: runtime.apiKey },
       }]
     } catch {
-      console.warn('[DSH] 跳过无法读取凭据的自定义模型:', model.id)
-      return []
+      // 暂时无法解密不等于用户撤销了凭据，不能据此清空原生模型配置。
+      throw new Error(`自定义模型 ${model.id} 的凭据无法读取，已停止同步以保护 DSH 配置`)
     }
   })
 }
@@ -482,6 +483,44 @@ function isCopisWorkingProviderRoute(channelId: string | undefined): channelId i
     || channelId === COPIS_WORKING_ZHIPU_CHANNEL_ID
 }
 
+/** 只记录上次同步托管的模型 ID，以区分修改/删除与 DSH 原生附加模型；不保存凭据。 */
+function readDshManagedModels(path: string): Record<string, string[]> {
+  if (!existsSync(path)) return {}
+  const state = JSON.parse(readFileSync(path, 'utf8'))
+  if (state?.version !== 1 || !state.models || typeof state.models !== 'object' || Array.isArray(state.models)
+    || !Object.values(state.models).every((ids) => Array.isArray(ids) && ids.every((id) => typeof id === 'string'))) {
+    throw new Error('DSH 模型同步记录无效，已停止同步以保护原生配置')
+  }
+  return state.models
+}
+
+function mergeDshProviderModels(
+  provider: DshWorkingProviderConfig,
+  previous: Record<string, any>,
+  managedIds: string[],
+  legacy: Record<string, any>,
+): Record<string, any>[] {
+  const currentIds = new Set(provider.models.map((model) => model.id))
+  const previousManaged = new Set(managedIds)
+  const models = new Map<string, Record<string, any>>((previous.models ?? [])
+    .filter((model: { id: string }) => !previousManaged.has(model.id) || currentIds.has(model.id))
+    .map((model: { id: string }) => [model.id, model]))
+  for (const model of provider.models) {
+    const stored = models.get(model.id)
+    const input = model.input ?? stored?.input ?? legacy.models?.find((entry: { id: string }) => entry.id === model.id)?.input
+    models.set(model.id, {
+      ...stored,
+      id: model.id,
+      name: model.name,
+      input: input?.length ? [...input] : ['text', 'image'],
+      ...(isWorkingCustomModelChannelId(provider.providerRoute) && provider.reasoning !== undefined
+        ? { reasoningEfforts: provider.reasoning === 'off' ? false : { [provider.reasoning]: provider.reasoning } }
+        : {}),
+    })
+  }
+  return [...models.values()]
+}
+
 /**
  * 将解析出的统一模型配置写入 DSH 的配置文件（settings.yaml、.credentials.yaml 与 cordis.patch.yml）
  */
@@ -503,15 +542,15 @@ export function applyDshModelConfig(
   const patchFile = join(profileDir, 'cordis.patch.yml')
   let patchItems: any[] = []
   if (existsSync(patchFile)) {
-    try {
-      const parsed = parseDocument(readFileSync(patchFile, 'utf-8')).toJS()
-      if (Array.isArray(parsed)) {
-        patchItems = parsed
-      }
-    } catch {
-      patchItems = []
+    const parsed = parseDocument(readFileSync(patchFile, 'utf-8'))
+    const items = parsed.toJS()
+    if (parsed.errors.length || !Array.isArray(items)) {
+      throw new Error('DSH 原生 Profile 格式无效，已停止同步以保护模型配置')
     }
+    patchItems = items
   }
+  const syncStatePath = join(profileDir, 'copis-model-sync.json')
+  const previouslyManaged = readDshManagedModels(syncStatePath)
 
   // 1. 写入 $DSH_HOME/settings.yaml
   const settingsPath = join(dshHomeDir, 'settings.yaml')
@@ -537,22 +576,26 @@ export function applyDshModelConfig(
     model: config.defaultModelId,
   })
 
-  // 旧版本只注册了 copis 单一路由。Working 作为默认模型时移除它，
-  // 避免 Composer 显示没有当前 capability 的过期选项。
-  if (isCopisWorkingProviderRoute(config.providerRoute)) {
-    for (const legacyProvider of [COPIS_DSH_PROVIDER_ROUTE, 'deepseek']) {
-      if (settingsDoc.hasIn(['llm-pi-ai', 'providers', legacyProvider])) {
-        settingsDoc.deleteIn(['llm-pi-ai', 'providers', legacyProvider])
-      }
-    }
-  }
+  const legacyLlmConfig = settingsDoc.toJS()?.['llm-pi-ai'] ?? {}
+  const llmEntry = patchItems.find((item) => item?.id === 'llm-pi-ai')
+  const profileLlmConfig = llmEntry?.config ?? {}
+  const oldProviders = legacyLlmConfig.providers ?? {}
+  const existingProviders = profileLlmConfig.providers ?? oldProviders
+  const providers = { ...existingProviders }
 
-  // 将当前默认路由与 Copis Working 内建路由一起注册到 Composer 模型目录。
-  const oldProviders = settingsDoc.toJS()?.['llm-pi-ai']?.providers ?? {}
-  const profileProviders = patchItems.find((item) => item?.id === 'llm-pi-ai')?.config?.providers ?? {}
-  for (const route of Object.keys(oldProviders)) {
-    if (isWorkingCustomModelChannelId(route)) settingsDoc.deleteIn(['llm-pi-ai', 'providers', route])
+  // copis-custom-* 是 Copis 托管路由：删除或撤销密钥后必须清除整个路由。
+  const activeCustomRoutes = new Set((config.providerConfigs ?? [])
+    .filter((provider) => isWorkingCustomModelChannelId(provider.providerRoute)).map((provider) => provider.providerRoute))
+  if (isWorkingCustomModelChannelId(config.providerRoute)) activeCustomRoutes.add(config.providerRoute)
+  for (const route of Object.keys(providers)) {
+    if (isWorkingCustomModelChannelId(route) && !activeCustomRoutes.has(route)) delete providers[route]
   }
+  // 保持既有旧版 Working 路由迁移规则。
+  if (isCopisWorkingProviderRoute(config.providerRoute)) {
+    delete providers[COPIS_DSH_PROVIDER_ROUTE]
+    delete providers.deepseek
+  }
+  const managedModels: Record<string, string[]> = {}
   for (const provider of [
     ...(config.providerConfigs ?? []).filter((provider) => !isWorkingCustomModelChannelId(provider.providerRoute)),
     ...((config.providerConfigs ?? []).some((provider) => provider.providerRoute === config.providerRoute) ? [] : [{
@@ -570,29 +613,21 @@ export function applyDshModelConfig(
     }]),
     ...(config.providerConfigs ?? []).filter((provider) => isWorkingCustomModelChannelId(provider.providerRoute)),
   ]) {
-    settingsDoc.setIn(['llm-pi-ai', 'providers', provider.providerRoute], {
+    const previous = existingProviders[provider.providerRoute] ?? {}
+    providers[provider.providerRoute] = {
+      ...previous,
       displayName: provider.displayName,
       ...(provider.apiKeyEnv ? { apiKeyEnv: provider.apiKeyEnv } : {}),
       api: provider.protocol,
       baseURL: provider.baseURL,
       ...('reasoning' in provider && provider.reasoning !== undefined ? { reasoning: provider.reasoning } : {}),
-      models: provider.models.map((model) => {
-        const profileInput = profileProviders[provider.providerRoute]?.models?.find((entry: { id: string }) => entry.id === model.id)?.input
-        const previousInput = oldProviders[provider.providerRoute]?.models?.find((entry: { id: string }) => entry.id === model.id)?.input
-        const input = model.input ?? profileInput ?? previousInput
-        return {
-          id: model.id,
-          name: model.name,
-          input: input?.length ? [...input] : ['text', 'image'],
-          // 自定义 route 没有内置能力目录，必须声明设置中选用的思考等级。
-          ...(isWorkingCustomModelChannelId(provider.providerRoute) && 'reasoning' in provider && provider.reasoning !== undefined
-            ? { reasoningEfforts: provider.reasoning === 'off' ? false : { [provider.reasoning]: provider.reasoning } }
-            : {}),
-        }
-      }),
+      models: mergeDshProviderModels(provider, previous, previouslyManaged[provider.providerRoute] ?? [], oldProviders[provider.providerRoute] ?? {}),
       ...(provider.defaultContextWindow !== undefined ? { defaultContextWindow: provider.defaultContextWindow } : {}),
-    })
+    }
+    managedModels[provider.providerRoute] = provider.models.map((model) => model.id)
   }
+  const llmConfig = { ...legacyLlmConfig, ...profileLlmConfig, providers }
+  settingsDoc.set('llm-pi-ai', llmConfig)
 
   const copisDefaults = resolveDshCopisDefaults()
   settingsDoc.set('copis-defaults', copisDefaults)
@@ -677,7 +712,13 @@ export function applyDshModelConfig(
     patchItems.push(disabledDeepSeekAdapterEntry)
   }
 
+  // 直接更新官方持久化 Profile；legacy 启动导入与热重载使用完全相同的目录。
+  const llmIndex = patchItems.findIndex((item) => item?.id === 'llm-pi-ai')
+  const nextLlmEntry = { ...llmEntry, id: 'llm-pi-ai', config: llmConfig }
+  if (llmIndex === -1) patchItems.push(nextLlmEntry)
+  else patchItems[llmIndex] = nextLlmEntry
   writeFileSync(patchFile, new Document(patchItems).toString(), 'utf-8')
+  writeJsonFileAtomic(syncStatePath, { version: 1, models: managedModels }, true, 0o600)
 }
 
 /**

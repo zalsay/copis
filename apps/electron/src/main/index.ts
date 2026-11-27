@@ -115,15 +115,12 @@ import { startAgentToolsWatcher, stopAgentToolsWatcher } from './lib/agent-tools
 import { getIsQuitting, setQuitting } from './lib/app-lifecycle'
 import {
   registerBridge,
-  startAllBridges,
-  startBridgeSelfHealing,
   stopAllBridges,
-  stopBridgeSelfHealing,
 } from './lib/bridge-registry'
 import { startPlanningReminderScheduler, stopPlanningReminderScheduler } from './lib/planning-reminder-scheduler'
 import { feishuBridgeManager } from './lib/feishu-bridge-manager'
 import { getFeishuMultiBotConfig } from './lib/feishu-config'
-import { stopFeishuSyncSleepBlocker, syncFeishuSyncSleepBlocker } from './lib/feishu-sleep-blocker'
+import { stopFeishuSyncSleepBlocker } from './lib/feishu-sleep-blocker'
 import { getPersistableMainWindowState, hideMacMainWindowAfterClose } from './lib/main-window-lifecycle'
 import { dingtalkBridgeManager } from './lib/dingtalk-bridge-manager'
 import { getDingTalkMultiBotConfig } from './lib/dingtalk-config'
@@ -692,9 +689,6 @@ async function bootstrap(): Promise<void> {
   // 只安装权限/采集路由，不会在语音功能关闭时启动录音。
   safeRun('createVoiceDictationWindow', createVoiceDictationWindow)
 
-  // 飞书实时同步开启时，默认阻止系统自动休眠，保证远程群内继续可用。
-  safeRun('syncFeishuSyncSleepBlocker', () => syncFeishuSyncSleepBlocker(getSettings()))
-
   // 注册全局快捷键
   safeRun('registerGlobalShortcut:quick-task', () =>
     registerGlobalShortcut('quick-task', toggleQuickTaskWindow),
@@ -707,10 +701,6 @@ async function bootstrap(): Promise<void> {
       toggleVoiceDictationWindow({ targetIsCopis: mainWindow?.isFocused() === true })
     }),
   )
-
-  // 启动所有已注册的 Bridge（飞书/钉钉/微信等）
-  await safeAwait('startAllBridges', () => startAllBridges())
-  safeRun('startBridgeSelfHealing', startBridgeSelfHealing)
 
   safeRun('startPlanningReminderScheduler', startPlanningReminderScheduler)
 
@@ -836,8 +826,7 @@ app.on('before-quit', (event) => {
   stopWorkspaceWatcher()
   // 停止 Agent 工具配置文件监听
   stopAgentToolsWatcher()
-  // 停止所有 Bridge
-  stopBridgeSelfHealing()
+  // DSH 不自动连接旧 IM；仍清理通过 IPC 手动建立的连接。
   stopAllBridges()
   stopPlanningReminderScheduler()
   // 释放飞书同步防休眠

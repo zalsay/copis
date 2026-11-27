@@ -3,17 +3,16 @@ import { electronPlatformKey, resolveElectronVersion, validateElectronVersion, t
 export { validateElectronVersion } from './electron-platform-version'
 
 export function incrementPatchVersion(version: string): string {
-  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim())
-  if (!match) {
-    throw new Error(`Electron 应用版本必须是三段式 semver：${version}`)
-  }
+  const [major, minor, patch] = validateElectronVersion(version).split('.').map(Number) as [number, number, number]
 
-  const patch = Number(match[3])
-  if (!Number.isSafeInteger(patch) || patch >= Number.MAX_SAFE_INTEGER) {
-    throw new Error(`Electron 应用 patch 版本超出安全范围：${version}`)
+  // 历史超限版本也在下次递增时进位，低位归零，不保留超限余数。
+  if (minor > 99 || (minor === 99 && patch >= 99)) {
+    return validateElectronVersion(`${major + 1}.0.0`)
   }
-
-  return `${match[1]}.${match[2]}.${patch + 1}`
+  if (patch >= 99) {
+    return `${major}.${minor + 1}.0`
+  }
+  return `${major}.${minor}.${patch + 1}`
 }
 
 export async function setElectronVersion(

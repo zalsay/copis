@@ -584,7 +584,7 @@ Copis 参考 YC QM 项目的结构化长期记忆管理思路（`notebook` / `ca
 `apps/electron/package.json` 的 `copis.platformVersions` 按 `platform-arch` 保存独立发布版本：`darwin-arm64`、`darwin-x64`、`win32-x64`、`linux-x64`。未配置的平台回退到顶层 `version`；修改顶层版本不会覆盖已有的平台配置。
 
 - `scripts/electron-platform-version.ts` 统一解析并校验版本；`scripts/bump-electron-version.ts` 支持 `--get`、`--new`、`--set <version>`，搭配 `--platform` 和 `--arch` 操作指定条目。
-- `build.sh --new` 和 `build.ps1 -NewVersion` 只递增目标平台的 patch；低于该平台功能模块最低客户端版本时先对齐门槛，本次不再额外递增。
+- `build.sh --new` 和 `build.ps1 -NewVersion` 只更新目标平台版本：默认 patch +1，patch 满 99 时向 minor 进位并将 patch 归零，minor 满 99 且需要进位时向 major 进位并将 minor、patch 归零（如 `0.0.99` → `0.1.0`、`0.99.99` → `1.0.0`）。历史超限版本在下次递增时同样进位、低位归零（如 `0.0.105` → `0.1.0`），这是项目版本规则，不是 semver 本身的限制；低于该平台功能模块最低客户端版本时先对齐门槛，本次不再额外递增。
 - `pack`、`dist`、`dist:mac`、`dist:win`、`dist:linux` 通过 `apps/electron/scripts/package-electron-builder.ts` 打包，使用 `extraMetadata.version` 写入安装包，并用 `COPIS_BUILD_APP_VERSION` 同步 Vite 的 `__APP_VERSION__`，不改写共享源码版本。
 - 每次打包选择一个平台和架构。直接调用 `electron-builder` 或其他尚未接入包装脚本的入口，不能假定会自动应用平台版本映射。
 - 客户端 manifest 的 `client.updates[platform-arch].version` 必须与对应安装包内版本一致。功能模块版本独立管理，不能仅修改 manifest 声称客户端已升级。

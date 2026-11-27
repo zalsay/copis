@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <!-- Hardened Runtime：允许申请发送 AppleEvents；仍需 macOS 用户同意。 -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+
     <!-- 允许 JIT 编译（Electron 需要） -->
     <key>com.apple.security.cs.allow-jit</key>
     <true/>

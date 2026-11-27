@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseDocument } from 'yaml'
@@ -19,12 +19,16 @@ const originalHome = process.env.HOME
 const originalCopisDev = process.env.COPIS_DEV
 const originalFetch = globalThis.fetch
 let customVip = false
+let customCredentialReadFails = false
 const customModel: WorkingCustomModel = { id: 'example', name: '我的模型', modelId: 'test-model', protocol: 'anthropic-messages', baseUrl: 'https://example.com', thinkingLevel: 'high', apiKeyConfigured: true }
 let customModels = [customModel]
 mock.module('./working-model-catalog', () => ({
   getWorkingModelCatalogOwnerId: (user: WorkingUser | null) => user?.id,
   getWorkingModelCatalog: () => ({ models: customModels, categories: [] }),
-  getWorkingCustomModelRuntime: (channelId: string) => ({ model: customModels.find((model) => `copis-custom-${model.id}` === channelId)!, apiKey: `custom-test-key-${channelId}` }),
+  getWorkingCustomModelRuntime: (channelId: string) => {
+    if (customCredentialReadFails) throw new Error('测试模拟钥匙串暂时不可读')
+    return { model: customModels.find((model) => `copis-custom-${model.id}` === channelId)!, apiKey: `custom-test-key-${channelId}` }
+  },
 }))
 
 mock.module('electron', () => ({
@@ -237,6 +241,153 @@ describe('dsh-model-config', () => {
       customModels = [customModel]
       customVip = false
     }
+  })
+
+  function readProfileProviders(dir: string) {
+    const items = parseDocument(readFileSync(join(dir, 'profiles/copis/cordis.patch.yml'), 'utf8')).toJS()
+    return items.find((item: any) => item.id === 'llm-pi-ai')?.config?.providers ?? {}
+  }
+
+  function writeProfileProviders(dir: string, providers: Record<string, unknown>) {
+    const profile = join(dir, 'profiles/copis')
+    mkdirSync(profile, { recursive: true })
+    writeFileSync(join(profile, 'cordis.patch.yml'), JSON.stringify([{ id: 'llm-pi-ai', config: { providers } }]))
+  }
+
+  const nativeModel = { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', input: ['text', 'image'], contextWindow: 1000000 }
+  const nativeProvider = { api: 'openai-responses', baseURL: 'https://native.example/v1', headers: { 'x-native': 'keep' }, models: [{ id: 'test-model', name: '原生同名模型', input: ['text'], contextWindow: 4096 }] }
+
+  test('Given DSH 原生追加模型和独立 provider When 启动导入并连续重启同步 Then 模型及原生参数完整保留且与导入文档一致', async () => {
+    const dir = mkdtempSync(join(tempHome, 'native-restart-'))
+    try {
+      writeProfileProviders(dir, { 'copis-custom-example': { models: [{ id: 'test-model', input: ['text'], maxOutputTokens: 1234 }, nativeModel], headers: { 'x-native': 'custom' } }, 'native-api': nativeProvider })
+      const config = await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: 'copis-custom-example' })
+      for (let restart = 0; restart < 3; restart++) {
+        modelConfigModule.applyDshModelConfig(config, dir)
+        const projected = parseDocument(readFileSync(join(dir, 'settings.yaml'), 'utf8')).toJS()['llm-pi-ai'].providers
+        expect(projected['copis-custom-example'].models).toEqual([
+          expect.objectContaining({ id: 'test-model', input: ['text'], maxOutputTokens: 1234 }), nativeModel,
+        ])
+        expect(projected['copis-custom-example'].headers).toEqual({ 'x-native': 'custom' })
+        expect(projected['native-api']).toEqual(nativeProvider)
+        expect(readProfileProviders(dir)).toEqual(projected)
+        // 官方启动会把 legacy 文档重命名为 imported，下一次同步只能读取原生 Profile。
+        renameSync(join(dir, 'settings.yaml'), join(dir, 'settings.yaml.imported'))
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('Given 不同 provider 使用同名模型 When 同步 Then 按完整路由分别保留各自能力而不全局去重', async () => {
+    const dir = mkdtempSync(join(tempHome, 'same-id-'))
+    try {
+      writeProfileProviders(dir, { 'native-api': nativeProvider })
+      modelConfigModule.applyDshModelConfig(await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: 'copis-custom-example' }), dir)
+      const providers = readProfileProviders(dir)
+      expect(providers['native-api'].models[0]).toEqual(nativeProvider.models[0])
+      expect(providers['copis-custom-example'].models[0]).toMatchObject({ id: 'test-model', name: '我的模型', input: ['text', 'image'] })
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('Given 用户在原生 Profile 删除附加模型及独立 provider When 旧 legacy 文档仍含旧值 Then 同步不得恢复已删除内容', async () => {
+    const dir = mkdtempSync(join(tempHome, 'native-removal-'))
+    try {
+      writeProfileProviders(dir, { 'copis-custom-example': { models: [nativeModel] }, 'native-api': nativeProvider })
+      const config = await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: 'copis-custom-example' })
+      modelConfigModule.applyDshModelConfig(config, dir)
+      const profile = readProfileProviders(dir)
+      profile['copis-custom-example'].models = profile['copis-custom-example'].models.filter((model: { id: string }) => model.id !== nativeModel.id)
+      delete profile['native-api']
+      writeProfileProviders(dir, profile)
+      modelConfigModule.applyDshModelConfig(config, dir)
+      const projected = parseDocument(readFileSync(join(dir, 'settings.yaml'), 'utf8')).toJS()['llm-pi-ai'].providers
+      expect(projected['native-api']).toBeUndefined()
+      expect(projected['copis-custom-example'].models.map((model: { id: string }) => model.id)).toEqual(['test-model'])
+      expect(readProfileProviders(dir)).toEqual(projected)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('Given Copis 修改托管模型 ID When 下一轮同步 Then 仅移除之前托管的旧 ID 并保留原生附加模型', async () => {
+    const dir = mkdtempSync(join(tempHome, 'managed-edit-'))
+    try {
+      writeProfileProviders(dir, { 'copis-custom-example': { models: [nativeModel] } })
+      modelConfigModule.applyDshModelConfig(await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: 'copis-custom-example' }), dir)
+      customModels = [{ ...customModel, modelId: 'renamed-model' }]
+      modelConfigModule.applyDshModelConfig(await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: 'copis-custom-example' }), dir)
+      const ids = readProfileProviders(dir)['copis-custom-example'].models.map((model: { id: string }) => model.id)
+      expect(ids).toEqual(['deepseek-v4.1-flash', 'renamed-model'])
+    } finally { customModels = [customModel]; rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('Given 删除模型或撤销凭据 When 原生 Profile 仍有该托管路由及附加模型 Then 路由与托管密钥都移除而原生 provider 不受影响', async () => {
+    for (const revokeOnly of [false, true]) {
+      const dir = mkdtempSync(join(tempHome, 'managed-removal-'))
+      try {
+        writeProfileProviders(dir, { 'copis-custom-example': { models: [nativeModel] }, 'native-api': nativeProvider })
+        modelConfigModule.applyDshModelConfig(await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: COPIS_WORKING_CHANNEL_ID }), dir)
+        customModels = revokeOnly ? [{ ...customModel, apiKeyConfigured: false }] : []
+        modelConfigModule.applyDshModelConfig(await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: COPIS_WORKING_CHANNEL_ID }), dir)
+        expect(readProfileProviders(dir)['copis-custom-example']).toBeUndefined()
+        expect(readProfileProviders(dir)['native-api']).toEqual(nativeProvider)
+        expect(readFileSync(join(dir, '.credentials.yaml'), 'utf8')).not.toContain('custom-test-key')
+        expect(readFileSync(join(dir, 'settings.yaml'), 'utf8')).not.toContain('copis-custom-example')
+      } finally { customModels = [customModel]; rmSync(dir, { recursive: true, force: true }) }
+    }
+  })
+
+  test('Given legacy 文档中的原生 provider 尚未导入 When 首次同步 Then 原样迁入 Profile 且同步记录只保存托管模型 ID', async () => {
+    const dir = mkdtempSync(join(tempHome, 'legacy-native-'))
+    try {
+      writeFileSync(join(dir, 'settings.yaml'), JSON.stringify({ 'llm-pi-ai': { providers: { 'native-api': nativeProvider } } }))
+      modelConfigModule.applyDshModelConfig(await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: 'copis-custom-example' }), dir)
+      expect(readProfileProviders(dir)['native-api']).toEqual(nativeProvider)
+      const state = readFileSync(join(dir, 'profiles/copis/copis-model-sync.json'), 'utf8')
+      expect(JSON.parse(state).models['copis-custom-example']).toEqual(['test-model'])
+      expect(state).not.toContain('custom-test-key')
+      expect(state).not.toContain('example.com')
+      expect(state).not.toContain('native-api')
+      expect(existsSync(join(dir, 'profiles/copis/copis-model-sync.json.bak'))).toBe(false)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('Given 原生 Profile 损坏 When 同步 Then 明确失败而不是用空配置覆盖并丢失模型', async () => {
+    const dir = mkdtempSync(join(tempHome, 'invalid-profile-'))
+    try {
+      const profile = join(dir, 'profiles/copis');mkdirSync(profile, { recursive: true })
+      const file = join(profile, 'cordis.patch.yml'), invalid = '- id: llm-pi-ai\n  config: [unterminated'
+      writeFileSync(file, invalid)
+      const config = await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: COPIS_WORKING_CHANNEL_ID })
+      expect(() => modelConfigModule.applyDshModelConfig(config, dir)).toThrow()
+      expect(readFileSync(file, 'utf8')).toBe(invalid)
+      expect(existsSync(join(dir, 'settings.yaml'))).toBe(false)
+      expect(existsSync(join(dir, '.credentials.yaml'))).toBe(false)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('Given 托管 ID 记录损坏 When 再同步 Then 停止写入而不是丢失所有权后恢复已删除模型', async () => {
+    const dir = mkdtempSync(join(tempHome, 'invalid-sync-state-'))
+    try {
+      writeProfileProviders(dir, { 'native-api': nativeProvider })
+      const profileFile = join(dir, 'profiles/copis/cordis.patch.yml')
+      const before = readFileSync(profileFile, 'utf8')
+      writeFileSync(join(dir, 'profiles/copis/copis-model-sync.json'), '{"version":1,"models":{"copis-custom-example":"invalid"}}')
+      const config = await modelConfigModule.resolveDshUnifiedModelConfig({ channelId: COPIS_WORKING_CHANNEL_ID })
+      expect(() => modelConfigModule.applyDshModelConfig(config, dir)).toThrow('DSH 模型同步记录无效')
+      expect(readFileSync(profileFile, 'utf8')).toBe(before)
+      expect(existsSync(join(dir, 'settings.yaml'))).toBe(false)
+      expect(existsSync(join(dir, '.credentials.yaml'))).toBe(false)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test('Given 已配置密钥暂时不可读取 When 启动同步 Then 拒绝覆盖而不是当成模型或密钥已删除', async () => {
+    const dir = mkdtempSync(join(tempHome, 'credential-unavailable-'))
+    try {
+      writeProfileProviders(dir, { 'copis-custom-example': { models: [nativeModel] } })
+      const profile = join(dir, 'profiles/copis/cordis.patch.yml'), before = readFileSync(profile, 'utf8')
+      customCredentialReadFails = true
+      await expect(modelConfigModule.syncCopisModelConfigToDsh({ dshRootDir: dir, channelId: COPIS_WORKING_CHANNEL_ID })).rejects.toThrow('已停止同步')
+      expect(readFileSync(profile, 'utf8')).toBe(before)
+      expect(existsSync(join(dir, 'settings.yaml'))).toBe(false)
+    } finally { customCredentialReadFails = false; rmSync(dir, { recursive: true, force: true }) }
   })
 
   test('Given 默认未配置渠道或 DeepSeek 内置渠道 When 统一解析模型配置 Then 默认生成 copis 自定义 provider 并映射 DeepSeek 闪电模型', async () => {

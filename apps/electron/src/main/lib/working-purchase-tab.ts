@@ -13,7 +13,8 @@ export async function openWorkingPurchaseTab(mode: 'diamonds' | 'vip'): Promise<
   const user = await getWorkingApiClient().getCurrentUser()
   const current = () => String(store.getUser()?.id ?? '') === String(user.id)
   const token = store.getToken()
-  if (!token || !current()) throw new Error('请先登录 Copis')
+  if (!token) throw new Error('请先登录 Copis')
+  if (!current()) throw new Error('购买账号未同步，请刷新账户设置后重试')
   const response = await fetch(`${api}/pi-api/api/pay/desktop-session`, {
     method: 'POST', headers: { Authorization: `Bearer ${token}` }, redirect: 'error', signal: AbortSignal.timeout(12000),
   })

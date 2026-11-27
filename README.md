@@ -337,7 +337,7 @@ bun scripts/bump-electron-version.ts --set 0.0.83 --platform darwin --arch arm64
 bun scripts/bump-electron-version.ts --new --platform win32 --arch x64
 ```
 
-`build.sh --new` 和 `build.ps1 -NewVersion` 只递增当前目标平台；低于对应平台功能模块最低客户端版本时，先对齐门槛，本次不再额外递增。`pack`、`dist`、`dist:mac`、`dist:win`、`dist:linux` 使用平台打包包装脚本，将同一版本写入安装包和前端编译常量。每次打包选择一个平台和架构；直接调用 `electron-builder` 或其他未接入的入口不会自动应用此配置。
+`build.sh --new` 和 `build.ps1 -NewVersion` 只更新当前目标平台版本：默认 patch +1，patch 满 99 时向 minor 进位并归零，minor 满 99 且需要进位时向 major 进位并将 minor、patch 归零，例如 `0.0.98` → `0.0.99` → `0.1.0`、`0.99.99` → `1.0.0`。历史超限版本下次递增时同样进位、低位归零，例如 `0.0.105` → `0.1.0`；这是项目版本规则，并非 semver 本身限制。低于对应平台功能模块最低客户端版本时，先对齐门槛，本次不再额外递增。`pack`、`dist`、`dist:mac`、`dist:win`、`dist:linux` 使用平台打包包装脚本，将同一版本写入安装包和前端编译常量。每次打包选择一个平台和架构；直接调用 `electron-builder` 或其他未接入的入口不会自动应用此配置。
 
 应用内更新使用当前安装包的 `app.getVersion()`，并按平台和架构选择客户端 manifest 条目。Rust 更新接口的 `latestVersion` 只代表当前平台，不使用其他平台的最高版本。发布时必须保证 `client.updates[platform-arch].version` 与实际安装包版本一致。此更新接口变更需要单独发布并激活 `rust-http-api` 功能模块，仅重新构建 Electron 不会更新已安装的 Rust 服务。
 

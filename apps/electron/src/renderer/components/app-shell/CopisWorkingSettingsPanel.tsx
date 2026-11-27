@@ -295,8 +295,13 @@ export function CopisWorkingSettingsPanel({ onClose }: CopisWorkingSettingsPanel
   }
 
   const openPurchase = async (mode: 'diamonds' | 'vip') => {
-    try { await window.electronAPI.openWorkingPurchaseTab(mode) }
-    catch (error) { setNotice(error instanceof Error ? error.message : '打开购买页失败，请重试') }
+    setError('')
+    try {
+      await window.electronAPI.openWorkingPurchaseTab(mode)
+    } catch (error) {
+      const message = error instanceof Error ? error.message.replace(/^Error invoking remote method 'working:open-purchase-tab': (?:Error: )?/, '') : ''
+      setError(message || '打开购买页失败，请重试')
+    }
   }
 
   const handleLogout = async (): Promise<void> => {

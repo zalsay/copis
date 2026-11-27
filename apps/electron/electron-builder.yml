@@ -104,6 +104,7 @@ mac:
       - zh_CN
       - zh-Hans
       - en
+    NSAppleEventsUsageDescription: "Copis 仅在你明确授权时，通过命令行使用 AppleEvents 与 Safarier AI 等应用通信，以完成你请求的自动化操作。"
     NSMicrophoneUsageDescription: "Copis 需要访问麦克风，用于将你的语音实时转写为文本。"
   fileAssociations:
     - ext: copis-backup
