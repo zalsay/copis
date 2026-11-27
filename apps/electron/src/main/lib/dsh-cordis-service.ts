@@ -54,6 +54,7 @@ export const COPIS_CREATION_WEB_PLUGIN_PACKAGE = '@copis-ext/creation-web'
 const DSH_AUTH_COOKIE_PREFIX = 'dsh-auth-'
 const COOKIE_PAYLOAD_VERSION = 1
 const DEFAULT_COOKIE_MAX_AGE_DAYS = 30
+const DSH_START_TIMEOUT_MS = 120_000
 const DSH_STALE_PROCESS_STOP_TIMEOUT_MS = 5000
 const DSH_MANAGED_PROCESS_STOP_TIMEOUT_MS = 5000
 
@@ -826,7 +827,7 @@ async function doStartDshCordisServer(options: {
     console.warn('[DSH Cordis Web] 启动时同步 Copis 模型配置异常:', e)
   }
 
-  const timeoutMs = options.timeoutMs ?? 20000
+  const timeoutMs = options.timeoutMs ?? DSH_START_TIMEOUT_MS
 
   return new Promise<DshCordisStatus>((resolve) => {
     let settled = false
@@ -869,7 +870,7 @@ async function doStartDshCordisServer(options: {
         settled = true
         state.status = {
           running: false,
-          error: `启动 DSH Cordis 运行时超时 (20s)，未能捕获端口 ${targetPort} 的服务授权地址`,
+          error: `启动 DSH Cordis 运行时超时 (${timeoutMs / 1000}s)，未能捕获端口 ${targetPort} 的服务授权地址`,
         }
         notifyDshCordisStatusChange(state.status)
         resolve({ ...state.status })
@@ -1103,7 +1104,7 @@ export async function reloadDshCordisPlugins(options: {
     return await startDshCordisServer({
       dshRootDir: dshHomeDir,
       profile,
-      timeoutMs: options.timeoutMs ?? 5000,
+      timeoutMs: options.timeoutMs,
     })
   }
 
