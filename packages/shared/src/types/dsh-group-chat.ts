@@ -328,6 +328,11 @@ export interface DshRoomModelCatalog {
 export const DSH_ROOM_ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024
 export const DSH_ROOM_ATTACHMENT_MAX_COUNT = 20
 
+export interface DshSharedRoomUnreadEvent {
+  seq: number
+  incoming: boolean
+}
+
 export type DshSharedRoomCommand =
   | { action: 'uploadAttachment'; roomId: string; name: string; mimeType: string; bytes: Uint8Array }
   | { action: 'downloadAttachment'; roomId: string; attachmentId: string }
@@ -343,6 +348,8 @@ export type DshSharedRoomCommand =
   | { action: 'leave' | 'dissolve'; roomId: string }
   | { action: 'detail'; roomId: string }
   | { action: 'events'; roomId: string; afterSeq: number }
+  | { action: 'unreadEvents'; roomId: string; afterSeq: number }
+  | { action: 'readRoom'; roomId: string; seq: number }
   | { action: 'send'; roomId: string; clientMessageId: string; content: string; mentionAgentId?: string; attachmentIds?: string[] }
 
 export const DSH_GROUP_CHAT_IPC_CHANNELS = {

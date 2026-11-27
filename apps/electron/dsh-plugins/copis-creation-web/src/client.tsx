@@ -194,7 +194,7 @@ const CREATION_UI_CSS = `
 
   .copis-room-section { width: 100%; min-width: 0; margin: 8px 0; }
   .copis-room-heading { display:flex; align-items:center; gap:2px; }
-  .copis-room-toggle { flex:1; min-width:0; font-weight:600; }
+  .copis-room-toggle { flex:1; flex-flow:row nowrap; min-width:0; font-weight:600; }
   .copis-room-action { anchor-name:var(--copis-room-anchor); display:grid; place-items:center; width:26px; height:26px; border:0; border-radius:6px; background:transparent; color:var(--dsw-alias-label-secondary,currentColor); cursor:pointer; }
   .copis-room-action:disabled { opacity:.5; cursor:default; }
   .copis-room-action svg { width:15px; height:15px; }
@@ -208,6 +208,11 @@ const CREATION_UI_CSS = `
   .copis-room-action-menu button { display:flex; align-items:center; gap:10px; width:100%; padding:9px 10px; border:0; border-radius:6px; background:transparent; color:inherit; font:inherit; font-size:13px; cursor:pointer; }
   .copis-room-action-menu button:is(:hover,:focus-visible) { color:var(--creation-ui-primary); background:var(--creation-ui-primary-background); }
   .copis-room-action-menu svg { width:15px; height:15px; }
+  .copis-room-sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+  .copis-menu-item > .copis-room-unread-slot { display:flex; flex:0 0 8px; width:8px; height:8px; align-items:center; justify-content:center; }
+  .copis-room-unread-dot { display:block; flex:0 0 7px; width:7px; height:7px; border-radius:50%; background:#ef4444; }
+  .copis-workspace-group-entry { position:relative; }
+  .copis-workspace-group-entry > .copis-room-unread-dot { position:absolute; top:3px; right:3px; }
   .copis-room-children { margin-block-start:6px; padding-inline-start:16px; min-width:0; }
   .copis-room-row { display:grid; grid-template-columns:minmax(0,1fr) 26px; align-items:center; border-radius:7px; }
   .copis-room-row > .copis-menu-item span { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }

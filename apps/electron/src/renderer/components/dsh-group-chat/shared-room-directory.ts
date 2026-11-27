@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { readSharedRoom, type SharedRoom } from './shared-room-data'
 
+import { roomReadScope, scanRoomUnread, isUnread } from './shared-room-unread'
 import type { RoomAgentOption } from './RoomAgentPicker'
 
 type Form = 'create' | 'join'
@@ -52,7 +53,7 @@ export const roomAccountAtom = atom((get) => {
   return auth?.authenticated && id != null ? String(id) : null
 })
 type Intent =
-  | { kind: 'ensure' | 'refresh' | 'cancel' | Form }
+  | { kind: 'poll' | 'ensure' | 'refresh' | 'cancel' | Form }
   | { kind: 'leave' | 'dissolve'; id: string }
   | { kind: 'manage'; id: string; action: RoomMenuAction }
   | { kind: 'close-management' }
@@ -165,12 +166,15 @@ export const roomDirectoryAction = atom(null, async (get, set, action: Intent) =
     return
   }
   if (state.creation || state.loading || (action.kind === 'ensure' && state.loaded)) return
-  set(scope, { ...state, requestId, loading: true, error: '' })
+  const silent = action.kind === 'poll'
+  if (silent && (!state.loaded || state.form)) return
+  if (!silent) set(scope, { ...state, requestId, loading: true, error: '' })
   try {
     const raw = await api.sharedRoomCommand(userId, { action: 'list' })
-    if (!current()) return
+    if (silent ? get(directoryScope) !== scope || get(scope) !== state : !current()) return
     if (!Array.isArray(raw)) throw new Error('无法读取共享群列表')
     const rooms = raw.map((r) => readSharedRoom(r, userId)).filter((r) => r.active)
+    if (silent && JSON.stringify(rooms) === JSON.stringify(state.rooms)) return
     set(scope, (s) => ({
       ...s,
       rooms,
@@ -179,7 +183,7 @@ export const roomDirectoryAction = atom(null, async (get, set, action: Intent) =
       loading: false,
     }))
   } catch (err) {
-    if (current())
+    if (!silent && current())
       set(scope, (s) => ({
         ...s,
         rooms: [],
@@ -198,6 +202,30 @@ export function useRoomSidebarBridge(ready: boolean, clientGeneration: number) {
     epoch = useAtomValue(workingAuthLifecycleEpochAtom)
   const act = useSetAtom(roomDirectoryAction)
   const store = useStore()
+  const readScope = useAtomValue(roomReadScope)
+  const receipts = useAtomValue(readScope)
+  useEffect(() => {
+    if (!ready || !account || !state.loaded) return
+    let active = true, timer: ReturnType<typeof setTimeout>
+    const current = () => active && store.get(roomReadScope) === readScope
+    const refresh = async (poll: boolean) => {
+      try {
+        if (poll) await act({kind:'poll'})
+        if (!current()) return
+        const rooms = store.get(roomDirectoryAtom).rooms
+        // 移除已退出/解散的群，不跨账号或登录代次保留游标。
+        const ids = new Set(rooms.map(r => r.id))
+        store.set(readScope, prev => [...prev.keys()].some(id => !ids.has(id)) ? new Map([...prev].filter(([id]) => ids.has(id))) : prev)
+        for (const room of rooms) {
+          if (!current()) return
+          try { await scanRoomUnread(store,readScope,room,c => window.electronAPI.dshGroupChat.sharedRoomCommand(account,c),
+            () => current() && store.get(roomDirectoryAtom).rooms.some(r => r.id === room.id)) } catch { /* 单群读取失败保留原游标，下次继续。 */ }
+        }
+      } finally { if (current()) timer = setTimeout(() => void refresh(true), 5000) }
+    }
+    void refresh(false)
+    return () => { active = false; clearTimeout(timer) }
+  }, [ready, account, state.loaded, store, readScope, act])
   const [sync, setSync] = useState(0)
   useEffect(() => {
     if (ready) void act({ kind: 'ensure' })
@@ -207,7 +235,7 @@ export function useRoomSidebarBridge(ready: boolean, clientGeneration: number) {
     const payload: DshRoomSidebarSnapshot = {
       type: 'COPIS_SHARED_ROOM_SIDEBAR',
       epoch,
-      rooms: state.rooms.map(({ id, name, role, shareCode }) => ({ id, name, actions: roomMenuActions(role, !!shareCode) })),
+      rooms: state.rooms.map(({ id, name, role, shareCode }) => ({ id, name, ...(isUnread(receipts.get(id)) ? {unread:true} : {}), actions: roomMenuActions(role, !!shareCode) })),
       selected: state.selected,
       status: !account
         ? 'signed-out'
@@ -221,7 +249,7 @@ export function useRoomSidebarBridge(ready: boolean, clientGeneration: number) {
     void window.electronAPI.dshCordis
       .dispatchToClient(payload)
       .catch((err) => console.warn('[群聊协作] 同步侧栏失败', err))
-  }, [ready, clientGeneration, sync, account, epoch, state])
+  }, [ready, clientGeneration, sync, account, epoch, state, receipts])
   return useCallback(
     (tab?: string) => {
       if (tab === 'sidebar-sync' || tab === 'refresh') {

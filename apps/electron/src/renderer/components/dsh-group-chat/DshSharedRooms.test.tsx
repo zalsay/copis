@@ -579,3 +579,42 @@ test('侧栏管理未选中的群：复制用最新分享码；错误角色、�
     expect(store.get(roomDirectoryAtom)).toMatchObject({ selected:'a', management:null, rooms:[{id:'a'},{id:'c'}] })
   } finally { Object.assign(globalThis, { window: old }) }
 })
+
+test('未打开的群有新消息时在群名前亮红点，后台浏览不清除，前台加载并确认后消除', async () => {
+  const {window:w} = parseHTML('<html><body><div id="root"></div></body></html>')
+  const old = {window:globalThis.window, document:globalThis.document, IS_REACT_ACT_ENVIRONMENT:Reflect.get(globalThis,'IS_REACT_ACT_ENVIRONMENT')}
+  Object.assign(globalThis,{window:w,document:w.document,IS_REACT_ACT_ENVIRONMENT:true})
+  Object.defineProperty(w.document,'visibilityState',{value:'visible',configurable:true})
+  w.HTMLElement.prototype.checkVisibility = () => true
+  w.HTMLElement.prototype.scrollIntoView = () => {}
+  const A = {roomId:'A',name:'A群',hostUserId:11,roomKind:'dsh_shared',status:'active',nextSeq:1}
+  const B = {...A,roomId:'B',name:'B群'}
+  let foreground = false, lastRead = 0
+  const calls: DshSharedRoomCommand[] = []
+  Object.assign(w,{electronAPI:{dshCordis:{dispatchToClient:async (data:unknown) => {w.dispatchEvent(Object.assign(new w.Event('message'),{data})); return true}},
+    dshGroupChat:{sharedRoomCommand:async (_account:string,c:DshSharedRoomCommand) => {
+      calls.push(c)
+      if(c.action === 'list') return [{...A},{...B}]
+      if(c.action === 'detail') return {room:c.roomId==='B'?B:A,agents:[],lastReadSeq:c.roomId==='B'?lastRead:0}
+      if(c.action === 'unreadEvents') return [{seq:1,incoming:false},{seq:2,incoming:false},{seq:3,incoming:true}].filter(e=>e.seq>c.afterSeq)
+      if(c.action === 'events') return []
+      if(c.action === 'messages') return c.roomId==='B' ? [{roomId:'B',messageId:'m3',seq:3,senderType:'agent',content:'新的回复',createdAt:'2026-11-27T12:00:00Z'}] : []
+      if(c.action === 'readRoom') { if(!foreground) return null; lastRead=c.seq; return {roomId:c.roomId,seq:c.seq} }
+      throw Error('意外命令')
+    }}}})
+  const el=w.document.getElementById('root')!, root=createRoot(el as unknown as HTMLElement), store=createStore()
+  const row=() => el.querySelector<HTMLElement>('[aria-label="B群"]')!
+  const dot=() => !!row()?.querySelector('.copis-room-unread-dot')
+  try {
+    store.set(workingAuthStateAtom,{authenticated:true,backendUrl:'fixture',user:{id:'11'}})
+    await act(async()=>root.render(<Provider store={store}><RoomsHarness /></Provider>))
+    expect(dot()).toBe(false)
+    B.nextSeq=4
+    await act(async()=>{await new Promise(r=>setTimeout(r,5200))})
+    expect(dot()).toBe(true); expect(calls.some(c=>c.action==='readRoom')).toBe(false)
+    await act(async()=>row().click())
+    expect(el.textContent).toContain('新的回复'); expect(dot()).toBe(true); expect(lastRead).toBe(0)
+    foreground=true; await act(async()=>w.dispatchEvent(new w.Event('focus')))
+    expect(lastRead).toBe(3); expect(dot()).toBe(false)
+  } finally { await act(async()=>root.unmount()); Object.assign(globalThis,old) }
+}, 12000)

@@ -33,6 +33,8 @@ enum Command {
     Detail {
         room_id: String,
     },
+    ReadRoom { room_id: String, seq: u64 },
+    UnreadEvents { room_id: String, after_seq: u64 },
     Events {
         room_id: String,
         after_seq: u64,
@@ -103,9 +105,22 @@ pub(super) fn handle(
     if (200..300).contains(&result.status) {
         if let Some(raw) = result.body.take() {
             result.body = Some(cmd.for_display(&raw, &expected)?);
+        } else if matches!(cmd, Command::ReadRoom { .. } | Command::UnreadEvents { .. }) {
+            return Err(upstream_invalid());
         }
     }
     Ok(result)
+}
+
+const MAX_SAFE_SEQ: u64 = 9_007_199_254_740_991;
+fn upstream_invalid() -> GatewayError {
+    GatewayError::new(502, "invalid_upstream_response", "无效的共享群响应")
+}
+fn safe_seq(value: &Value) -> Option<u64> {
+    value.as_u64().filter(|seq| *seq <= MAX_SAFE_SEQ)
+}
+fn check_seq(seq: u64) -> Result<(), GatewayError> {
+    if seq <= MAX_SAFE_SEQ { Ok(()) } else { Err(invalid()) }
 }
 
 fn validate_attachment(size: u64, sha256: &str) -> Result<(), GatewayError> {
@@ -177,6 +192,14 @@ impl Command {
             Command::Dissolve { room_id } => ("DELETE", format!("{}/{}", rooms, identifier(room_id)?), None),
             Command::Detail { room_id } => {
                 ("GET", format!("{}/{}", rooms, identifier(&room_id)?), None)
+            }
+            Command::ReadRoom { room_id, seq } => {
+                check_seq(*seq)?;
+                ("PATCH", format!("{}/{}/read", rooms, identifier(room_id)?), Some(json!({"seq":seq})))
+            }
+            Command::UnreadEvents { room_id, after_seq } => {
+                check_seq(*after_seq)?;
+                ("GET", format!("{}/{}/events?limit=100&afterSeq={}", rooms, identifier(room_id)?, after_seq), None)
             }
             Command::Events { room_id, after_seq } => (
                 "GET",
@@ -256,7 +279,7 @@ fn message(raw: &Value) -> Value {
 }
 impl Command {
     fn for_display(&self, raw: &Value, user_id: &str) -> Result<Value, GatewayError> {
-        let room = |v: &Value| {
+        let room = |v: &Value| -> Result<Value, GatewayError> {
             let mut public = fields(v, &["roomId", "name", "hostUserId", "status", "roomKind"]);
             if v["hostUserId"].as_u64().map(|n| n.to_string()).as_deref() == Some(user_id)
                 && v["shareCodeEnabled"] == true
@@ -264,7 +287,11 @@ impl Command {
                 public["shareCodeEnabled"] = true.into();
                 public["shareCode"] = v["shareCode"].clone();
             }
-            public
+            if let Some(next) = v.get("nextSeq") {
+                let seq = safe_seq(next).filter(|seq| *seq > 0).ok_or_else(upstream_invalid)?;
+                public["nextSeq"] = seq.into();
+            }
+            Ok(public)
         };
         Ok(match self {
             Command::InternalAttachmentUpload { .. } | Command::InternalAttachmentFinalize { .. } | Command::InternalAttachmentDownload { .. } => raw.clone(),
@@ -286,8 +313,8 @@ impl Command {
                 if !valid { return Err(GatewayError::new(502, "invalid_upstream_response", "无效的共享群管理回执")); }
                 json!({"roomAgentId": agent.unwrap()})
             }
-            Command::List {} => Value::Array(rows(raw)?.iter().map(room).collect()),
-            Command::Create { .. } | Command::Join { .. } => room(raw),
+            Command::List {} => Value::Array(rows(raw)?.iter().map(room).collect::<Result<Vec<_>, _>>()?),
+            Command::Create { .. } | Command::Join { .. } => room(raw)?,
             Command::Leave { .. } => fields(raw, &["roomId"]),
             Command::Dissolve { .. } => fields(&raw["room"], &["roomId"]),
             Command::Messages { .. } => Value::Array(rows(raw)?.iter().map(message).collect()),
@@ -309,8 +336,46 @@ impl Command {
                 }
                 ack
             }
-            Command::Detail { .. } => {
-                json!({"room":room(&raw["room"]),"agents":raw["agents"].as_array().into_iter().flatten().map(|a| fields(a,&["roomId","roomAgentId","ownerUserId","displayName","availability","queuedCount"])).collect::<Vec<_>>() })
+            Command::Detail { room_id } => {
+                if raw["room"]["roomId"] != *room_id { return Err(upstream_invalid()); }
+                let mut detail = json!({"room":room(&raw["room"])?,"agents":raw["agents"].as_array().into_iter().flatten().map(|a| fields(a,&["roomId","roomAgentId","ownerUserId","displayName","availability","queuedCount"])).collect::<Vec<_>>() });
+                if let Some(members) = raw.get("members") {
+                    let members = rows(members)?;
+                    let own: Vec<_> = members.iter().filter(|m| m["status"] == "active" && m["roomId"] == *room_id && m["userId"].as_u64().map(|n| n.to_string()).as_deref() == Some(user_id)).collect();
+                    if own.len() > 1 { return Err(upstream_invalid()); }
+                    if let Some(seq) = own.first().and_then(|member| member.get("lastReadSeq")) {
+                        detail["lastReadSeq"] = safe_seq(seq).ok_or_else(upstream_invalid)?.into();
+                    }
+                }
+                detail
+            }
+            Command::ReadRoom { room_id, seq } => {
+                if raw["roomId"] != *room_id || safe_seq(&raw["seq"]) != Some(*seq) { return Err(upstream_invalid()); }
+                json!({"roomId":room_id,"seq":seq})
+            }
+            Command::UnreadEvents { room_id, after_seq } => {
+                let events = rows(raw)?;
+                if events.len() > 100 { return Err(upstream_invalid()); }
+                let mut previous = *after_seq;
+                let mut result = Vec::with_capacity(events.len());
+                for event in events {
+                    let seq = safe_seq(&event["seq"]).filter(|seq| *seq > previous).ok_or_else(upstream_invalid)?;
+                    if event["roomId"] != *room_id { return Err(upstream_invalid()); }
+                    let kind = event["eventType"].as_str().filter(|s| !s.is_empty() && s.len() <= 128 && !s.chars().any(char::is_control)).ok_or_else(upstream_invalid)?;
+                    let incoming = if kind == "message.created" {
+                        let payload = &event["payload"];
+                        if payload["roomId"] != *room_id || safe_seq(&payload["seq"]) != Some(seq) { return Err(upstream_invalid()); }
+                        match payload["senderType"].as_str() {
+                            Some("agent") => true,
+                            Some("system") => false,
+                            Some("user") => payload["senderUserId"].as_u64().filter(|id| *id > 0).ok_or_else(upstream_invalid)?.to_string() != user_id,
+                            _ => return Err(upstream_invalid()),
+                        }
+                    } else { false };
+                    result.push(json!({"seq":seq,"incoming":incoming}));
+                    previous = seq;
+                }
+                Value::Array(result)
             }
             Command::Events { .. } => Value::Array(
                 rows(raw)?
@@ -384,5 +449,47 @@ mod attachment_tests {
             let bad = command(json!({"action":"send","roomId":"r","clientMessageId":"m","content":"","attachmentIds":ids}));
             assert!(bad.request().is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod unread_tests {
+    use super::*;
+    fn command(value: Value) -> Command { serde_json::from_value(value).unwrap() }
+    #[test]
+    fn unread_requests_and_receipts_are_narrow_and_account_bound() {
+        let read = command(json!({"action":"readRoom","roomId":"r-1","seq":12}));
+        assert_eq!(read.request().unwrap(), ("PATCH", "/api/chatrooms/v2/rooms/r-1/read".into(), Some(json!({"seq":12}))));
+        assert_eq!(read.for_display(&json!({"roomId":"r-1","seq":12,"secret":"x"}), "7").unwrap(), json!({"roomId":"r-1","seq":12}));
+        for raw in [json!({"roomId":"other","seq":12}), json!({"roomId":"r-1","seq":13}), json!({})] { assert!(read.for_display(&raw, "7").is_err()); }
+        let events = command(json!({"action":"unreadEvents","roomId":"r-1","afterSeq":2}));
+        assert_eq!(events.request().unwrap().1, "/api/chatrooms/v2/rooms/r-1/events?limit=100&afterSeq=2");
+        assert!(command(json!({"action":"readRoom","roomId":"../x","seq":1})).request().is_err());
+        assert!(command(json!({"action":"readRoom","roomId":"r","seq":9007199254740992u64})).request().is_err());
+        assert!(serde_json::from_value::<Command>(json!({"action":"readRoom","roomId":"r","seq":-1})).is_err());
+    }
+    #[test]
+    fn unread_events_strip_content_and_validate_sequences_and_senders() {
+        let cmd = command(json!({"action":"unreadEvents","roomId":"r","afterSeq":1}));
+        let event = |seq, kind: &str, payload: Value| json!({"roomId":"r","seq":seq,"eventType":kind,"payload":payload});
+        let message = |seq, sender, user: Value| json!({"roomId":"r","seq":seq,"senderType":sender,"senderUserId":user,"content":"secret"});
+        let raw = json!([event(2,"message.created",message(2,"user",json!(7))),event(3,"message.created",message(3,"user",json!(8))),event(4,"message.created",message(4,"agent",Value::Null)),event(5,"message.created",message(5,"system",Value::Null)),event(6,"member.joined",json!({"secret":"x"}))]);
+        assert_eq!(cmd.for_display(&raw,"7").unwrap(), json!([{"seq":2,"incoming":false},{"seq":3,"incoming":true},{"seq":4,"incoming":true},{"seq":5,"incoming":false},{"seq":6,"incoming":false}]));
+        for bad in [json!([event(2,"message.created",message(2,"user",Value::Null))]), json!([event(2,"message.created",message(3,"user",json!(8)))]), json!([event(2,"message.created",message(2,"invalid",json!(8)))]), json!([event(1,"member.joined",json!({}))]),json!([event(2,"member.joined",json!({})),event(2,"member.joined",json!({}))]),json!([{"roomId":"other","seq":2,"eventType":"member.joined"}]),json!([{"roomId":"r","seq":9007199254740992u64,"eventType":"member.joined"}])] { assert!(cmd.for_display(&bad,"7").is_err(), "{bad}"); }
+    }
+    #[test]
+    fn detail_only_exposes_active_expected_member_cursor_and_safe_next_seq() {
+        let detail = command(json!({"action":"detail","roomId":"r"}));
+        let raw = json!({"room":{"roomId":"r","nextSeq":10},"members":[{"roomId":"r","userId":8,"status":"active","lastReadSeq":9},{"roomId":"r","userId":7,"status":"left","lastReadSeq":8},{"roomId":"r","userId":7,"status":"active","lastReadSeq":3}],"agents":[]});
+        let result = detail.for_display(&raw,"7").unwrap();
+        assert_eq!(result["lastReadSeq"],3); assert_eq!(result["room"]["nextSeq"],10); assert!(result.get("members").is_none());
+        let list = command(json!({"action":"list"}));
+        assert_eq!(list.for_display(&json!([{"roomId":"r","nextSeq":10}]),"7").unwrap()[0]["nextSeq"],10);
+        assert!(list.for_display(&json!([{"roomId":"r","nextSeq":9007199254740992u64}]),"7").is_err());
+        assert!(detail.for_display(&json!({"room":{"roomId":"other"},"members":[]}),"7").is_err());
+        let absent = detail.for_display(&json!({"room":{"roomId":"r"},"members":[{"roomId":"r","userId":7,"status":"active"}]}),"7").unwrap();
+        assert!(absent.get("lastReadSeq").is_none());
+        assert!(detail.for_display(&json!({"room":{"roomId":"r"},"members":[{"roomId":"r","userId":7,"status":"active","lastReadSeq":-1}]}),"7").is_err());
+        assert!(detail.for_display(&json!({"room":{"roomId":"r"},"members":[{"roomId":"r","userId":7,"status":"active","lastReadSeq":1},{"roomId":"r","userId":7,"status":"active","lastReadSeq":2}]}),"7").is_err());
     }
 }

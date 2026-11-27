@@ -5,6 +5,7 @@ export interface SharedRoom {
   name: string
   role: 'host' | 'member' | null
   shareCode?: string
+  nextSeq?: number
   active: boolean
 }
 function obj(raw: unknown): Record<string, unknown> {
@@ -24,6 +25,7 @@ export function readSharedRoom(raw: unknown, account: string): SharedRoom {
     id: text(r.roomId),
     name: text(r.name),
     role,
+    ...(Number.isSafeInteger(r.nextSeq) && Number(r.nextSeq) > 0 ? {nextSeq:Number(r.nextSeq)} : {}),
     active: r.status === 'active',
     shareCode:
       role === 'host' && r.shareCodeEnabled === true ? text(r.shareCode) : undefined,

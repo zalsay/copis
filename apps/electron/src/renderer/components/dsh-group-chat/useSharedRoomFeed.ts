@@ -217,5 +217,6 @@ export function useSharedRoomFeed(request: RoomRequest, roomId: string, userId: 
     return new File([new Uint8Array(data.bytes)], data.name || `附件-${attachmentId}`, {type})
   }, [ready, request, roomId])
   const displayMessages = [...messages, ...(ready ? outbox.map(row => displayOutgoing(row, roomId, userId)) : [])]
-  return { messages:displayMessages, retry, agents, shareCode, refreshAgents, ready, error: error || sendError, send, download, older, hasOlder, loadingOlder }
+  const loadedIncomingSeq = messages.reduce((seq,m) => m.kind === 'agent' || (m.kind === 'user' && m.authorUserId !== userId) ? Math.max(seq,m.seq) : seq, 0)
+  return { messages:displayMessages, loadedIncomingSeq, retry, agents, shareCode, refreshAgents, ready, error: error || sendError, send, download, older, hasOlder, loadingOlder }
 }

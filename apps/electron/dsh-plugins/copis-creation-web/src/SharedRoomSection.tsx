@@ -1,5 +1,5 @@
 import { type CSSProperties, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, MessageSquare, Plus, MoreHorizontal, Copy, Trash2, LogOut, LogIn, MessageSquarePlus, RotateCw, UsersRound } from 'lucide-react'
+import { ChevronDown, ChevronRight, Plus, MoreHorizontal, Copy, Trash2, LogOut, LogIn, MessageSquarePlus, RotateCw, UsersRound } from 'lucide-react'
 import { ROOM_ACTION_LABELS, type RoomMenuAction, type DshRoomSidebarSnapshot } from '@copis/shared/types/dsh'
 
 const empty: DshRoomSidebarSnapshot = {
@@ -80,6 +80,7 @@ function RoomActionMenu({ disabled, label, menuLabel, row, items, choose }: {
 
 /** 原生侧栏只渲染目录快照，不读取凭据，也不能自行建群或加入。 */
 export function SharedRoomSection({ wide, active, open, directory }: Props) {
+  const unreadDescriptionId = useId()
   const [expanded, setExpanded] = useState(true)
   const [snapshot, setSnapshot] = useState(empty)
   useEffect(() => {
@@ -106,12 +107,14 @@ export function SharedRoomSection({ wide, active, open, directory }: Props) {
     return () => window.removeEventListener('message', onSnapshot)
   }, [directory])
   const disabled = snapshot.busy || snapshot.status === 'signed-out'
+  const hasUnread = snapshot.rooms.some(room => room.unread === true)
   if (!wide)
     return (
       <button
         type="button"
         className="copis-rail-menu-item copis-workspace-group-entry"
         aria-label="群聊协作"
+        aria-describedby={hasUnread ? unreadDescriptionId : undefined}
         title="群聊协作"
         data-active={active}
         onClick={() => {
@@ -120,15 +123,18 @@ export function SharedRoomSection({ wide, active, open, directory }: Props) {
         }}
       >
         <UsersRound size={16} />
+        {hasUnread && <><span className="copis-room-unread-dot" aria-hidden="true" /><span id={unreadDescriptionId} className="copis-room-sr-only">有未读消息</span></>}
       </button>
     )
   return (
     <section className="copis-room-section" aria-label="群聊协作目录">
+      {hasUnread && <span id={unreadDescriptionId} className="copis-room-sr-only">有未读消息</span>}
       <div className="copis-room-heading">
         <button
           type="button"
           className="copis-menu-item copis-room-toggle"
           aria-label="群聊协作"
+          aria-describedby={!expanded && hasUnread ? unreadDescriptionId : undefined}
           aria-expanded={expanded}
           onClick={() => {
             if (!expanded && !disabled) directory('refresh')
@@ -136,7 +142,8 @@ export function SharedRoomSection({ wide, active, open, directory }: Props) {
           }}
         >
           {expanded ? <ChevronDown /> : <ChevronRight />}
-          <span>群聊协作</span>
+          {!expanded && hasUnread && <span className="copis-room-unread-slot" aria-hidden="true"><span className="copis-room-unread-dot" /></span>}
+          <span className="copis-room-heading-label">群聊协作</span>
         </button>
         <RoomActionMenu disabled={disabled} label="群聊操作" menuLabel="群聊操作菜单"
           items={[['create', '创建群聊', MessageSquarePlus], ['join', '加入群聊', LogIn]]} choose={(tab) => {
@@ -155,10 +162,13 @@ export function SharedRoomSection({ wide, active, open, directory }: Props) {
               data-active={active && snapshot.selected === room.id}
               aria-current={active && snapshot.selected === room.id ? 'page' : undefined}
               aria-label={room.name}
+              aria-describedby={room.unread === true ? unreadDescriptionId : undefined}
               title={room.name}
               onClick={() => open(`room:${room.id}`)}
             >
-              <MessageSquare />
+              <span className="copis-room-unread-slot" aria-hidden="true">
+                {room.unread === true && <span className="copis-room-unread-dot" />}
+              </span>
               <span>{room.name}</span>
             </button>
             {Array.isArray(room.actions) && room.actions.length > 0 && <RoomActionMenu row

@@ -1204,11 +1204,6 @@ var MessageSquarePlus = createLucideIcon("MessageSquarePlus", [
   ["path", { d: "M9 10h6", key: "9gxzsh" }]
 ]);
 
-// ../../node_modules/lucide-react/dist/esm/icons/message-square.js
-var MessageSquare = createLucideIcon("MessageSquare", [
-  ["path", { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z", key: "1lielz" }]
-]);
-
 // ../../node_modules/lucide-react/dist/esm/icons/plus.js
 var Plus = createLucideIcon("Plus", [
   ["path", { d: "M5 12h14", key: "1ays0h" }],
@@ -1389,6 +1384,7 @@ function RoomActionMenu({ disabled, label, menuLabel, row, items, choose }) {
   });
 }
 function SharedRoomSection({ wide, active, open, directory }) {
+  const unreadDescriptionId = import_react3.useId();
   const [expanded, setExpanded] = import_react3.useState(true);
   const [snapshot, setSnapshot] = import_react3.useState(empty);
   import_react3.useEffect(() => {
@@ -1412,25 +1408,47 @@ function SharedRoomSection({ wide, active, open, directory }) {
     return () => window.removeEventListener("message", onSnapshot);
   }, [directory]);
   const disabled = snapshot.busy || snapshot.status === "signed-out";
+  const hasUnread = snapshot.rooms.some((room) => room.unread === true);
   if (!wide)
-    return /* @__PURE__ */ jsx_runtime.jsx("button", {
+    return /* @__PURE__ */ jsx_runtime.jsxs("button", {
       type: "button",
       className: "copis-rail-menu-item copis-workspace-group-entry",
       "aria-label": "群聊协作",
+      "aria-describedby": hasUnread ? unreadDescriptionId : undefined,
       title: "群聊协作",
       "data-active": active,
       onClick: () => {
         setExpanded(true);
         open();
       },
-      children: /* @__PURE__ */ jsx_runtime.jsx(UsersRound, {
-        size: 16
-      })
+      children: [
+        /* @__PURE__ */ jsx_runtime.jsx(UsersRound, {
+          size: 16
+        }),
+        hasUnread && /* @__PURE__ */ jsx_runtime.jsxs(jsx_runtime.Fragment, {
+          children: [
+            /* @__PURE__ */ jsx_runtime.jsx("span", {
+              className: "copis-room-unread-dot",
+              "aria-hidden": "true"
+            }),
+            /* @__PURE__ */ jsx_runtime.jsx("span", {
+              id: unreadDescriptionId,
+              className: "copis-room-sr-only",
+              children: "有未读消息"
+            })
+          ]
+        })
+      ]
     });
   return /* @__PURE__ */ jsx_runtime.jsxs("section", {
     className: "copis-room-section",
     "aria-label": "群聊协作目录",
     children: [
+      hasUnread && /* @__PURE__ */ jsx_runtime.jsx("span", {
+        id: unreadDescriptionId,
+        className: "copis-room-sr-only",
+        children: "有未读消息"
+      }),
       /* @__PURE__ */ jsx_runtime.jsxs("div", {
         className: "copis-room-heading",
         children: [
@@ -1438,6 +1456,7 @@ function SharedRoomSection({ wide, active, open, directory }) {
             type: "button",
             className: "copis-menu-item copis-room-toggle",
             "aria-label": "群聊协作",
+            "aria-describedby": !expanded && hasUnread ? unreadDescriptionId : undefined,
             "aria-expanded": expanded,
             onClick: () => {
               if (!expanded && !disabled)
@@ -1446,7 +1465,15 @@ function SharedRoomSection({ wide, active, open, directory }) {
             },
             children: [
               expanded ? /* @__PURE__ */ jsx_runtime.jsx(ChevronDown, {}) : /* @__PURE__ */ jsx_runtime.jsx(ChevronRight, {}),
+              !expanded && hasUnread && /* @__PURE__ */ jsx_runtime.jsx("span", {
+                className: "copis-room-unread-slot",
+                "aria-hidden": "true",
+                children: /* @__PURE__ */ jsx_runtime.jsx("span", {
+                  className: "copis-room-unread-dot"
+                })
+              }),
               /* @__PURE__ */ jsx_runtime.jsx("span", {
+                className: "copis-room-heading-label",
                 children: "群聊协作"
               })
             ]
@@ -1477,10 +1504,17 @@ function SharedRoomSection({ wide, active, open, directory }) {
                 "data-active": active && snapshot.selected === room.id,
                 "aria-current": active && snapshot.selected === room.id ? "page" : undefined,
                 "aria-label": room.name,
+                "aria-describedby": room.unread === true ? unreadDescriptionId : undefined,
                 title: room.name,
                 onClick: () => open(`room:${room.id}`),
                 children: [
-                  /* @__PURE__ */ jsx_runtime.jsx(MessageSquare, {}),
+                  /* @__PURE__ */ jsx_runtime.jsx("span", {
+                    className: "copis-room-unread-slot",
+                    "aria-hidden": "true",
+                    children: room.unread === true && /* @__PURE__ */ jsx_runtime.jsx("span", {
+                      className: "copis-room-unread-dot"
+                    })
+                  }),
                   /* @__PURE__ */ jsx_runtime.jsx("span", {
                     children: room.name
                   })
@@ -1823,7 +1857,7 @@ var CREATION_UI_CSS = `
 
   .copis-room-section { width: 100%; min-width: 0; margin: 8px 0; }
   .copis-room-heading { display:flex; align-items:center; gap:2px; }
-  .copis-room-toggle { flex:1; min-width:0; font-weight:600; }
+  .copis-room-toggle { flex:1; flex-flow:row nowrap; min-width:0; font-weight:600; }
   .copis-room-action { anchor-name:var(--copis-room-anchor); display:grid; place-items:center; width:26px; height:26px; border:0; border-radius:6px; background:transparent; color:var(--dsw-alias-label-secondary,currentColor); cursor:pointer; }
   .copis-room-action:disabled { opacity:.5; cursor:default; }
   .copis-room-action svg { width:15px; height:15px; }
@@ -1837,6 +1871,11 @@ var CREATION_UI_CSS = `
   .copis-room-action-menu button { display:flex; align-items:center; gap:10px; width:100%; padding:9px 10px; border:0; border-radius:6px; background:transparent; color:inherit; font:inherit; font-size:13px; cursor:pointer; }
   .copis-room-action-menu button:is(:hover,:focus-visible) { color:var(--creation-ui-primary); background:var(--creation-ui-primary-background); }
   .copis-room-action-menu svg { width:15px; height:15px; }
+  .copis-room-sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+  .copis-menu-item > .copis-room-unread-slot { display:flex; flex:0 0 8px; width:8px; height:8px; align-items:center; justify-content:center; }
+  .copis-room-unread-dot { display:block; flex:0 0 7px; width:7px; height:7px; border-radius:50%; background:#ef4444; }
+  .copis-workspace-group-entry { position:relative; }
+  .copis-workspace-group-entry > .copis-room-unread-dot { position:absolute; top:3px; right:3px; }
   .copis-room-children { margin-block-start:6px; padding-inline-start:16px; min-width:0; }
   .copis-room-row { display:grid; grid-template-columns:minmax(0,1fr) 26px; align-items:center; border-radius:7px; }
   .copis-room-row > .copis-menu-item span { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }

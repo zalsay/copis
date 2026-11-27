@@ -68,7 +68,7 @@ function mountRoomPaintFixture() {
     <section class="copis-room-section"><div class="copis-room-heading">
       <button class="copis-menu-item copis-room-toggle">群聊协作</button><div><button class="copis-room-action" aria-expanded="false">+</button></div>
     </div><div class="copis-room-children"><div class="copis-room-row">
-      <button class="copis-menu-item" data-active="true">群聊</button><div><button class="copis-room-action copis-room-more">···</button></div>
+      <button class="copis-menu-item" data-active="true"><span class="copis-room-unread-slot"><span class="copis-room-unread-dot"></span></span><span>群聊</span></button><div><button class="copis-room-action copis-room-more">···</button></div>
     </div></div></section>`
   for (const el of host.querySelectorAll('button')) el.style.setProperty('transition', 'none', 'important')
   host.id = 'room-paint'
@@ -105,6 +105,27 @@ async function runMoreCases() {
       const groupEntry = box(wide ? '.copis-room-section' : 'button[aria-label="群聊协作"]')
       const groupBelowWorkspaces = groupEntry.top >= workspaceBounds.bottom && groupEntry.width > 0 && (!wide || Math.abs(groupEntry.width - workspaceBounds.width) < 1)
       const menuFitsWorkspace = Math.abs(menuBounds.width - workspaceBounds.width) < 1 && menuBounds.bottom <= workspaceBounds.top
+      window.dispatchEvent(new MessageEvent('message', {data:{type:'COPIS_SHARED_ROOM_SIDEBAR',status:'ready',rooms:[{id:'one',name:'测试群',unread:true,actions:[]}]}}))
+      await tick()
+      const groupButton = document.querySelector<HTMLButtonElement>('button[aria-label="群聊协作"]')!
+      if (wide) { groupButton.click(); await tick() }
+      const dot = groupButton.querySelector('.copis-room-unread-dot')!.getBoundingClientRect()
+      const titleLayout = []
+      if (wide) {
+        const host = document.getElementById('root')!
+        const original = host.style.width
+        for (const width of [264, 400]) {
+          host.style.width = `${width}px`
+          const title = document.createRange()
+          title.selectNodeContents(groupButton.querySelector('.copis-room-heading-label')!.firstChild!)
+          const label = title.getBoundingClientRect()
+          const marker = groupButton.querySelector('.copis-room-unread-dot')!.getBoundingClientRect()
+          titleLayout.push({gap:label.left-marker.right, lines:title.getClientRects().length,
+            sameLine:marker.top+marker.height/2 >= label.top && marker.top+marker.height/2 <= label.bottom})
+        }
+        host.style.width = original
+      }
+      const aggregateDot = { width:dot.width, height:dot.height, titleLayout }
       const search = document.querySelector<HTMLButtonElement>('[data-copis-menu-id="search"]')!
       search.style.transition = 'none'
       search.focus()
@@ -126,7 +147,7 @@ async function runMoreCases() {
         const style = getComputedStyle(node)
         return style.display !== 'none' && style.visibility !== 'hidden' && style.pointerEvents !== 'none'
       }
-      cases.push({ wide, groupBelowWorkspaces, focusedMenuColor, focusedMenuFill, menuFitsWorkspace, heading, settings, item: metrics('[data-copis-menu-id="search"]'), toggle: metrics('.copis-menu-toggle'), nativeOpenedOnce: nativeOpens === before + 1, prevented: click.defaultPrevented, menuVisible, panelVisible: visible(panel), overlayVisible: visible(overlay), copisSubviewActive: document.body.classList.contains('copis-subview-active') })
+      cases.push({ wide, aggregateDot, groupBelowWorkspaces, focusedMenuColor, focusedMenuFill, menuFitsWorkspace, heading, settings, item: metrics('[data-copis-menu-id="search"]'), toggle: metrics('.copis-menu-toggle'), nativeOpenedOnce: nativeOpens === before + 1, prevented: click.defaultPrevented, menuVisible, panelVisible: visible(panel), overlayVisible: visible(overlay), copisSubviewActive: document.body.classList.contains('copis-subview-active') })
     }
     // 明确的 Copis 设置 API 不应随原生接管逻辑一起被删除。
     ;(window as any).copisBridge.openSettings()

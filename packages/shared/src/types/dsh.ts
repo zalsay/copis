@@ -94,7 +94,7 @@ export function roomMenuActions(role: 'host' | 'member' | null, shareCodeEnabled
 export interface DshRoomSidebarSnapshot {
   type: 'COPIS_SHARED_ROOM_SIDEBAR'
   epoch: number
-  rooms: Array<{ id: string; name: string; actions: RoomMenuAction[] }>
+  rooms: Array<{ id: string; name: string; actions: RoomMenuAction[]; unread?: boolean }>
   selected: string | null
   status: 'loading' | 'ready' | 'error' | 'signed-out'
   busy: boolean

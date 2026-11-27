@@ -53,7 +53,15 @@ test.skipIf(process.platform === 'linux' && !process.env.DISPLAY)(
               paints.push(await paint('.copis-room-row'),await paint('.copis-room-heading .copis-room-action'));
               await read(()=>{document.activeElement.blur();document.querySelector('#room-paint .copis-room-heading .copis-room-action').setAttribute('aria-expanded','false')});
               const gap=await read(()=>{const r=document.querySelector('#room-paint');return r.querySelector('.copis-room-row').getBoundingClientRect().top-r.querySelector('.copis-room-heading').getBoundingClientRect().bottom});
-              rowPaint.push({token,paints,children,gap});
+              const spacing=await read(()=>{
+                const slot=document.querySelector('#room-paint .copis-room-unread-slot');
+                const label=slot.nextElementSibling, dot=slot.firstElementChild;
+                const start=label.getBoundingClientRect().left;
+                const result={width:slot.getBoundingClientRect().width,gap:start-dot.getBoundingClientRect().right};
+                dot.remove(); const readStart=label.getBoundingClientRect().left; slot.append(dot);
+                return {...result,shift:readStart-start};
+              });
+              rowPaint.push({token,paints,children,gap,spacing});
             }
             win.webContents.debugger.detach();
             await read(()=>document.querySelector('#room-paint').remove());
@@ -94,13 +102,25 @@ test.skipIf(process.platform === 'linux' && !process.env.DISPLAY)(
       expect(pinSettings).toEqual({ initial: ['search', 'automations'], pinned: ['search', 'memory'], cleared: [] })
       expect(starts).toBe(2)
       expect(cases).toHaveLength(2)
-      for (const { token, paints, children, gap } of rowPaint) {
+      for (const { token, paints, children, gap, spacing } of rowPaint) {
         // 目录标题悬停透明；工作区选中行、加号与群行继续使用次要底色。
         expect(paints).toEqual([token, token, 'rgba(0, 0, 0, 0)', token, token, token, token, token])
         expect(children).toEqual(['rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0)'])
         expect(gap).toBe(6)
+        expect(spacing.width).toBe(8)
+        expect(spacing.gap).toBeGreaterThanOrEqual(8)
+        expect(spacing.gap).toBeLessThanOrEqual(9)
+        expect(spacing.shift).toBe(0)
       }
       for (const result of cases) {
+        expect(result.aggregateDot.width, `侧栏展开=${result.wide} 的聚合红点宽度`).toBe(7)
+        expect(result.aggregateDot.height).toBe(7)
+        if (result.wide) for (const layout of result.aggregateDot.titleLayout) {
+          expect(layout.gap).toBeGreaterThanOrEqual(8)
+          expect(layout.gap).toBeLessThanOrEqual(9)
+          expect(layout.lines).toBe(1)
+          expect(layout.sameLine).toBe(true)
+        }
         expect(result.groupBelowWorkspaces, '群聊应独立位于工作区下方，不落入网格留白列').toBe(true)
         if (result.wide) {
           expect(result.focusedMenuColor).toBe('rgb(22, 101, 52)')

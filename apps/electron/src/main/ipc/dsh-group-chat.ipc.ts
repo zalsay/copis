@@ -50,8 +50,16 @@ export function registerDshGroupChatIpcHandlers(): void {
     }
     const { getWorkingApiClient } = await import('../lib/working-api-service')
     const { getHttpApiInternalToken } = await import('../lib/http-api-server')
-    const allowed = ['list', 'create', 'join', 'leave', 'dissolve', 'detail', 'events', 'messages', 'send', 'agentOptions', 'registerAgent', 'removeAgent', 'roomModelOptions', 'setRoomModel', 'uploadAttachment', 'downloadAttachment']
+    const allowed = ['list', 'create', 'join', 'leave', 'dissolve', 'detail', 'events', 'unreadEvents', 'readRoom', 'messages', 'send', 'agentOptions', 'registerAgent', 'removeAgent', 'roomModelOptions', 'setRoomModel', 'uploadAttachment', 'downloadAttachment']
     if (!command || typeof command !== 'object' || !allowed.includes(command.action)) throw new Error('共享群命令无效')
+    if (command.action === 'readRoom' || command.action === 'unreadEvents') {
+      if (command.action === 'readRoom' && (!main.isFocused() || !main.isVisible() || main.isMinimized())) return null
+      const key = command.action === 'readRoom' ? 'seq' : 'afterSeq'
+      const seq = command.action === 'readRoom' ? command.seq : command.afterSeq
+      if (Object.keys(command).some(field => !['action', 'roomId', key].includes(field)) ||
+          typeof command.roomId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(command.roomId) ||
+          !Number.isSafeInteger(seq) || seq < 0) throw new Error('共享群未读参数无效')
+    }
     const client = getWorkingApiClient()
     if (command.action === 'uploadAttachment' || command.action === 'downloadAttachment') {
       const fields = command.action === 'uploadAttachment' ? ['action', 'roomId', 'name', 'mimeType', 'bytes'] : ['action', 'roomId', 'attachmentId']

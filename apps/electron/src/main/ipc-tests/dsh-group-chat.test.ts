@@ -230,3 +230,31 @@ test('附件 IPC 拒绝非顶层、账号不匹配和 Renderer 直接调用内�
   for (const action of ['internalAttachmentUpload','internalAttachmentDownload','internalAttachmentFinalize']) await expect(invoke(top,'7',{action,roomId:'r'})).rejects.toThrow()
   expect(send).not.toHaveBeenCalled()
 })
+
+test('共享群已读仅在主窗口前台提交，后台返回 null 且不影响未读查询', async () => {
+  const contents = {mainFrame:{}}
+  let focused = true, visible = true, minimized = false
+  const main = {isDestroyed: () => false, webContents: contents, isFocused: () => focused, isVisible: () => visible, isMinimized: () => minimized}
+  const send = mock(async (_user: string, command: unknown) => command)
+  mock.module('../index', () => ({getMainWindow: () => main}))
+  mock.module('../lib/http-api-server', () => ({getHttpApiInternalToken: () => 'internal-fixture'}))
+  mock.module('../lib/working-api-service', () => ({getWorkingApiClient: () => ({sharedRoomCommand: send})}))
+  const {registerDshGroupChatIpcHandlers} = await import('../ipc/dsh-group-chat.ipc')
+  registerDshGroupChatIpcHandlers()
+  const event = {sender:contents, senderFrame:contents.mainFrame}
+  const call = (command: unknown) => h.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.SHARED_ROOM_COMMAND, event, '7', command)
+  const read = {action:'readRoom', roomId:'room-1', seq:4}
+  for (const state of [[false,true,false],[true,false,false],[true,true,true]]) {
+    ;[focused,visible,minimized] = state as [boolean,boolean,boolean]
+    expect(await call(read)).toBeNull()
+  }
+  expect(send).not.toHaveBeenCalled()
+  await expect(h.invoke(DSH_GROUP_CHAT_IPC_CHANNELS.SHARED_ROOM_COMMAND, {sender: contents, senderFrame: {}}, '7', read)).rejects.toThrow('主窗口顶层')
+  expect(await call({action:'unreadEvents',roomId:'room-1',afterSeq:0})).toEqual({action:'unreadEvents',roomId:'room-1',afterSeq:0})
+  ;[focused,visible,minimized] = [true,true,false]
+  expect(await call(read)).toEqual(read)
+  expect(send).toHaveBeenCalledWith('7', read, 'internal-fixture')
+  for (const bad of [{...read,seq:-1},{...read,seq:1.5},{...read,seq:Number.MAX_SAFE_INTEGER+1},{...read,roomId:'../r'},{...read,extra:true}]) {
+    await expect(call(bad)).rejects.toThrow('参数无效')
+  }
+})

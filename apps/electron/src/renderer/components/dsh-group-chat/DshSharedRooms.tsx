@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect } from 'react'
+import React, { useCallback, useEffect, useRef } from 'react'
 import { Provider, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { SharedRoomForm } from './SharedRoomForm'
 import { RoomManagement } from './RoomManagement'
@@ -7,6 +7,7 @@ import { DshGroupChatWorkspace } from './DshGroupChatWorkspace'
 import { type SharedRoom } from './shared-room-data'
 import { useSharedRoomFeed, type RoomRequest } from './useSharedRoomFeed'
 
+import { useVisibleRoomRead } from './useVisibleRoomRead'
 import { roomDirectoryAtom, roomDirectoryAction } from './shared-room-directory'
 
 function SharedConversation({
@@ -26,11 +27,13 @@ function SharedConversation({
 }) {
   const act = useSetAtom(roomDirectoryAction, { store: directoryStore })
   const feed = useSharedRoomFeed(request, room.id, userId)
+  const pane = useRef<HTMLElement>(null)
+  useVisibleRoomRead(pane, directoryStore, request, room.id, feed.ready && !disabled && room.nextSeq !== undefined, feed.loadedIncomingSeq)
   const [agent] = feed.agents
   const single = feed.ready && feed.agents.length === 1 ? agent : undefined
   const summary = !feed.ready ? '正在同步…' : !agent ? '未共享智能体' : `${feed.agents.length} 个历史智能体 · 待群主选定`
   return (
-    <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <main ref={pane} className="flex min-h-0 min-w-0 flex-1 flex-col">
       <DshGroupChatWorkspace
         headerAction={<RoomManagement room={room} shareCode={feed.shareCode}
           ready={feed.ready} disabled={disabled} onChoose={action => void act({kind:'manage', id:room.id, action})} />}
