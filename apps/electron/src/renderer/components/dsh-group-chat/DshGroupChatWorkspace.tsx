@@ -576,7 +576,8 @@ export function DshGroupChatWorkspace({ headerAction, shared }: DshGroupChatWork
                     )}
 
                     {msg.outgoing && <OutgoingAttachments row={msg.outgoing} retry={() => shared?.retryAttachment?.(msg.outgoing!.key)} />}
-                    {shared?.canSend && msg.attachmentIds?.map((id, index) => <ReceivedAttachment key={id} id={id} index={index} download={shared.download} />)}
+                    {shared?.canSend && msg.attachmentIds?.map((id, index) => <ReceivedAttachment key={id} id={id} index={index} download={shared.download}
+                      makePdf={shared.agent?.callable ? file => shared.send('请将这份 Word 里的图片按原文顺序合成 A4 PDF，保留图片比例和打印边距。',shared.agent!.id,[file]) : undefined} />)}
                     {/* 悬浮引用快捷操作 */}
                     {!shared && <button
                       onClick={() =>

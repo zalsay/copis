@@ -1,8 +1,9 @@
 import type { DshRoomModelSelection } from '@copis/shared'
 import { app } from 'electron'
 import WebSocket from 'ws'
-import { join } from 'node:path'
-import { getConfigDir, getDshHomeDir } from '../config-paths'
+import {createRequire} from 'node:module'
+import { join, dirname, resolve } from 'node:path'
+import { getConfigDir, getDshHomeDir, getDesktopModuleEntry } from '../config-paths'
 import { getOrCreateClientDeviceId } from '../client-device-id'
 import { getHttpApiInternalToken } from '../http-api-server'
 import { getWorkingApiClient } from '../working-api-service'
@@ -10,6 +11,7 @@ import { getWorkingTokenStore, subscribeWorkingIdentity } from '../working-auth-
 import { SharedRoomAgents } from './shared-room-agents'
 import { SharedRoomExecutor, type RoomBinding } from './shared-room-executor'
 import { SharedRoomExecutorManager, type PreparedRoomModelChange } from './shared-room-executor-manager'
+import {replyWithFiles} from './room-file-reply'
 import { createAttachmentTransfer } from './attachment-transfer'
 import { authorizeRoomBinding } from './shared-room-authority'
 
@@ -53,10 +55,14 @@ function getManager():SharedRoomExecutorManager {
     create:(binding,onStopped,onReady,latest) => new SharedRoomExecutor(binding,{
       journalDir:join(getConfigDir(),'dsh-shared-invocation-claims'), onStopped, onReady,
       openModel:() => openModel(latest()),
-      loadImages:(ids, assertActive) => createAttachmentTransfer({
-        revision:() => client.getIdentityRevision(),
-        command:cmd => client.sharedRoomCommand(binding.userId,cmd,getHttpApiInternalToken()),
-      }).downloadModelImages(binding.roomId,ids,assertActive),
+      replyWithAttachments:async(ids,text,assertActive,ask) => {
+        const transfer=createAttachmentTransfer({revision:()=>client.getIdentityRevision(),command:cmd=>client.sharedRoomCommand(binding.userId,cmd,getHttpApiInternalToken())})
+        const files=await transfer.downloadInvocationFiles(binding.roomId,ids,assertActive)
+        return replyWithFiles(text,files,{assertActive,ask,decode:()=>{
+          const entry=getDesktopModuleEntry('dsh');if(!entry)throw new Error('DSH 模块未就绪')
+          return createRequire(resolve(dirname(entry),'../runtime/package.json'))('sharp')
+        },upload:(name,bytes)=>transfer.upload({roomId:binding.roomId,name,bytes,mimeType:'application/pdf'},assertActive)})
+      },
       socket:() => {
         const url = endpoint()
         const token = getWorkingTokenStore().getToken()

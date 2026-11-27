@@ -3,12 +3,13 @@ import { mkdir, open } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { DshRoomModelSelection } from '@copis/shared'
 import type { RoomImage } from './attachment-transfer'
+import type {RoomReply} from './room-file-reply'
 import { readRoomInvocation, type RoomInvocation } from './shared-room-invocation'
 
 export type RoomBinding = { userId:string; deviceId:string; roomId:string; roomAgentId:string; workspaceId:string; displayName:string; modelSelection?:DshRoomModelSelection }
 export type RoomModel = { modelSelection?:DshRoomModelSelection; submit(id:string, prompt:string, images?:RoomImage[]):Promise<string>; revoke():Promise<void> }
 type Socket = { on(event:string, listener:(...args:any[])=>void):unknown; send(data:string):void; close():void }
-type Dependencies = { loadImages?:(ids:string[],assertActive:()=>void)=>Promise<RoomImage[]>; socket:()=>Socket; openModel:(binding:RoomBinding)=>Promise<RoomModel>; journalDir:string; onStopped?:()=>void; onReady?:()=>void; ackTimeoutMs?:number; modelMaxAgeMs?:number; heartbeatMs?:number }
+type Dependencies = { replyWithAttachments?:(ids:string[],text:string,assertActive:()=>void,ask:(text:string,images:RoomImage[])=>Promise<string>)=>Promise<RoomReply>; socket:()=>Socket; openModel:(binding:RoomBinding)=>Promise<RoomModel>; journalDir:string; onStopped?:()=>void; onReady?:()=>void; ackTimeoutMs?:number; modelMaxAgeMs?:number; heartbeatMs?:number }
 type ModelSlot = { runtime:RoomModel; users:number }
 class CommandRejected extends Error { constructor(readonly code:string) { super('共享群命令未获确认') } }
 type Pending = { command:string; invocationId?:string; resolve:(status:string)=>void; reject:(error:Error)=>void; timer:ReturnType<typeof setTimeout> }
@@ -158,16 +159,14 @@ export class SharedRoomExecutor {
     this.renewalNeeded = false
     void this.openReplacement().catch(() => {})
   }
-  private async submit({invocationId:id, text, attachmentIds}: RoomInvocation):Promise<string> {
+  private async submit({invocationId:id, text, attachmentIds}: RoomInvocation):Promise<RoomReply> {
     const slot = this.model!
     slot.users++
     try {
-      if (!attachmentIds?.length) return await slot.runtime.submit(id,text)
+      if (!attachmentIds?.length) return {content:await slot.runtime.submit(id,text)}
       const assertActive = () => { if (this.stopped || this.failed.has(id)) throw new Error('群调用已撤销') }
-      if (!this.deps.loadImages) throw new Error('群附件服务不可用')
-      const images = await this.deps.loadImages(attachmentIds, assertActive)
-      assertActive()
-      return await slot.runtime.submit(id,text,images)
+      if (!this.deps.replyWithAttachments) throw new Error('群附件服务不可用')
+      return await this.deps.replyWithAttachments(attachmentIds,text,assertActive,(prompt,images)=>{assertActive();return slot.runtime.submit(id,prompt,images)})
     }
     finally {
       if (--slot.users === 0 && this.draining.delete(slot)) void slot.runtime.revoke().catch(() => {})
@@ -191,12 +190,12 @@ export class SharedRoomExecutor {
       if (this.failed.has(id)) return
       if (running !== 'running' || this.stopped || !this.model) throw new Error('共享群运行状态未确认')
     } catch (error) { if (!this.failed.has(id) && !(error instanceof CommandRejected && error.code === 'invocation_state_conflict')) await this.stop(); return }
-    let text:string
+    let reply:RoomReply
     try {
       if (invocation.text.length > 32768) throw new Error('共享群消息超过模型上限')
-      text = await this.submit(invocation)
+      reply = await this.submit(invocation)
       if (this.stopped || this.failed.has(id)) return
-      if (typeof text !== 'string' || !text.trim()) throw new Error('共享群模型返回为空')
+      if (typeof reply.content !== 'string' || !reply.content.trim()) throw new Error('共享群模型返回为空')
     } catch {
       if (!this.stopped && !this.failed.has(id)) {
         try { const status = await this.command('agent.failed',{invocationId:id,failureCode:'execution_failed'},id); if (status !== 'failed') throw new Error() }
@@ -205,7 +204,7 @@ export class SharedRoomExecutor {
       return
     }
     try {
-      const status = await this.command('agent.completed',{invocationId:id,content:text,mentionAgentIds:[],attachmentIds:[],clientMessageId:randomUUID()},id)
+      const status = await this.command('agent.completed',{invocationId:id,content:reply.content,mentionAgentIds:[],attachmentIds:reply.attachmentIds ?? [],clientMessageId:randomUUID()},id)
       if (status !== 'completed') throw new Error('共享群完成状态未确认')
     } catch (error) { if (!this.failed.has(id) && !(error instanceof CommandRejected && error.code === 'invocation_state_conflict')) await this.stop() }
   }

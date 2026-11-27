@@ -79,11 +79,12 @@ test('共享群使用当前账号读取历史和增量消息；切号后旧内�
           if (command.action === 'list') return account === '11' ? [room] : []
           if (command.action === 'detail') return { room, agents: [{roomId:room.roomId,roomAgentId:'ag',ownerUserId:11,displayName:'小研',availability:queuedCount ? 'busy' : 'online',queuedCount}] }
           if (command.action === 'uploadAttachment') { await firstUpload; return {id:command.mimeType === 'image/png' ? 'img1' : 'att1'} }
+          if (command.action === 'downloadAttachment' && command.attachmentId === 'old-word') return {bytes:new Uint8Array([42]),name:'原稿.docx',mimeType:'application/octet-stream'}
           if (command.action === 'downloadAttachment' && command.attachmentId === 'img1') return {bytes:new Uint8Array([1]),name:'截图.png',mimeType:'image/png'}
           if (command.action === 'downloadAttachment') return {bytes:new Uint8Array([42]),name:'notes.txt',mimeType:'text/plain'}
           if (command.action === 'send' && command.attachmentIds?.length && ++attachmentSendAttempts === 1) { await firstReceipt; throw new Error('消息网络中断') }
           if (command.action === 'send') return { notExecuted:!!command.mentionAgentId, reason:'room_queue_full', message: {...msg, messageId:crypto.randomUUID(),seq:3,content:command.content,attachmentIds:command.attachmentIds} }
-          if (command.action === 'messages') return [msg]
+          if (command.action === 'messages') return [{...msg,attachmentIds:['old-word']}]
           if (command.action === 'events')
             return command.afterSeq >= 2 ? [] : [
               {
@@ -221,6 +222,10 @@ test('共享群使用当前账号读取历史和增量消息；切号后旧内�
     await send()
     expect(calls.filter(c => c.action === 'send').at(-1)?.mentionAgentId).toBeUndefined()
 
+    const convert = Array.from(el.querySelectorAll('button')).find(b => b.textContent === '生成 A4 图片 PDF')!
+    await act(async () => convert.click())
+    expect(calls.filter(c=>c.action==='uploadAttachment').at(-1)).toMatchObject({roomId:'room1',name:'原稿.docx'})
+    expect(calls.filter(c=>c.action==='send').at(-1)).toMatchObject({roomId:'room1',mentionAgentId:'ag',attachmentIds:['att1'],content:expect.stringContaining('A4 PDF')})
     expect(header?.textContent).toContain('排队 2')
     await act(async () => header.querySelector<HTMLElement>('[aria-label="群聊管理"]')!.click())
     expect(el.textContent).toContain('A2B3')

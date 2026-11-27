@@ -69,11 +69,17 @@ test('Given 上游错误含秘密 When 上传失败 Then 错误不向渲染进�
   await expect(transfer.upload({roomId:'r',name:'a',mimeType:'text/plain',bytes:new Uint8Array([1])})).rejects.toThrow('附件上传失败或账号已切换')
 })
 
-test('模型只接收当前群触发附件中的图片字节，普通文件不读入模型上下文', async () => {
+test('按触发消息下载图片；非 Word 的普通文件仍跳过', async () => {
   const transfer = createAttachmentTransfer({ revision:() => 1, command:async cmd => {
     if (cmd.action !== 'internalAttachmentDownload') throw Error('只允许下载')
     expect(cmd.roomId).toBe('r')
     return {...grant, attachmentId:cmd.attachmentId, objectKey:`private/chatroom-v2/r/${cmd.attachmentId}`}
   }, download:async g => new Response(new Uint8Array([1,2]),{headers:{'content-type':g.attachmentId === 'photo' ? 'image/png' : 'application/pdf'}}) })
-  expect(await transfer.downloadModelImages('r',['file','photo'],()=>{})).toEqual([{mimeType:'image/png', bytes:new Uint8Array([1,2])}])
+  expect(await transfer.downloadInvocationFiles('r',['file','photo'],()=>{})).toEqual([{mimeType:'image/png', bytes:new Uint8Array([1,2])}])
+})
+
+
+test('群里的 Word 即便是通用 MIME，也能凭 COS 原文件名交给当前调用',async()=>{
+  const transfer=createAttachmentTransfer({revision:()=>1,command:async()=>grant,download:async()=>new Response(new Uint8Array([1,2]),{headers:{'content-type':'application/octet-stream','x-cos-meta-original-name':encodeURIComponent('原稿.docx')}})})
+  expect(await transfer.downloadInvocationFiles('r',['att-1'],()=>{})).toEqual([{name:'原稿.docx',mimeType:'application/octet-stream',bytes:new Uint8Array([1,2])}])
 })

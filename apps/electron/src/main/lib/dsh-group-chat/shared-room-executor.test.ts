@@ -19,7 +19,7 @@ test('Given 受信绑定 When 模型就绪并协商快照和 ready ACK Then 依�
   const pictures = [{mimeType:'image/png',bytes:new Uint8Array([1])}]
   let submitted: unknown, downloads = 0
   const executor = new SharedRoomExecutor({userId:'1', deviceId:'dev-1', roomId:'room-1', roomAgentId:'agent-1', workspaceId:'workspace-1', displayName:'助手'}, {
-    socket: () => socket as any, loadImages: async (ids) => { downloads++; expect(ids).toEqual(['img']); return pictures },
+    socket: () => socket as any, replyWithAttachments: async (ids,text,_active,ask) => { downloads++; expect(ids).toEqual(['img']); return {content:await ask(text,pictures),attachmentIds:['generated-pdf']} },
     openModel: async () => ({submit:async (_id, _text, images) => { calls++; submitted = images; return '答案' }, revoke:async () => {revoked++}}), journalDir:dir,
   })
   try {
@@ -34,7 +34,7 @@ test('Given 受信绑定 When 模型就绪并协商快照和 ready ACK Then 依�
     const accepted = socket.sent.at(-1); expect(accepted.type).toBe('agent.accepted'); expect(calls).toBe(0)
     socket.ack(accepted,'accepted'); await tick(); const running = socket.sent.at(-1); expect(running.type).toBe('agent.running'); expect(calls).toBe(0)
     expect(downloads).toBe(0); socket.ack(running,'running'); await tick(); expect(calls).toBe(1); expect(submitted).toEqual(pictures)
-    const completed = socket.sent.at(-1); expect(completed.type).toBe('agent.completed'); expect(completed.payload.content).toBe('答案')
+    const completed = socket.sent.at(-1); expect(completed.type).toBe('agent.completed'); expect(completed.payload.content).toBe('答案');expect(completed.payload.attachmentIds).toEqual(['generated-pdf'])
     socket.ack(completed,'completed'); socket.frame(invocation); await tick(); expect(calls).toBe(1)
     await executor.stop(); expect(revoked).toBe(1)
   } finally { await executor.stop(); rmSync(dir,{recursive:true,force:true}) }

@@ -74,10 +74,11 @@ export function RoomAttachmentPicker({disabled, onAdd}: {disabled: boolean; onAd
 export type RoomDownload = (id: string) => Promise<File>
 
 /** 消息只有附件 ID；接近视口时再按群权限读取，避免打开群时下载整段历史。 */
-export function ReceivedAttachment({id, index, download}: {id: string; index: number; download: RoomDownload}) {
+export function ReceivedAttachment({id, index, download, makePdf}: {id: string; index: number; download: RoomDownload; makePdf?: (file:File)=>Promise<void>}) {
   const host = useRef<HTMLDivElement>(null)
   const [file, setFile] = useState<File>(), [error, setError] = useState(''), [attempt, setAttempt] = useState(0)
   const url = useBlobUrl(file)
+  const [requesting,setRequesting]=useState(false)
   useEffect(() => {
     let active = true
     async function load() {
@@ -108,8 +109,13 @@ export function ReceivedAttachment({id, index, download}: {id: string; index: nu
         }}><Copy className="mr-2 size-4" />复制图片</ContextMenuItem>
         <ContextMenuItem asChild><a href={url} download={file.name}><Download className="mr-2 size-4" />保存图片</a></ContextMenuItem>
       </ContextMenuContent>
-    </ContextMenu> : <a download={file.name} href={url} className="inline-flex items-center gap-1.5 text-xs underline">
+    </ContextMenu> : <><a download={file.name} href={url} className="inline-flex items-center gap-1.5 text-xs underline">
       <Paperclip size={14} />{file.name} · {sizeLabel(file.size)}</a>
+      {/\.docx?$/i.test(file.name) && <button type="button" disabled={!makePdf || requesting} className="ml-2 rounded-md px-2 py-1 text-xs hover:bg-white/10 disabled:opacity-50" title="将此 Word 作为附件发给本群智能体，按正文图片顺序生成 PDF" onClick={async()=>{
+        if(!makePdf || requesting)return
+        setRequesting(true)
+        try { await makePdf(file) } catch { toast.error('未能提交排版请求，请检查群智能体状态') } finally { setRequesting(false) }
+      }}>生成 A4 图片 PDF</button>}</>
     : error ? <button type="button" title={error} onClick={() => { setError(''); setAttempt(n => n + 1) }}>重试加载附件 {index + 1}</button>
     : <small>正在加载附件…</small>}
   </div>

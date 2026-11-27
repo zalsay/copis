@@ -3,6 +3,8 @@ import { DSH_ROOM_ATTACHMENT_MAX_COUNT, DSH_ROOM_ATTACHMENT_MAX_BYTES, type DshS
 import { createHash } from 'node:crypto'
 
 export type RoomImage = { bytes: Uint8Array; mimeType: string }
+export type RoomSourceFile = RoomImage & {name?:string}
+const wordType = (type:string) => ['application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document'].includes(type)
 export type AttachmentCommand =
   | { action: 'internalAttachmentUpload'; roomId: string; fileName: string; mimeType: string; sizeBytes: number; sha256: string }
   | { action: 'internalAttachmentFinalize'; roomId: string; attachmentId: string; sizeBytes: number; etag: string; sha256: string }
@@ -44,7 +46,7 @@ async function downloadCos(g: Grant): Promise<Response> {
 export function createAttachmentTransfer(deps: Dependencies) {
   const check = (rev: number) => { if (rev !== deps.revision()) throw new Error('共享群账号已切换') }
   type DownloadInput = {roomId:string; attachmentId:string}
-  async function readAttachment(input:DownloadInput, active:()=>void, imageBudget?:number) {
+  async function readAttachment(input:DownloadInput, active:()=>void, byteBudget?:number) {
     active()
     if (!idValid(input.roomId) || !idValid(input.attachmentId)) throw new Error('附件参数无效')
     const grant = parseGrant(await deps.command({ action:'internalAttachmentDownload', roomId:input.roomId, attachmentId:input.attachmentId }), 'download', input.roomId)
@@ -57,11 +59,16 @@ export function createAttachmentTransfer(deps: Dependencies) {
       active()
       if (!response.ok) throw new Error('附件下载失败')
       const header = response.headers.get('content-type')
-      const contentType = imageBudget === undefined ? header : header?.split(';', 1)[0]?.trim()
+      const contentType = byteBudget === undefined ? header : header?.split(';', 1)[0]?.trim()
       const mimeType = contentType && /^[\w.+-]+\/[\w.+-]+$/.test(contentType) && contentType.length <= 255 ? contentType.toLowerCase() : undefined
-      // 聊天记录只提供 ID；群调用按授权响应辨别图片，普通文件不读入内存。
-      if (imageBudget !== undefined && !mimeType?.startsWith('image/')) { await reader.cancel(); return null }
-      const limit = Math.min(DSH_ROOM_ATTACHMENT_MAX_BYTES, grant.maxSizeBytes ?? Infinity, imageBudget ?? Infinity)
+      let name: string | undefined
+      const encodedName = response.headers.get('x-cos-meta-original-name')
+      if (encodedName && encodedName.length <= 2295) {
+        try { const decoded = decodeURIComponent(encodedName); if (validFilename(decoded)) name = decoded } catch { /* 无效编码不得作为文件名 */ }
+      }
+      // 只取本次调用能处理的类型；不读取任意普通群附件的正文。
+      if (byteBudget !== undefined && !mimeType?.startsWith('image/') && !wordType(mimeType ?? '') && !/\.docx?$/i.test(name ?? '')) { await reader.cancel(); return null }
+      const limit = Math.min(DSH_ROOM_ATTACHMENT_MAX_BYTES, grant.maxSizeBytes ?? Infinity, byteBudget ?? Infinity)
       const length = response.headers.get('content-length')
       if (length !== null && (!/^\d+$/.test(length) || Number(length) > limit)) throw new Error('附件超过大小限制')
       const chunks: Uint8Array[] = []
@@ -77,11 +84,6 @@ export function createAttachmentTransfer(deps: Dependencies) {
       const bytes = new Uint8Array(size)
       let offset = 0
       for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength }
-      let name: string | undefined
-      const encodedName = response.headers.get('x-cos-meta-original-name')
-      if (encodedName && encodedName.length <= 2295) {
-        try { const decoded = decodeURIComponent(encodedName); if (validFilename(decoded)) name = decoded } catch { /* 无效编码不得作为文件名 */ }
-      }
       return { bytes, ...(mimeType ? { mimeType } : {}), ...(name ? { name } : {}) }
     } catch (err) {
       await reader.cancel().catch(() => {})
@@ -89,16 +91,16 @@ export function createAttachmentTransfer(deps: Dependencies) {
     } finally { reader.releaseLock() }
   }
   return {
-    async upload(input: Omit<Extract<AttachmentPublicCommand, {action:'uploadAttachment'}>, 'action'>): Promise<{id:string}> {
+    async upload(input: Omit<Extract<AttachmentPublicCommand, {action:'uploadAttachment'}>, 'action'>, assertActive = () => {}): Promise<{id:string}> {
       try {
-        const rev = deps.revision()
+        const rev = deps.revision(); assertActive()
         if (!idValid(input.roomId) || !validFilename(input.name) || !textValid(input.mimeType, 255) || !/^[\w.+-]+\/[\w.+-]+$/.test(input.mimeType) || !(input.bytes instanceof Uint8Array) || input.bytes.byteLength > DSH_ROOM_ATTACHMENT_MAX_BYTES) throw new Error('附件参数无效')
         const bytes = Uint8Array.from(input.bytes); const sha256 = createHash('sha256').update(bytes).digest('hex')
-        const grant = parseGrant(await deps.command({ action:'internalAttachmentUpload', roomId:input.roomId, fileName:input.name, mimeType:input.mimeType, sizeBytes:bytes.byteLength, sha256 }), 'upload', input.roomId); check(rev)
+        const grant = parseGrant(await deps.command({ action:'internalAttachmentUpload', roomId:input.roomId, fileName:input.name, mimeType:input.mimeType, sizeBytes:bytes.byteLength, sha256 }), 'upload', input.roomId); check(rev); assertActive()
         if (bytes.byteLength > Math.min(DSH_ROOM_ATTACHMENT_MAX_BYTES, grant.maxSizeBytes ?? DSH_ROOM_ATTACHMENT_MAX_BYTES)) throw new Error('附件超过大小限制')
-        const etag = await (deps.upload ?? uploadCos)(grant, bytes, input.mimeType, sha256, input.name); check(rev)
+        const etag = await (deps.upload ?? uploadCos)(grant, bytes, input.mimeType, sha256, input.name); check(rev); assertActive()
         if (!textValid(etag, 512)) throw new Error('附件上传失败')
-        const raw = await deps.command({ action:'internalAttachmentFinalize', roomId:input.roomId, attachmentId:grant.attachmentId, sizeBytes:bytes.byteLength, etag, sha256 }); check(rev)
+        const raw = await deps.command({ action:'internalAttachmentFinalize', roomId:input.roomId, attachmentId:grant.attachmentId, sizeBytes:bytes.byteLength, etag, sha256 }); check(rev); assertActive()
         const outer = record(raw); const confirmed = record(outer.data ?? raw)
         if (confirmed.attachmentId !== grant.attachmentId || confirmed.roomId !== input.roomId || confirmed.sizeBytes !== bytes.byteLength || confirmed.sha256 !== sha256 || confirmed.status !== 'ready') throw new Error('附件确认失败')
         return { id:grant.attachmentId }
@@ -109,20 +111,20 @@ export function createAttachmentTransfer(deps: Dependencies) {
       try { return (await readAttachment(input, () => check(rev)))! }
       catch { throw new Error('附件下载失败或账号已切换') }
     },
-    async downloadModelImages(roomId: string, ids: string[], assertActive: () => void): Promise<RoomImage[]> {
+    async downloadInvocationFiles(roomId: string, ids: string[], assertActive: () => void): Promise<RoomSourceFile[]> {
       const rev = deps.revision()
       const active = () => { assertActive(); check(rev) }
       if (ids.length > DSH_ROOM_ATTACHMENT_MAX_COUNT) throw new Error('群消息附件过多')
-      const images: RoomImage[] = []
+      const files: RoomSourceFile[] = []
       let remaining = DSH_ROOM_ATTACHMENT_MAX_BYTES
       for (const attachmentId of ids) {
-        const image = await readAttachment({roomId,attachmentId}, active, remaining)
-        if (!image?.mimeType) continue
-        images.push({bytes:image.bytes, mimeType:image.mimeType})
-        remaining -= image.bytes.byteLength
+        const file = await readAttachment({roomId,attachmentId}, active, remaining)
+        if (!file) continue
+        files.push({...file,mimeType:file.mimeType ?? 'application/octet-stream'})
+        remaining -= file.bytes.byteLength
       }
       active()
-      return images
+      return files
     },
   }
 }
