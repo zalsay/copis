@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { lstatSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
@@ -209,6 +209,32 @@ describe('Copis 功能模块存储', () => {
     await activateFunctionalModule(paths, packageInfo, versionDir)
 
     expect(readActiveFunctionalModule(paths, 'node-runtime')?.path).toBe(join(versionDir, 'bin/node'))
+  })
+
+  test('跨多个数据块的文件完整落盘，缺少 gzip 尾部的归档不能完成组装', async () => {
+    const root = createRoot()
+    const paths = getFunctionalModulePaths(root)
+    const content = 'copis-runtime\n'.repeat(70_000)
+    const archive = createTarGzWithRootDirectory({ 'bin/dsh': content })
+    const input = join(root, 'dsh.tar.gz')
+    const valid: FunctionalModulePackage = {
+      name: 'dsh', version: '0.2.2-rc.2', sha256: '8'.repeat(64),
+      size: archive.length, format: 'tar.gz', entrypoint: 'bin/dsh', required: false,
+    }
+    writeFileSync(input, archive)
+    await cacheFunctionalModule(paths, valid, input)
+    const versionDir = await assembleFunctionalModule(paths, valid)
+    expect(readFileSync(join(versionDir, 'bin/dsh'), 'utf8')).toBe(content)
+
+    const truncated = archive.subarray(0, -8)
+    const invalid = { ...valid, size: truncated.length, sha256: '9'.repeat(64) }
+    writeFileSync(input, truncated)
+    await cacheFunctionalModule(paths, invalid, input)
+    const progress: number[] = []
+    await expect(assembleFunctionalModule(paths, invalid, fraction => progress.push(fraction)))
+      .rejects.toThrow('组装功能模块版本失败')
+    expect(progress).not.toContain(1)
+    expect(readdirSync(join(paths.versionsDir, 'dsh'))).toEqual([`${valid.version}-${valid.sha256}`])
   })
 
   test('Given Unix Python runtime 归档包含相对 symlink When 组装 Then 保留链接语义并激活入口', async () => {

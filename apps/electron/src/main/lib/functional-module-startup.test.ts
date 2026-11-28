@@ -446,10 +446,9 @@ describe('登录后功能模块启动契约', () => {
     }
   })
 
-  test('依赖模块更新而 Rust API 未更新时，正式 health 检查前重启 Rust 并注入新入口', async () => {
+  test('自动补装 Node 并升级已有支付宝模块；检查失败时使用已就绪的本地组件', async () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'copis-functional-module-startup-runtime-refresh-'))
     const modulesRoot = join(rootDir, 'modules')
-    const oldNodeContent = createTarGz({ [nodeEntry]: 'old-node', 'bin/npm': 'old-npm' })
     const newNodeContent = createTarGz({ [nodeEntry]: 'new-node', 'bin/npm': 'new-npm' })
     const oldAlipayBotContent = createTarGz({
       [alipayEntry]: 'old-alipay-bot',
@@ -487,7 +486,6 @@ describe('登录后功能模块启动契约', () => {
               : nodeEntry,
       required: true,
     })
-    const oldNode = packageArtifact('node-runtime', '24.19.3', oldNodeContent)
     const newNode = packageArtifact('node-runtime', '24.19.4', newNodeContent)
     const oldAlipayBot = packageArtifact('alipay-bot', '0.3.39', oldAlipayBotContent)
     const newAlipayBot = packageArtifact('alipay-bot', '0.3.40', newAlipayBotContent)
@@ -546,7 +544,6 @@ describe('登录后功能模块启动契约', () => {
     }
 
     try {
-      await activateModuleVersion(modulesRoot, oldNode, oldNodeContent)
       await activateModuleVersion(modulesRoot, {
         name: 'officecli',
         version: '1.0.143',
@@ -580,9 +577,51 @@ describe('登录后功能模块启动契约', () => {
       expect(records).toHaveLength(2)
       expect(records[0]?.child.killed).toBe(true)
       expect(records[0]?.alipayBotCli).toContain('/alipay-bot/0.3.39-')
-      expect(records[0]?.alipayBotNode).toContain('/node-runtime/24.19.3-')
       expect(records[1]?.alipayBotCli).toContain('/alipay-bot/0.3.40-')
       expect(records[1]?.alipayBotNode).toContain('/node-runtime/24.19.4-')
+
+      const requests: string[] = []
+      const statuses = await ensureRequiredFunctionalModules({
+        rootDir: modulesRoot,
+        clientVersion: '0.0.1',
+        manifestUrl: 'https://download.example.com/manifest.json',
+        spawnImpl,
+        fetchImpl: async (url) => {
+          requests.push(url)
+          if (!url.endsWith('/api/health')) throw new TypeError('网络不可用')
+          return Response.json({ ok: true, service: 'copis-http-api' })
+        },
+      })
+      expect(requests).toEqual(['https://download.example.com/manifest.json', 'http://127.0.0.1:51740/api/health'])
+      expect(statuses.find(item => item.name === 'alipay-bot')?.version).toBe('0.3.40')
+      expect(records).toHaveLength(2)
+
+      const updatedRust = 'new-rust-api'
+      const nextRust = packageArtifact('rust-http-api', '0.2.0', updatedRust)
+      manifest.platforms[platform + '-arm64']!.modules['rust-http-api'] = nextRust
+      const startupWithRustUpdate = (candidateHealthy: boolean) => ensureRequiredFunctionalModules({
+        rootDir: modulesRoot,
+        platform,
+        arch: 'arm64',
+        clientVersion: '0.0.4',
+        manifestUrl: 'https://download.example.com/manifest.json',
+        spawnImpl,
+        healthTimeoutMs: 10,
+        stopTimeoutMs: 5,
+        fetchImpl: async (url) => {
+          if (url === nextRust.url) return new Response(updatedRust)
+          if (url.includes(':51741/api/health') && !candidateHealthy) return new Response(null, { status: 503 })
+          return fetchImpl(url)
+        },
+      })
+      const fallback = await startupWithRustUpdate(false)
+      expect(fallback.find(item => item.name === 'rust-http-api')).toMatchObject({
+        version: '0.1.2', availableVersion: '0.2.0', updateAvailable: true,
+      })
+      const ready = await startupWithRustUpdate(true)
+      expect(ready.find(item => item.name === 'rust-http-api')).toMatchObject({
+        version: '0.2.0', availableVersion: '0.2.0', updateAvailable: false,
+      })
     } finally {
       await stopHttpApiServer(5)
       rmSync(rootDir, { recursive: true, force: true })

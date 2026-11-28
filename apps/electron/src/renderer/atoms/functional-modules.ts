@@ -6,7 +6,26 @@ import type {
   FunctionalModuleStatus,
 } from '@copis/shared'
 
-export const functionalModuleStatusesAtom = atom<Partial<Record<FunctionalModuleName, FunctionalModuleStatus>>>({})
+type FunctionalModuleStatuses = Partial<Record<FunctionalModuleName, FunctionalModuleStatus>>
+
+export const functionalModuleStatusesAtom = atom<FunctionalModuleStatuses>({})
+
+/** 本机列表刷新时保留同一个已安装版本的远端检查结果。 */
+export function mergeLocalFunctionalModuleStatuses(
+  current: FunctionalModuleStatuses,
+  modules: FunctionalModuleStatus[],
+): FunctionalModuleStatuses {
+  const merged = { ...current }
+  for (const status of modules) {
+    const previous = current[status.name]
+    const sameInstallation = previous && previous.version === status.version && previous.path === status.path
+      && previous.installed === status.installed && previous.localIssue === status.localIssue
+    merged[status.name] = sameInstallation && status.availableVersion === null
+      ? { ...status, availableVersion: previous.availableVersion, updateAvailable: previous.updateAvailable, updateError: previous.updateError }
+      : status
+  }
+  return merged
+}
 
 export const functionalModuleProgressAtom = atom<Partial<Record<FunctionalModuleName, FunctionalModuleProgressPayload>>>({})
 

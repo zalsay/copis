@@ -86,6 +86,7 @@ export async function fetchFunctionalModuleManifest(
   const fetchImpl = options.fetchImpl ?? fetch
   const response = await fetchImpl(manifestUrl, {
     redirect: 'follow',
+    signal: AbortSignal.timeout(15_000),
     headers: {
       Accept: 'application/json',
       'User-Agent': 'Copis-Desktop-App',
@@ -498,7 +499,7 @@ async function isVerifiedArtifact(path: string, artifact: FunctionalModuleArtifa
 }
 
 /** 远端清单可能落后于本地验证版本；只允许前进或同版本修复，回滚必须显式 force。 */
-function shouldUpdateModuleArtifact(current: FunctionalModulePackage, candidate: FunctionalModuleArtifact): boolean {
+export function shouldUpdateModuleArtifact(current: FunctionalModulePackage, candidate: FunctionalModuleArtifact): boolean {
   const currentVersion = validSemver(current.version)
   const candidateVersion = validSemver(candidate.version)
   const hashChanged = current.sha256.toLowerCase() !== candidate.sha256.toLowerCase()

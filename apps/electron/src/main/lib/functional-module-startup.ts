@@ -12,6 +12,7 @@ import {
   fetchFunctionalModuleManifest,
   getFunctionalModuleStatuses,
   installFunctionalModule,
+  shouldUpdateModuleArtifact,
   type FunctionalModuleFetch,
 } from './functional-module-manager'
 import {
@@ -173,36 +174,39 @@ async function runRequiredModuleStartup(
   try {
     if (options.skipModuleUpdates) return await runDevelopmentHealthCheck(options, publish)
 
-    publish({ phase: 'checking', detail: '正在检查必要组件版本', progress: 0.02 })
-    const moduleOptions = createModuleOptions(options)
-    const artifacts = await fetchFunctionalModuleManifest(moduleOptions)
+    const paths = getFunctionalModulePaths(options.rootDir)
     const bundledPlaywrightCoreAvailable = options.allowBundledPlaywrightCore
       && canUseBundledPlaywrightCore(options.rootDir)
-    assertRequiredModuleArtifacts(artifacts, {
-      allowMissingPlaywrightCore: bundledPlaywrightCoreAvailable,
+    const missing = REQUIRED_MODULES.filter(name => (
+      !readActiveFunctionalModule(paths, name)
+      && (name !== 'playwright-core' || !bundledPlaywrightCoreAvailable)
+    ))
+    const moduleOptions = createModuleOptions(options)
+    let artifacts: FunctionalModuleArtifact[] = []
+    publish({ phase: 'checking', detail: '正在检查必要组件版本', progress: 0.02 })
+    try {
+      artifacts = await fetchFunctionalModuleManifest(moduleOptions)
+      assertRequiredModuleArtifacts(artifacts, {
+        allowMissingPlaywrightCore: bundledPlaywrightCoreAvailable,
+      })
+    } catch (error) {
+      if (missing.length > 0) throw error
+      console.warn('[功能模块] 无法检查启动更新，将检查本地组件:', error)
+      artifacts = []
+    }
+    const artifactByName = new Map(artifacts.map(artifact => [artifact.name, artifact]))
+    const updates = REQUIRED_MODULES.flatMap(name => {
+      const artifact = artifactByName.get(name)
+      const active = readActiveFunctionalModule(paths, name)
+      return artifact && (!active || shouldUpdateModuleArtifact(active, artifact)) ? [artifact] : []
     })
-    const artifactByName = new Map(artifacts.map((artifact) => [artifact.name, artifact]))
-    const paths = getFunctionalModulePaths(options.rootDir)
-    const totalWeight = Math.max(
-      1,
-      REQUIRED_MODULES.reduce((sum, name) => sum + (artifactByName.get(name)?.size ?? 0), 0),
-    )
+    const totalWeight = Math.max(1, updates.reduce((sum, artifact) => sum + artifact.size, 0))
     let completedWeight = 0
     let httpApiRuntimeDependenciesUpdated = false
 
     publish({ phase: 'modules', detail: '正在准备必要组件', progress: MODULE_PROGRESS_START })
-    for (const name of REQUIRED_MODULES) {
-      const artifact = artifactByName.get(name)
-      if (!artifact && name === 'playwright-core' && bundledPlaywrightCoreAvailable) {
-        publish({
-          phase: 'modules',
-          detail: '浏览器自动化内核已随应用准备完成',
-          progress: MODULE_PROGRESS_END,
-          activeModule: name,
-        })
-        continue
-      }
-      if (!artifact) throw new Error(`组件清单缺少必要组件: ${name}`)
+    for (const artifact of updates) {
+      const { name } = artifact
 
       const moduleStart = completedWeight / totalWeight
       const moduleWeight = artifact.size / totalWeight
@@ -218,22 +222,18 @@ async function runRequiredModuleStartup(
         })
       }
 
-      const active = readActiveFunctionalModule(paths, name)
-      const needsUpdate = !active
-        || active.version !== artifact.version
-        || active.sha256.toLowerCase() !== artifact.sha256.toLowerCase()
-      if (needsUpdate) {
+      try {
         if (name === 'rust-http-api') {
           const updated = await updateHttpApiServer({
             ...createHttpApiOptions(options),
             artifactOverride: artifact,
             onProgress: emitModuleProgress,
             onHealthProgress: (progress) => {
-              publish({
-                phase: 'health',
+              emitModuleProgress({
+                name,
+                phase: 'activate',
                 detail: '正在检查本地服务',
-                progress: mapHealthProgress(progress),
-                activeModule: 'rust-http-api',
+                progress: 0.94 + clamp01(progress) * 0.06,
               })
             },
           })
@@ -244,18 +244,11 @@ async function runRequiredModuleStartup(
             artifactOverride: artifact,
             onProgress: emitModuleProgress,
           })
-          if (name === 'node-runtime' || name === 'alipay-bot' || name === 'playwright-core' || name === 'python-runtime') {
-            httpApiRuntimeDependenciesUpdated = true
-          }
+          httpApiRuntimeDependenciesUpdated = true
         }
-      } else {
-        emitModuleProgress({
-          name,
-          phase: 'done',
-          detail: `${displayName(name)} 已是最新版本 v${artifact.version}`,
-          progress: 1,
-          version: artifact.version,
-        })
+      } catch (error) {
+        if (missing.includes(name)) throw error
+        console.warn(`[功能模块] 启动时更新 ${name} 失败，保留本地组件:`, error)
       }
       completedWeight += artifact.size
     }
@@ -269,12 +262,12 @@ async function runRequiredModuleStartup(
     }
     const statuses = getFunctionalModuleStatuses(options.rootDir).map((status) => {
       const artifact = artifactByName.get(status.name)
+      const active = artifact && readActiveFunctionalModule(paths, status.name)
       return {
         ...status,
         ...(artifact ? {
           availableVersion: artifact.version,
-          updateAvailable: false,
-          required: status.required,
+          updateAvailable: !active || shouldUpdateModuleArtifact(active, artifact),
         } : {}),
       }
     })
@@ -389,17 +382,6 @@ function createHttpApiOptions(options: FunctionalModuleStartupOptions & { rootDi
     ...(options.stopTimeoutMs === undefined ? {} : { stopTimeoutMs: options.stopTimeoutMs }),
     ...(options.spawnImpl ? { spawnImpl: options.spawnImpl } : {}),
   }
-}
-
-function displayName(name: FunctionalModuleName): string {
-  if (name === 'node-runtime') return 'Node.js 运行环境'
-  if (name === 'officecli') return 'Office 文档支持'
-  if (name === 'alipay-bot') return '支付宝智能体 CLI'
-  if (name === 'agently-cli') return 'Agent QQ 邮箱 CLI'
-  if (name === 'dsh') return '创造模式'
-  if (name === 'playwright-core') return '浏览器自动化内核'
-  if (name === 'python-runtime') return 'Python 3.12 运行环境'
-  return '系统核心模块'
 }
 
 function clamp01(value: number): number {

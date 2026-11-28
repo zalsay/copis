@@ -1,7 +1,8 @@
-import { chmod, copyFile, lstat, mkdir, readFile, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmod, copyFile, lstat, mkdir, open, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { gunzipSync } from 'node:zlib'
+import { pipeline } from 'node:stream/promises'
+import { createGunzip } from 'node:zlib'
 import type { FunctionalModuleFormat } from '@copis/shared'
 
 const ARCHIVE_PAYLOAD_FILE = '.artifact.tar.gz'
@@ -400,88 +401,124 @@ async function extractTarGz(
   maxOutputLength: number,
   onProgress?: (fraction: number) => void,
 ): Promise<void> {
-  let tar: Buffer
-  try {
-    tar = gunzipSync(await readFile(sourcePath), { maxOutputLength })
-  } catch (error) {
-    throw new Error(`无法解压 tar.gz 功能模块: ${error instanceof Error ? error.message : String(error)}`)
-  }
-
+  const archiveSize = (await stat(sourcePath)).size
   await mkdir(targetDir, { recursive: true })
+  const input = createReadStream(sourcePath)
+  const gunzip = createGunzip({ chunkSize: 64 * 1024 })
+  const decompressed = gunzip[Symbol.asyncIterator]()
+  const completion = pipeline(input, gunzip).catch((error: unknown) => ({ error }))
   const symlinks: Array<{ path: string; target: string }> = []
-  let offset = 0
+  let chunk = Buffer.alloc(0)
+  let unpackedBytes = 0
   let lastReportedPercent = 0
-  while (offset + 512 <= tar.length) {
-    const header = tar.subarray(offset, offset + 512)
-    if (header.every((byte) => byte === 0)) {
-      await validateArchiveSymlinks(targetDir, symlinks)
-      onProgress?.(1)
-      return
-    }
 
-    const name = readTarString(header, 0, 100)
-    const prefix = readTarString(header, 345, 155)
-    const path = [prefix, name].filter(Boolean).join('/')
-    const linkName = readTarString(header, 157, 100)
-    const size = readTarSize(header)
-    const type = header[156] ?? 0
-    const dataStart = offset + 512
-    const dataEnd = dataStart + size
-    if (dataEnd > tar.length) throw new Error('tar.gz 功能模块内容不完整')
+  function reportProgress(): void {
+    if (!onProgress) return
+    const percent = Math.min(99, Math.floor(gunzip.bytesWritten / archiveSize * 100))
+    if (percent <= lastReportedPercent) return
+    lastReportedPercent = percent
+    onProgress(percent / 100)
+  }
 
-    // macOS tar 会写入 PAX 扩展头保存时间戳和扩展属性；它们不代表待落盘的文件。
-    if (type === TAR_TYPE_PAX_GLOBAL_EXTENDED_HEADER || type === TAR_TYPE_PAX_EXTENDED_HEADER) {
-      offset = dataStart + Math.ceil(size / 512) * 512
-      continue
-    }
+  async function readChunk(): Promise<boolean> {
+    const next = await decompressed.next()
+    if (next.done) return false
+    chunk = next.value
+    unpackedBytes += chunk.length
+    if (unpackedBytes > maxOutputLength) throw new Error('tar.gz 功能模块解压大小超出上限')
+    return true
+  }
 
-    const normalizedPath = path.replace(/^\.\//, '')
-    // GNU tar 和 BSD tar 都可能在归档开头写入 "./" 根目录条目；它不代表文件，跳过即可。
-    if ((path === '.' || path === './' || normalizedPath === '') && type === 53 && size === 0) {
-      offset = dataStart + Math.ceil(size / 512) * 512
-      continue
-    }
-    if (!isSafeRelativePath(normalizedPath)) {
-      throw new Error(`tar.gz 功能模块包含不安全路径: ${path}`)
-    }
-    const targetPath = resolve(targetDir, normalizedPath)
-    if (!isPathWithin(targetDir, targetPath)) {
-      throw new Error(`tar.gz 功能模块路径超出目标目录: ${path}`)
-    }
-
-    if (type === 0 || type === 48) {
-      await ensureArchiveParentInside(targetDir, targetPath)
-      await rejectExistingSymlink(targetPath, path)
-      await writeFile(targetPath, tar.subarray(dataStart, dataEnd))
-      if (normalizedPath.startsWith('bin/')) await markExecutable(targetPath)
-    } else if (type === 53) {
-      await ensureArchiveParentInside(targetDir, targetPath)
-      await rejectExistingSymlink(targetPath, path)
-      await mkdir(targetPath, { recursive: true })
-    } else if (type === TAR_TYPE_SYMLINK) {
-      const normalizedLinkName = linkName.replaceAll('\\', '/')
-      const linkTargetPath = validateArchiveSymlinkTarget(targetDir, targetPath, normalizedLinkName, path)
-      await ensureArchiveParentInside(targetDir, targetPath)
-      await rejectExistingSymlink(targetPath, path)
-      if (await pathExists(targetPath)) {
-        throw new Error(`tar.gz 功能模块符号链接路径重复: ${path}`)
+  // 按条目消费解压流，大文件也只保留当前数据块。
+  async function* readBytes(size: number): AsyncGenerator<Buffer> {
+    while (size > 0) {
+      if (chunk.length === 0 && !await readChunk()) {
+        throw new Error('tar.gz 功能模块内容不完整或缺少结束标记')
       }
-      await symlink(normalizedLinkName, targetPath)
-      symlinks.push({ path: targetPath, target: linkTargetPath })
-    } else {
-      throw new Error(`tar.gz 功能模块不支持的条目类型: ${String.fromCharCode(type)}`)
-    }
-    offset = dataStart + Math.ceil(size / 512) * 512
-    if (onProgress) {
-      const percent = Math.floor(offset / tar.length * 100)
-      if (percent > lastReportedPercent && percent < 100) {
-        lastReportedPercent = percent
-        onProgress(percent / 100)
-      }
+      const length = Math.min(size, chunk.length)
+      const part = chunk.subarray(0, length)
+      chunk = chunk.subarray(length)
+      size -= length
+      yield part
     }
   }
 
-  throw new Error('tar.gz 功能模块缺少结束标记')
+  try {
+    while (true) {
+      const header = Buffer.allocUnsafe(512)
+      let offset = 0
+      for await (const part of readBytes(header.length)) {
+        offset += part.copy(header, offset)
+      }
+      if (header.every((byte) => byte === 0)) break
+
+      const name = readTarString(header, 0, 100)
+      const prefix = readTarString(header, 345, 155)
+      const path = [prefix, name].filter(Boolean).join('/')
+      const size = readTarSize(header)
+      const type = header[156] ?? 0
+      const paddedSize = Math.ceil(size / 512) * 512
+      const normalizedPath = path.replace(/^\.\//, '')
+      // 跳过 PAX 元数据和归档根目录条目。
+      const skipEntry = type === TAR_TYPE_PAX_GLOBAL_EXTENDED_HEADER || type === TAR_TYPE_PAX_EXTENDED_HEADER
+        || ((path === '.' || normalizedPath === '') && type === 53 && size === 0)
+
+      if (skipEntry) {
+        for await (const _part of readBytes(paddedSize)) reportProgress()
+        continue
+      }
+      if (!isSafeRelativePath(normalizedPath)) {
+        throw new Error(`tar.gz 功能模块包含不安全路径: ${path}`)
+      }
+      const targetPath = resolve(targetDir, normalizedPath)
+      if (!isPathWithin(targetDir, targetPath)) {
+        throw new Error(`tar.gz 功能模块路径超出目标目录: ${path}`)
+      }
+
+      await ensureArchiveParentInside(targetDir, targetPath)
+      await rejectExistingSymlink(targetPath, path)
+      let remaining = paddedSize
+      if (type === 0 || type === 48) {
+        const file = await open(targetPath, 'w')
+        try {
+          for await (const part of readBytes(size)) {
+            await file.writeFile(part)
+            reportProgress()
+          }
+        } finally {
+          await file.close()
+        }
+        remaining -= size
+        if (normalizedPath.startsWith('bin/')) await markExecutable(targetPath)
+      } else if (type === 53) {
+        await mkdir(targetPath, { recursive: true })
+      } else if (type === TAR_TYPE_SYMLINK) {
+        const linkName = readTarString(header, 157, 100).replaceAll('\\', '/')
+        const linkTargetPath = validateArchiveSymlinkTarget(targetDir, targetPath, linkName, path)
+        if (await pathExists(targetPath)) {
+          throw new Error(`tar.gz 功能模块符号链接路径重复: ${path}`)
+        }
+        await symlink(linkName, targetPath)
+        symlinks.push({ path: targetPath, target: linkTargetPath })
+      } else {
+        throw new Error(`tar.gz 功能模块不支持的条目类型: ${String.fromCharCode(type)}`)
+      }
+
+      for await (const _part of readBytes(remaining)) reportProgress()
+      reportProgress()
+    }
+
+    // 读到 gzip 末尾，确保校验压缩流尾部和累计解压大小。
+    while (await readChunk()) reportProgress()
+    const failure = await completion
+    if (failure) throw failure.error
+    await validateArchiveSymlinks(targetDir, symlinks)
+    onProgress?.(1)
+  } finally {
+    input.destroy()
+    gunzip.destroy()
+    await completion
+  }
 }
 
 async function ensureArchiveParentInside(root: string, targetPath: string): Promise<void> {

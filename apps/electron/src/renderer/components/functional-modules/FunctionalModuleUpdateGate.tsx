@@ -1,5 +1,6 @@
 import * as React from 'react'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
+import { toast } from 'sonner'
 import { AlertCircle, CheckCircle2, Download, ExternalLink, Loader2, PackageCheck, RefreshCw, ShieldCheck, X } from 'lucide-react'
 import type {
   AppInfo,
@@ -7,7 +8,8 @@ import type {
   FunctionalModuleStartupProgressPayload,
   FunctionalModuleStatus,
 } from '@copis/shared'
-import { functionalModuleBusyAtom, functionalModuleProgressAtom, functionalModuleStartupAtom, functionalModuleStatusesAtom } from '@/atoms/functional-modules'
+import { functionalModuleBusyAtom, functionalModuleProgressAtom, functionalModuleStartupAtom, functionalModuleStatusesAtom, mergeLocalFunctionalModuleStatuses } from '@/atoms/functional-modules'
+import { workingSettingsOpenAtom, workingSettingsSectionAtom } from '@/atoms/working-atoms'
 import { appInfoAtom, checkForUpdates, downloadUpdate, onlineUpdateAvailableAtom, updaterAvailableAtom, updateStatusAtom } from '@/atoms/updater'
 import { isHttpApiBridgeActive } from '@/lib/http-api-bridge'
 import { CopisAppLogo } from '@/lib/model-logo'
@@ -45,6 +47,7 @@ const INITIAL_PROGRESS: FunctionalModuleStartupProgressPayload = {
 }
 
 export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateGateProps): React.ReactElement {
+  const store = useStore()
   const developmentMode = import.meta.env.DEV
   const isWindows = React.useMemo(() => detectIsWindows(), [])
   const [startup, setStartup] = useAtom(functionalModuleStartupAtom)
@@ -110,7 +113,7 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
     setBusy({ 'node-runtime': true, 'officecli': true, 'alipay-bot': true, 'rust-http-api': true, 'playwright-core': true, 'python-runtime': true })
     try {
       const nextStatuses = await window.electronAPI.ensureRequiredFunctionalModules()
-      setStatuses((current) => mergeStatuses(current, nextStatuses))
+      setStatuses((current) => mergeLocalFunctionalModuleStatuses(current, nextStatuses))
       setBusy({ 'node-runtime': false, 'officecli': false, 'alipay-bot': false, 'rust-http-api': false, 'playwright-core': false, 'python-runtime': false })
       setStartup({ phase: 'ready', detail: '本地服务运行正常', progress: 1, error: null })
       window.setTimeout(() => setReleased(true), 260)
@@ -147,7 +150,7 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
     if (!developmentMode) {
       void window.electronAPI.listFunctionalModules()
         .then((nextStatuses) => {
-          if (active) setStatuses((current) => mergeStatuses(current, nextStatuses))
+          if (active) setStatuses((current) => mergeLocalFunctionalModuleStatuses(current, nextStatuses))
         })
         .catch((error: unknown) => {
           console.warn('[功能模块] 读取启动前状态失败:', error)
@@ -161,6 +164,42 @@ export function FunctionalModuleUpdateGate({ children }: FunctionalModuleUpdateG
       unsubscribeModule()
     }
   }, [applyModuleProgress, applyStartupProgress, developmentMode, runStartup, setStatuses, setStartup])
+
+  React.useEffect(() => {
+    if (!released || developmentMode || isHttpApiBridgeActive()) return
+    const name = 'rust-http-api'
+    const before = store.get(functionalModuleStatusesAtom)[name]
+    if (!before?.installed) return
+    let active = true
+    const check = before.availableVersion === null
+      ? window.electronAPI.checkFunctionalModule(name)
+      : Promise.resolve(before)
+    void check.then((status) => {
+      const current = store.get(functionalModuleStatusesAtom)[name]
+      if (!active || !current || current.path !== status.path || current.version !== status.version
+        || current.availableVersion !== before.availableVersion || current.updateAvailable !== before.updateAvailable
+        || current.updateError !== before.updateError || store.get(functionalModuleBusyAtom)[name]) return
+      setStatuses((all) => ({ ...all, [name]: status }))
+      const upgradeRequired = status.updateError?.message.includes('版本过低')
+      if (!status.updateAvailable && !upgradeRequired) return
+      toast.info(upgradeRequired ? '更新系统核心模块需要新版 Copis' : '系统核心模块有可用更新', {
+        id: 'rust-http-api-update',
+        description: upgradeRequired
+          ? status.updateError?.message
+          : `当前 v${status.version}，可更新至 v${status.availableVersion}。部分功能可能需要新版本。`,
+        action: {
+          label: '关于 / 更新',
+          onClick: () => {
+            store.set(workingSettingsSectionAtom, 'about')
+            store.set(workingSettingsOpenAtom, true)
+          },
+        },
+      })
+    }).catch((error: unknown) => {
+      if (active) console.warn('[功能模块] 后台检查系统核心模块失败:', error)
+    })
+    return () => { active = false }
+  }, [developmentMode, released, setStatuses, store])
 
   const percentage = Math.round(clamp01(startup.progress) * 100)
   const phaseLabel = getStartupPhaseLabel(startup)
@@ -540,15 +579,6 @@ function StartupModuleRow({ displayName, description, status, active, progress, 
       </div>
     </div>
   )
-}
-
-function mergeStatuses(
-  current: Partial<Record<FunctionalModuleStatus['name'], FunctionalModuleStatus>>,
-  next: FunctionalModuleStatus[],
-): Partial<Record<FunctionalModuleStatus['name'], FunctionalModuleStatus>> {
-  const merged = { ...current }
-  for (const status of next) merged[status.name] = status
-  return merged
 }
 
 function clamp01(value: number): number {

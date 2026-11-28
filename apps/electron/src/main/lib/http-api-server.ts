@@ -19,7 +19,6 @@ import { getDesktopModuleEntry, getBundledCliPath, getConfigDir, getFunctionalMo
 import { resolveAgentlyCliCommand, resolveAgentlyCliNode } from './agently-cli-runtime'
 import { resolveDshCommand, resolveDshNode } from './dsh-runtime'
 import { isFunctionalModuleIncompatibleClientError } from './functional-module-manifest'
-import { isNetworkError } from './error-patterns'
 import { getSystemBunPath, getVendorBunPath } from './bun-finder'
 import { ensureDefaultWorkspace } from './agent-workspace-manager'
 import {
@@ -37,6 +36,7 @@ import {
   type FunctionalModuleFetch,
 } from './functional-module-manager'
 import {
+  deactivateFunctionalModule,
   getFunctionalModulePaths,
   readActiveFunctionalModule,
   restoreFunctionalModule,
@@ -80,7 +80,7 @@ const RUST_HTTP_API_BINARY = 'copis-http-api-server'
 const HEALTH_POLL_INTERVAL_MS = 100
 // Rust 会在开放监听端口前执行最多 6 秒的 model-request 直连探测，
 // 健康检查需为剩余初始化留出余量。
-const DEFAULT_HEALTH_TIMEOUT_MS = 8_000
+const DEFAULT_HEALTH_TIMEOUT_MS = 15_000
 
 export type HttpApiSpawn = (
   file: string,
@@ -896,8 +896,14 @@ export async function updateHttpApiServer(options: HttpApiServerOptions = {}): P
   if (previous) {
     await restoreFunctionalModule(paths, previous)
     startHttpApiServer({ ...runtimeOptions, rootDir })
+    const restoredHealthy = await waitForHttpApiHealth(formalPort, { ...runtimeOptions, onHealthProgress: undefined })
+    console.warn(restoredHealthy
+      ? '[HTTP API] 新 Rust 模块启动失败，已恢复旧版本'
+      : '[HTTP API] 新 Rust 模块启动失败，旧版本也未通过健康检查')
+  } else {
+    await deactivateFunctionalModule(paths, 'rust-http-api')
+    console.warn('[HTTP API] 首次安装的 Rust 模块未通过正式端口健康检查')
   }
-  console.warn('[HTTP API] 新 Rust 模块正式端口健康检查失败，已恢复旧版本')
   return false
 }
 
@@ -916,9 +922,7 @@ export type EnsureRustHttpApiServerReadyResult =
   | RustHttpApiServerUpdateRequiredStatus
 
 /**
- * 加载登录界面前校验并切换 Rust API。远端要求更高客户端版本时不更新模块，
- * 但已有的 active 模块仍会启动，用于获取桌面端升级。
- * 其他功能模块仍由登录后的完整启动 Gate 负责准备。
+ * 登录前启动并检查本地核心服务，仅在首次缺少核心服务时获取远端模块。
  */
 export async function ensureRustHttpApiServerReady(
   options: HttpApiServerOptions = {},
@@ -933,54 +937,21 @@ export async function ensureRustHttpApiServerReady(
   }
 
   const active = readActiveFunctionalModule(paths, 'rust-http-api')
-  let artifact: FunctionalModuleArtifact | undefined
-  let updateRequired: RustHttpApiServerUpdateRequiredStatus | undefined
-  try {
-    artifact = await resolveFunctionalModuleArtifact('rust-http-api', {
-      rootDir,
-      manifestUrl: runtimeOptions.manifestUrl,
-      platform: runtimeOptions.platform,
-      arch: runtimeOptions.arch,
-      clientVersion: runtimeOptions.clientVersion,
-      fetchImpl: runtimeOptions.fetchImpl,
-    })
-  } catch (error) {
-    if (isFunctionalModuleIncompatibleClientError(error)) {
-      console.warn(
-        `[HTTP API] 当前 Copis 版本 (v${error.clientVersion}) 低于功能模块要求的最低版本 (v${error.minClientVersion})，跳过 Rust 模块更新并提示升级`,
-      )
-      updateRequired = {
+  if (!active) {
+    let artifact: FunctionalModuleArtifact
+    try {
+      artifact = await resolveFunctionalModuleArtifact('rust-http-api', runtimeOptions)
+    } catch (error) {
+      if (!isFunctionalModuleIncompatibleClientError(error)) throw error
+      return {
         status: 'update_required',
         clientVersion: error.clientVersion,
         minClientVersion: error.minClientVersion,
       }
-    } else if (active && isNetworkError(error)) {
-      console.warn(
-        '[HTTP API] 检查 Rust 核心模块更新失败（网络离线），继续使用本地已有版本:',
-        error,
-      )
-    } else {
-      throw error
     }
-  }
-  if (updateRequired) {
-    if (!active) {
-      return updateRequired
-    }
-  } else if (artifact) {
-    const needsUpdate = !active
-      || active.version !== artifact.version
-      || active.sha256.toLowerCase() !== artifact.sha256.toLowerCase()
-
-    if (needsUpdate) {
-      const updated = await updateHttpApiServer({
-        ...runtimeOptions,
-        rootDir,
-        artifactOverride: artifact,
-      })
-      if (!updated) throw new Error('系统核心模块更新后运行检查未通过')
-      return { status: 'ready' }
-    }
+    const installed = await updateHttpApiServer({ ...runtimeOptions, rootDir, artifactOverride: artifact })
+    if (!installed) throw new Error('系统核心模块安装后运行检查未通过')
+    return { status: 'ready' }
   }
 
   const formalPort = runtimeOptions.port ?? HTTP_API_PORT
@@ -992,7 +963,7 @@ export async function ensureRustHttpApiServerReady(
       throw new Error('系统核心模块未通过运行检查')
     }
   }
-  return updateRequired ?? { status: 'ready' }
+  return { status: 'ready' }
 }
 
 export function getHttpApiInternalToken(): string | null {

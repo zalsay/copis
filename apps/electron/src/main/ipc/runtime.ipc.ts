@@ -4,10 +4,13 @@ import type { AppInfo, RuntimeStatus, EnvironmentCheckResult, FunctionalModuleIn
 import { getRuntimeStatus, reinitializeRuntime } from '../lib/runtime-init'
 import { updateSettings } from '../lib/settings-service'
 import { checkEnvironment } from '../lib/environment-checker'
-import { checkFunctionalModule, getFunctionalModuleStatuses, installFunctionalModule } from '../lib/functional-module-manager'
+import { checkFunctionalModule, getFunctionalModuleStatus, getFunctionalModuleStatuses, installFunctionalModule, resolveFunctionalModuleArtifact } from '../lib/functional-module-manager'
 import { ensureRequiredFunctionalModules } from '../lib/functional-module-startup'
+import { updateHttpApiServer } from '../lib/http-api-server'
 import { getProxySettings, saveProxySettings } from '../lib/proxy-settings-service'
 import { detectSystemProxy } from '../lib/system-proxy-detector'
+
+let manualRustUpdate: Promise<FunctionalModuleStatus> | undefined
 
 export function registerRuntimeInfoIpcHandlers(): void {
   // ===== 主程序与运行时相关 =====
@@ -76,13 +79,26 @@ export function registerRuntimeServicesIpcHandlers(): void {
         throw new Error('功能模块安装参数不正确')
       }
       const window = BrowserWindow.fromWebContents(event.sender)
-      return installFunctionalModule(input, {
-        onProgress: (payload) => {
-          if (window && !window.isDestroyed()) {
-            window.webContents.send(FUNCTIONAL_MODULE_IPC_CHANNELS.PROGRESS, payload)
+      const onProgress = (payload: FunctionalModuleProgressPayload): void => {
+        if (window && !window.isDestroyed()) {
+          window.webContents.send(FUNCTIONAL_MODULE_IPC_CHANNELS.PROGRESS, payload)
+        }
+      }
+      if (input.name !== 'rust-http-api') return installFunctionalModule(input, { onProgress })
+      if (!manualRustUpdate) {
+        manualRustUpdate = (async () => {
+          const artifact = await resolveFunctionalModuleArtifact('rust-http-api')
+          const status = await checkFunctionalModule('rust-http-api', { artifactOverride: artifact })
+          if (status.updateError) throw new Error(status.updateError.message)
+          if (!input.force && !status.updateAvailable) return status
+          if (!await updateHttpApiServer({ artifactOverride: artifact, onProgress })) {
+            throw new Error('系统核心模块更新后运行检查未通过')
           }
-        },
-      })
+          onProgress({ name: 'rust-http-api', phase: 'done', detail: '系统核心模块已就绪', progress: 1 })
+          return getFunctionalModuleStatus('rust-http-api')
+        })().finally(() => { manualRustUpdate = undefined })
+      }
+      return manualRustUpdate
     },
   )
 

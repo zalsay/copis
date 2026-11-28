@@ -8,6 +8,7 @@ import {
   functionalModuleCheckingAllAtom,
   functionalModuleProgressAtom,
   functionalModuleStatusesAtom,
+  mergeLocalFunctionalModuleStatuses,
 } from '@/atoms/functional-modules'
 import { detectIsMac } from '@/lib/platform'
 import { SettingsCard } from './primitives'
@@ -39,7 +40,7 @@ export function FunctionalModulesCard(): React.ReactElement {
       try {
         const modules = await window.electronAPI.listFunctionalModules()
         if (!active) return
-        setStatuses(Object.fromEntries(modules.map((module) => [module.name, module])))
+        setStatuses((current) => mergeLocalFunctionalModuleStatuses(current, modules))
       } catch (error) {
         console.error('[功能模块] 读取状态失败:', error)
       }

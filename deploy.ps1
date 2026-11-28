@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Build and publish Copis functional modules.
 

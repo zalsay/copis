@@ -830,10 +830,9 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     expect(bridgeResponse).toMatch(/^1\t200\t/)
   })
 
-  test('正式启动前发现 Rust API 旧版本时，先更新并健康检查再启动正式端口', async () => {
+  test('已有 Rust API 时启动沿用本地版本并跳过远端检查', async () => {
     const root = createRoot()
     const oldPackage = rustPackage('0.1.0', 'old-rust-api')
-    const newContent = 'new-rust-api-before-window'
     await activateRustVersion(root, oldPackage, 'old-rust-api')
     const records: SpawnRecord[] = []
     const manifestUrl = 'https://download.example.com/manifest.json'
@@ -853,7 +852,10 @@ describe('Rust HTTP API 功能模块生命周期', () => {
         arch: 'arm64',
         clientVersion: '0.16.17',
         spawnImpl: spawnFixture(records),
-        fetchImpl: fetchFixture(manifestFor('0.2.0', newContent), newContent, () => true),
+        fetchImpl: async (url) => {
+          expect(url).toBe('http://127.0.0.1:51740/api/health')
+          return Response.json({ ok: true, service: 'copis-http-api' })
+        },
         healthTimeoutMs: 100,
         stopTimeoutMs: 5,
         workerLaunch: {
@@ -863,11 +865,9 @@ describe('Rust HTTP API 功能模块生命周期', () => {
       })
 
       const active = readActiveFunctionalModule(getFunctionalModulePaths(join(root, 'modules')), 'rust-http-api')
-      expect(active?.version).toBe('0.2.0')
-      expect(records).toHaveLength(2)
-      expect(records[0]?.options.env?.COPIS_HTTP_API_PORT).toBe('51741')
-      expect(records[1]?.options.env?.COPIS_HTTP_API_PORT).toBe('51740')
-      expect(records[0]?.child.killed).toBe(true)
+      expect(active?.version).toBe('0.1.0')
+      expect(records).toHaveLength(1)
+      expect(records[0]?.options.env?.COPIS_HTTP_API_PORT).toBe('51740')
     } finally {
       packaged = false
       if (previousResourcesPath === undefined) {
@@ -956,7 +956,31 @@ describe('Rust HTTP API 功能模块生命周期', () => {
     expect(readFileSync(active?.path ?? '', 'utf8')).toBe('old-rust-api')
   })
 
-  test('打包模式下 manifest 要求更高客户端版本时，启动已有 active 旧模块并返回结构化更新状态', async () => {
+  test('首次安装候选版本通过但正式服务不健康时清除 active，允许重试', async () => {
+    const root = createRoot()
+    const rootDir = join(root, 'modules')
+    const records: SpawnRecord[] = []
+    const content = 'first-rust-api'
+    const result = await updateHttpApiServer({
+      rootDir,
+      paymentWorkspace: paymentWorkspaceFor(root),
+      manifestUrl: 'https://download.example.com/manifest.json',
+      platform: 'darwin',
+      arch: 'arm64',
+      clientVersion: '0.16.17',
+      spawnImpl: spawnFixture(records),
+      fetchImpl: fetchFixture(manifestFor('0.2.0', content), content, port => port === '51741'),
+      healthTimeoutMs: 50,
+      stopTimeoutMs: 5,
+    })
+
+    expect(result).toBe(false)
+    expect(readActiveFunctionalModule(getFunctionalModulePaths(rootDir), 'rust-http-api')).toBeUndefined()
+    expect(records).toHaveLength(2)
+    expect(records.every(record => record.child.killed)).toBe(true)
+  })
+
+  test('打包模式下 manifest 要求更高客户端版本时，启动已有 active 旧模块并继续启动', async () => {
     const root = createRoot()
     const oldPackage = rustPackage('0.1.0', 'old-rust-api')
     const oldModulePath = await activateRustVersion(root, oldPackage, 'old-rust-api')
@@ -1012,11 +1036,7 @@ describe('Rust HTTP API 功能模块生命周期', () => {
         workerLaunch: { kind: 'executable', path: '/tmp/copis-test-runtime' },
       })
 
-      expect(result).toEqual({
-        status: 'update_required',
-        clientVersion: '0.16.17',
-        minClientVersion: '0.18.0',
-      })
+      expect(result).toEqual({ status: 'ready' })
       expect(records).toHaveLength(1)
       expect(records[0]?.file).toBe(oldModulePath)
       expect(records[0]?.options.env?.COPIS_HTTP_API_PORT).toBe('51740')
@@ -1260,11 +1280,7 @@ describe('Rust HTTP API 功能模块生命周期', () => {
         workerLaunch: { kind: 'executable', path: '/tmp/copis-test-runtime' },
       })
 
-      expect(result).toEqual({
-        status: 'update_required',
-        clientVersion: '0.16.17',
-        minClientVersion: '0.18.0',
-      })
+      expect(result).toEqual({ status: 'ready' })
       expect(records).toHaveLength(2)
       expect(records[0]?.child.killed).toBe(true)
       expect(records[1]?.options.env?.COPIS_HTTP_API_PORT).toBe('51740')

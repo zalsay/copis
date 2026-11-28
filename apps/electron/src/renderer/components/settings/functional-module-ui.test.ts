@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { FunctionalModuleStatus } from '@copis/shared'
+import { mergeLocalFunctionalModuleStatuses } from '../../atoms/functional-modules'
 import * as moduleUi from './functional-module-ui'
 import {
   FUNCTIONAL_MODULE_DEFINITIONS,
@@ -11,6 +12,16 @@ import {
 } from './functional-module-ui'
 
 describe('功能模块设置页模型', () => {
+  test('打开关于页刷新本机列表时保留核心模块的后台更新结果，安装变化后清除旧结果', () => {
+    const definition = FUNCTIONAL_MODULE_DEFINITIONS.find(item => item.name === 'rust-http-api')!
+    const current = { ...createEmptyFunctionalModuleStatus(definition), installed: true, version: '0.0.96' }
+    const checked = { ...current, availableVersion: '2.0.3', updateAvailable: true }
+    const statuses = { 'rust-http-api': checked }
+    expect(mergeLocalFunctionalModuleStatuses(statuses, [current])['rust-http-api']).toEqual(checked)
+    const installed = { ...current, version: '2.0.3' }
+    expect(mergeLocalFunctionalModuleStatuses(statuses, [installed])['rust-http-api']).toEqual(installed)
+  })
+
   test('Given 本地能力列表 When 生成设置页模型 Then 显示友好的能力名称', () => {
     expect(FUNCTIONAL_MODULE_DEFINITIONS.map((item) => item.name)).toEqual([
       'node-runtime',
